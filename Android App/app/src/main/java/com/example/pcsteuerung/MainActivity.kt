@@ -1,6 +1,7 @@
 package com.example.pcsteuerung
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
@@ -36,10 +37,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
+
+const val EXTRA_CONFIRM_SHUTDOWN = "confirm_shutdown"
 
 class MainActivity : ComponentActivity() {
+    private val confirmShutdownRequest = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        confirmShutdownRequest.value =
+            intent?.getBooleanExtra(EXTRA_CONFIRM_SHUTDOWN, false) == true
         enableEdgeToEdge()
         setContent {
             val darkTheme = isSystemInDarkTheme()
@@ -55,9 +63,19 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppRoot()
+                    AppRoot(
+                        confirmShutdown = confirmShutdownRequest.value,
+                        onConfirmConsumed = { confirmShutdownRequest.value = false },
+                    )
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_CONFIRM_SHUTDOWN, false)) {
+            confirmShutdownRequest.value = true
         }
     }
 }
@@ -148,7 +166,7 @@ private fun DelayChips(selected: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-fun AppRoot() {
+fun AppRoot(confirmShutdown: Boolean = false, onConfirmConsumed: () -> Unit = {}) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
     var settings by remember {
@@ -188,7 +206,12 @@ fun AppRoot() {
             onCancel = if (settings.isComplete) ({ showSetup = false }) else null,
         )
     } else {
-        MainApp(settings = settings, onSave = { persist(it) })
+        MainApp(
+            settings = settings,
+            onSave = { persist(it) },
+            startWithShutdownConfirm = confirmShutdown,
+            onConfirmConsumed = onConfirmConsumed,
+        )
     }
 }
 
@@ -274,14 +297,14 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
-                        text = "Zugangsdaten einmalig in der Web-Oberflaeche am PC anlegen: http://localhost:8000/",
+                        text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.outline
                     )
                     OutlinedTextField(
                         value = mac,
                         onValueChange = { mac = it },
-                        label = { Text("MAC-Adresse (fuer WoL)") },
+                        label = { Text("MAC-Adresse (für WoL)") },
                         placeholder = { Text("AA:BB:CC:DD:EE:FF") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -335,7 +358,12 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
 }
 
 @Composable
-fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
+fun MainApp(
+    settings: Settings,
+    onSave: (Settings) -> Unit,
+    startWithShutdownConfirm: Boolean = false,
+    onConfirmConsumed: () -> Unit = {},
+) {
     var tab by remember { mutableStateOf(0) }
     var state by remember { mutableStateOf(AgentState()) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -348,6 +376,21 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
     var showLog by remember { mutableStateOf(false) }
     var logText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(message) {
+        message?.let {
+            snackbarHostState.showSnackbar(it)
+            message = null
+        }
+    }
+
+    LaunchedEffect(startWithShutdownConfirm) {
+        if (startWithShutdownConfirm) {
+            showShutdownConfirm = true
+            onConfirmConsumed()
+        }
+    }
 
     fun runAction(path: String, success: String) {
         scope.launch {
@@ -363,8 +406,6 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
             val shown = if (result.startsWith("HTTP ") || result.startsWith("Nicht")) result else success
             message = shown
             refresh++
-            delay(4000)
-            if (message == shown) message = null
         }
     }
 
@@ -380,8 +421,6 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
             }
             Log.d(TAG, "WoL an ${settings.mac} via ${settings.broadcast} -> $ok")
             message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
-            delay(4000)
-            if (message?.startsWith("Wake") == true) message = null
         }
     }
 
@@ -412,12 +451,10 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                         }
                         AgentState(hint, PcStatus.ERROR, "?", 0)
                     } else {
-                        val plan = Regex("\"power_plan\":\"([^\"]*)\"")
-                            .find(body)?.groupValues?.get(1) ?: "?"
-                        val pending = Regex("\"pending_shutdown\":(\\d+)")
-                            .find(body)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                        val simulate = Regex("\"simulate\":(true|false)")
-                            .find(body)?.groupValues?.get(1) == "true"
+                        val json = JSONObject(body)
+                        val plan = json.optString("power_plan", "?")
+                        val pending = json.optInt("pending_shutdown", 0)
+                        val simulate = json.optBoolean("simulate", true)
                         val text = "Online · Plan: $plan" +
                             if (pending > 0) " · Aus in ${pending / 60} min" else ""
                         AgentState(text, PcStatus.ONLINE, plan, pending, simulate)
@@ -433,6 +470,7 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
@@ -460,7 +498,6 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
             when (tab) {
                 0 -> ControlTab(
                     state = state,
-                    message = message,
                     onShutdown = { showShutdownConfirm = true },
                     onTimer = {
                         timerHours = ""
@@ -468,14 +505,13 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                         showTimer = true
                     },
                     onWake = ::doWake,
-                    onHibernate = { runAction("/hibernate", "Ruhezustand ausgeloest") },
+                    onHibernate = { runAction("/hibernate", "Ruhezustand ausgelöst") },
                     onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
                     onShowLog = ::loadLog,
                     onOpenSettings = { tab = 2 },
                 )
                 1 -> PlanTab(
                     activePlan = state.plan,
-                    message = message,
                     onSelect = { key, label ->
                         state = state.copy(plan = key)
                         runAction("/power-plan?name=$key", "Energieplan: $label")
@@ -483,7 +519,6 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                 )
                 else -> SettingsTab(
                     settings = settings,
-                    message = message,
                     simulate = state.simulate,
                     onModeChange = { real ->
                         if (real) {
@@ -507,9 +542,9 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
             text = {
                 Text(
                     if (delay == 0) {
-                        "Der PC faehrt sofort herunter."
+                        "Der PC fährt sofort herunter."
                     } else {
-                        "Der PC faehrt in $delay Sekunden herunter."
+                        "Der PC fährt in $delay Sekunden herunter."
                     }
                 )
             },
@@ -519,7 +554,7 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                     runAction(
                         "/shutdown?delay=$delay",
                         if (delay == 0) {
-                            "Herunterfahren ausgeloest"
+                            "Herunterfahren ausgelöst"
                         } else {
                             "Herunterfahren in $delay s geplant"
                         }
@@ -576,11 +611,13 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                 TextButton(onClick = {
                     val total = (timerHours.toIntOrNull() ?: 0) * 3600 +
                         (timerMinutes.toIntOrNull() ?: 0) * 60
-                    if (total > 0) {
+                    if (total <= 0) {
+                        message = "Bitte Stunden oder Minuten angeben"
+                    } else if (total > 86400) {
+                        message = "Maximal 24 Stunden erlaubt"
+                    } else {
                         showTimer = false
                         runAction("/shutdown?delay=$total", "Herunterfahren in ${total / 60} min geplant")
-                    } else {
-                        message = "Bitte Stunden oder Minuten angeben"
                     }
                 }) { Text("Starten") }
             },
@@ -596,7 +633,7 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
             title = { Text("Echtzeitmodus aktivieren?") },
             text = {
                 Text(
-                    "Achtung: Befehle werden wirklich ausgefuehrt - " +
+                    "Achtung: Befehle werden wirklich ausgeführt - " +
                         "Herunterfahren, Ruhezustand und Energieplan wirken sofort."
                 )
             },
@@ -631,7 +668,7 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showLog = false }) { Text("Schliessen") }
+                TextButton(onClick = { showLog = false }) { Text("Schließen") }
             }
         )
     }
@@ -640,7 +677,6 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
 @Composable
 private fun ControlTab(
     state: AgentState,
-    message: String?,
     onShutdown: () -> Unit,
     onTimer: () -> Unit,
     onWake: () -> Unit,
@@ -695,109 +731,128 @@ private fun ControlTab(
                 }
                 state.simulate?.let { sim ->
                     Text(
-                        text = if (sim) "Modus: SIMULATION (nur Log)" else "Modus: ECHT",
+                        text = if (sim) {
+                            "Modus: SIMULATION (nur Log)"
+                        } else {
+                            "Modus: ECHT - Befehle werden ausgeführt!"
+                        },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (sim) Color(0xFFF9A825) else MaterialTheme.colorScheme.primary
+                        color = if (sim) Color(0xFFF9A825) else Color(0xFFE53935)
                     )
                 }
+            }
+        }
+
+        if (state.simulate == false) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Text(
+                    text = "ECHT-MODUS AKTIV - Befehle werden wirklich ausgeführt!",
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(16.dp)
+                )
             }
         }
 
         if (state.status == PcStatus.ERROR) {
             Text(
-                text = "Bitte Benutzername/Passwort in den Einstellungen pruefen.",
+                text = "Bitte Benutzername/Passwort in den Einstellungen prüfen.",
                 fontSize = 14.sp,
                 color = MaterialTheme.colorScheme.error
             )
             TextButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-                Text("Einstellungen oeffnen")
+                Text("Einstellungen öffnen")
             }
         }
 
-        val online = state.status == PcStatus.ONLINE || state.status == PcStatus.ERROR
-        if (online) {
-            Button(
-                onClick = onShutdown,
-                modifier = Modifier.fillMaxWidth().height(64.dp),
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError
-                )
-            ) {
-                Text("PC herunterfahren", fontSize = 18.sp)
-            }
-            OutlinedButton(
-                onClick = onTimer,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Text("Timer...", fontSize = 15.sp)
-            }
-        } else {
-            Button(
-                onClick = onWake,
-                modifier = Modifier.fillMaxWidth().height(64.dp),
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Text("PC einschalten", fontSize = 18.sp)
-            }
-        }
-
-        if (state.pending > 0) {
-            OutlinedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "Geplantes Herunterfahren in ${fmtDuration(state.pending)}",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
+        when (state.status) {
+            PcStatus.ONLINE -> {
+                Button(
+                    onClick = onShutdown,
+                    modifier = Modifier.fillMaxWidth().height(64.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
                     )
-                    TextButton(onClick = onAbort) { Text("Abbrechen") }
+                ) {
+                    Text("PC herunterfahren", fontSize = 18.sp)
+                }
+                OutlinedButton(
+                    onClick = onTimer,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Timer...", fontSize = 15.sp)
+                }
+
+                if (state.pending > 0) {
+                    OutlinedCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Geplantes Herunterfahren in ${fmtDuration(state.pending)}",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            TextButton(onClick = onAbort) { Text("Abbrechen") }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onHibernate,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) { Text("Ruhezustand", fontSize = 14.sp) }
+                    OutlinedButton(
+                        onClick = onShowLog,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) { Text("Verlauf", fontSize = 14.sp) }
                 }
             }
+
+            PcStatus.OFFLINE -> {
+                Button(
+                    onClick = onWake,
+                    modifier = Modifier.fillMaxWidth().height(64.dp),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Text("PC einschalten", fontSize = 18.sp)
+                }
+            }
+
+            PcStatus.ERROR, PcStatus.UNKNOWN -> Unit
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            OutlinedButton(
-                onClick = onHibernate,
-                modifier = Modifier.weight(1f).height(52.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) { Text("Ruhezustand", fontSize = 14.sp) }
-            OutlinedButton(
-                onClick = onShowLog,
-                modifier = Modifier.weight(1f).height(52.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) { Text("Verlauf", fontSize = 14.sp) }
-        }
-
-        message?.let { text ->
-            Text(
-                text = text,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
 
 @Composable
 private fun PlanTab(
     activePlan: String,
-    message: String?,
     onSelect: (String, String) -> Unit,
 ) {
     val plans = listOf(
-        Triple("high", "Hoechstleistung", "Maximale Leistung"),
+        Triple("high", "Höchstleistung", "Maximale Leistung"),
         Triple("balanced", "Ausbalanciert", "Guter Kompromiss"),
         Triple("saver", "Energiesparen", "Wenig Verbrauch"),
     )
@@ -849,20 +904,12 @@ private fun PlanTab(
             }
         }
 
-        message?.let { text ->
-            Text(
-                text = text,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
 
 @Composable
 private fun SettingsTab(
     settings: Settings,
-    message: String?,
     simulate: Boolean?,
     onModeChange: (Boolean) -> Unit,
     onSave: (Settings) -> Unit,
@@ -932,7 +979,7 @@ private fun SettingsTab(
         OutlinedTextField(
             value = mac,
             onValueChange = { mac = it },
-            label = { Text("MAC-Adresse (fuer WoL)") },
+            label = { Text("MAC-Adresse (für WoL)") },
             placeholder = { Text("AA:BB:CC:DD:EE:FF") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
@@ -964,7 +1011,7 @@ private fun SettingsTab(
                 Text(
                     text = when (simulate) {
                         true -> "Simulation aktiv - Befehle werden nur geloggt."
-                        false -> "ECHT - Befehle werden wirklich ausgefuehrt."
+                        false -> "ECHT - Befehle werden wirklich ausgeführt."
                         null -> "Modus unbekannt."
                     },
                     fontSize = 12.sp,
@@ -1008,17 +1055,10 @@ private fun SettingsTab(
         }
 
         Text(
-            text = "Zugangsdaten einmalig in der Web-Oberflaeche am PC anlegen: http://localhost:8000/",
+            text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.outline
         )
 
-        message?.let { text ->
-            Text(
-                text = text,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }

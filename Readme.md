@@ -20,7 +20,7 @@
 | ⚡ **Energieplan** | Höchstleistung, Ausbalanciert oder Energiesparen |
 | 📊 **Status** | PC an/aus, aktiver Plan und Countdown (grün/gelb/grau) |
 | ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden |
-| 🧩 **Homescreen-Widget** | Ein/Aus direkt vom Startbildschirm |
+| 🧩 **Homescreen-Widget** | Einschalten direkt, Herunterfahren mit Bestätigung in der App |
 | 🖥️ **Web-Oberfläche** | Status, Steuerung und Ereignis-Log im Browser |
 | 📝 **Verlauf** | Dauerhafte Logdatei mit Datum/Uhrzeit – einsehbar in App und Web |
 | 🐞 **Debug-Modus** | Simulation ↔ Echtzeit umschalten (für Tests) |

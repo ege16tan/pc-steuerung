@@ -14,6 +14,10 @@
 - [x] UI-Redesign: Bottom-Navigation, kombinierter Power-Button, Timer im Shutdown-Dialog
 - [x] Default-Timer (Sofort/10/30/60 s) + Custom-Timer in der App
 - [x] Debug-Umschalter Simulation/Echtzeit (App, Web-UI, API)
+- [x] Widget-Bestätigung + Standard-Timer (öffnet die App)
+- [x] Buttons je nach PC-Zustand (online/offline/login)
+- [x] Snackbar-Feedback + rote ECHT-Modus-Warnung
+- [x] Umlaute in der App-Oberfläche
 
 ## Geplant
 
