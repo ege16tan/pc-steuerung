@@ -14,6 +14,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -104,6 +108,30 @@ data class Settings(
     }
 }
 
+enum class PcStatus { ONLINE, ERROR, OFFLINE, UNKNOWN }
+
+private data class AgentState(
+    val text: String = "Verbinde ...",
+    val status: PcStatus = PcStatus.UNKNOWN,
+    val plan: String = "?",
+    val pending: Int = 0,
+)
+
+private fun statusColor(status: PcStatus): Color = when (status) {
+    PcStatus.ONLINE -> Color(0xFF4CAF50)
+    PcStatus.ERROR -> Color(0xFFFFC107)
+    PcStatus.OFFLINE, PcStatus.UNKNOWN -> Color(0xFF9E9E9E)
+}
+
+private fun fmtDuration(seconds: Int): String {
+    val s = seconds.coerceAtLeast(0)
+    return when {
+        s < 60 -> "$s s"
+        s < 3600 -> "${s / 60} min"
+        else -> "${s / 3600} h ${(s % 3600) / 60} min"
+    }
+}
+
 @Composable
 fun AppRoot() {
     val context = LocalContext.current
@@ -123,25 +151,27 @@ fun AppRoot() {
     }
     var showSetup by remember { mutableStateOf(!settings.isComplete) }
 
+    fun persist(newSettings: Settings) {
+        prefs.edit()
+            .putString("host", newSettings.host)
+            .putString("port", newSettings.port)
+            .putString("user", newSettings.user)
+            .putString("pass", newSettings.pass)
+            .putString("mac", newSettings.mac)
+            .putString("broadcast", newSettings.broadcast)
+            .remove("token")
+            .apply()
+        settings = newSettings.copy(token = "")
+    }
+
     if (showSetup) {
         SetupScreen(
             initial = settings,
-            onSave = { newSettings ->
-                prefs.edit()
-                    .putString("host", newSettings.host)
-                    .putString("port", newSettings.port)
-                    .putString("user", newSettings.user)
-                    .putString("pass", newSettings.pass)
-                    .putString("mac", newSettings.mac)
-                    .putString("broadcast", newSettings.broadcast)
-                    .apply()
-                settings = newSettings
-                showSetup = false
-            },
+            onSave = { persist(it); showSetup = false },
             onCancel = if (settings.isComplete) ({ showSetup = false }) else null,
         )
     } else {
-        MainScreen(settings = settings, onOpenSetup = { showSetup = true })
+        MainApp(settings = settings, onSave = { persist(it) })
     }
 }
 
@@ -279,17 +309,13 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
     }
 }
 
-enum class PcStatus { ONLINE, ERROR, OFFLINE, UNKNOWN }
-
 @Composable
-fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
-    var state by remember { mutableStateOf("Verbinde ...") }
-    var status by remember { mutableStateOf(PcStatus.UNKNOWN) }
-    var refresh by remember { mutableStateOf(0) }
+fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
+    var tab by remember { mutableStateOf(0) }
+    var state by remember { mutableStateOf(AgentState()) }
     var message by remember { mutableStateOf<String?>(null) }
-    var confirmShutdown by remember { mutableStateOf(false) }
-    var showTimer by remember { mutableStateOf(false) }
-    var showPlan by remember { mutableStateOf(false) }
+    var refresh by remember { mutableStateOf(0) }
+    var showShutdown by remember { mutableStateOf(false) }
     var showLog by remember { mutableStateOf(false) }
     var logText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -313,275 +339,138 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
         }
     }
 
-    LaunchedEffect(settings, refresh) {
-        while (true) {
+    fun doWake() {
+        if (settings.mac.isBlank()) {
+            message = "MAC-Adresse fehlt - bitte in den Einstellungen eintragen"
+            return
+        }
+        scope.launch {
+            message = "Sende Wake ..."
+            val ok = withContext(Dispatchers.IO) {
+                sendMagicPacket(settings.mac, settings.broadcast)
+            }
+            Log.d(TAG, "WoL an ${settings.mac} via ${settings.broadcast} -> $ok")
+            message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
+            delay(4000)
+            if (message?.startsWith("Wake") == true) message = null
+        }
+    }
+
+    fun loadLog() {
+        scope.launch {
             val text = withContext(Dispatchers.IO) {
                 try {
-                    val body = httpCall(settings.base, "/status", settings.authHeader())
-                    val plan = Regex("\"power_plan\":\"([^\"]*)\"").find(body)?.groupValues?.get(1)
-                    val pending = Regex("\"pending_shutdown\":(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                    "Online · Plan: ${plan ?: "?"}" + if (pending > 0) " · Aus in ${pending / 60} min" else ""
+                    httpCall(settings.base, "/log?lines=200", settings.authHeader())
                 } catch (e: Exception) {
-                    Log.e(TAG, "Status-Abfrage fehlgeschlagen", e)
                     "Nicht erreichbar: ${e.message ?: "Fehler"}"
                 }
             }
-            status = when {
-                text.startsWith("Nicht") -> PcStatus.OFFLINE
-                text.startsWith("HTTP ") -> PcStatus.ERROR
-                else -> PcStatus.ONLINE
+            logText = text.trim().ifBlank { "Noch keine Einträge." }
+            showLog = true
+        }
+    }
+
+    LaunchedEffect(settings, refresh) {
+        while (true) {
+            val next = withContext(Dispatchers.IO) {
+                try {
+                    val body = httpCall(settings.base, "/status", settings.authHeader())
+                    if (body.startsWith("HTTP ")) {
+                        val hint = when {
+                            body.startsWith("HTTP 401") -> "Login fehlt oder falsch"
+                            body.startsWith("HTTP 403") -> "Zugriff verweigert"
+                            else -> body
+                        }
+                        AgentState(hint, PcStatus.ERROR, "?", 0)
+                    } else {
+                        val plan = Regex("\"power_plan\":\"([^\"]*)\"")
+                            .find(body)?.groupValues?.get(1) ?: "?"
+                        val pending = Regex("\"pending_shutdown\":(\\d+)")
+                            .find(body)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                        val text = "Online · Plan: $plan" +
+                            if (pending > 0) " · Aus in ${pending / 60} min" else ""
+                        AgentState(text, PcStatus.ONLINE, plan, pending)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Status-Abfrage fehlgeschlagen", e)
+                    AgentState("Nicht erreichbar: ${e.message ?: "Fehler"}", PcStatus.OFFLINE, "?", 0)
+                }
             }
-            state = text
+            state = next
             delay(5000)
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "PCSteuerung",
-                        fontSize = 34.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = settings.base,
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-                TextButton(onClick = onOpenSetup) { Text("Einstellungen") }
-            }
-
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = tab == 0,
+                    onClick = { tab = 0 },
+                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
+                    label = { Text("Steuerung") }
                 )
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Status",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(12.dp)
-                                .background(
-                                    color = when (status) {
-                                        PcStatus.ONLINE -> Color(0xFF4CAF50)
-                                        PcStatus.ERROR -> Color(0xFFFFC107)
-                                        PcStatus.OFFLINE, PcStatus.UNKNOWN -> Color(0xFF9E9E9E)
-                                    },
-                                    shape = RoundedCornerShape(50)
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = state,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                NavigationBarItem(
+                    selected = tab == 1,
+                    onClick = { tab = 1 },
+                    icon = { Icon(Icons.Default.Star, contentDescription = null) },
+                    label = { Text("Energie") }
+                )
+                NavigationBarItem(
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                    label = { Text("Einstellungen") }
+                )
             }
-
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Button(
-                    onClick = { confirmShutdown = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("PC Herunterfahren", fontSize = 16.sp)
-                }
-
-                FilledTonalButton(
-                    onClick = { runAction("/abort", "Herunterfahren abgebrochen") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("Abbrechen", fontSize = 16.sp)
-                }
-
-                FilledTonalButton(
-                    onClick = { runAction("/hibernate", "Ruhezustand ausgeloest") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("Ruhezustand", fontSize = 16.sp)
-                }
-
-                OutlinedButton(
-                    onClick = { showPlan = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("Energieplan", fontSize = 16.sp)
-                }
-
-                Button(
-                    onClick = {
-                        if (settings.mac.isBlank()) {
-                            message = "MAC-Adresse fehlt"
-                        } else {
-                            scope.launch {
-                                message = "Sende Wake ..."
-                                val ok = withContext(Dispatchers.IO) {
-                                    sendMagicPacket(settings.mac, settings.broadcast)
-                                }
-                                Log.d(TAG, "WoL an ${settings.mac} via ${settings.broadcast} -> $ok")
-                                message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
-                                delay(4000)
-                                if (message?.startsWith("Wake") == true) message = null
-                            }
-                        }
+        }
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            when (tab) {
+                0 -> ControlTab(
+                    state = state,
+                    message = message,
+                    onShutdown = { showShutdown = true },
+                    onWake = ::doWake,
+                    onHibernate = { runAction("/hibernate", "Ruhezustand ausgeloest") },
+                    onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
+                    onShowLog = ::loadLog,
+                    onOpenSettings = { tab = 2 },
+                )
+                1 -> PlanTab(
+                    activePlan = state.plan,
+                    message = message,
+                    onSelect = { key, label ->
+                        runAction("/power-plan?name=$key", "Energieplan: $label")
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("PC einschalten", fontSize = 16.sp)
-                }
-
-                OutlinedButton(
-                    onClick = { showTimer = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("Spaeter herunterfahren", fontSize = 16.sp)
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            message = "Lade Verlauf ..."
-                            val text = withContext(Dispatchers.IO) {
-                                try {
-                                    httpCall(settings.base, "/log?lines=200", settings.authHeader())
-                                } catch (e: Exception) {
-                                    "Nicht erreichbar: ${e.message ?: "Fehler"}"
-                                }
-                            }
-                            logText = text.trim().ifBlank { "Noch keine Einträge." }
-                            message = null
-                            showLog = true
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("Verlauf anzeigen", fontSize = 16.sp)
-                }
-
-                message?.let { text ->
-                    Text(
-                        text = text,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                )
+                else -> SettingsTab(
+                    settings = settings,
+                    message = message,
+                    onSave = onSave,
+                )
             }
         }
     }
 
-    if (confirmShutdown) {
+    if (showShutdown) {
         AlertDialog(
-            onDismissRequest = { confirmShutdown = false },
-            title = { Text("PC herunterfahren?") },
-            text = { Text("Der PC fährt in 60 Sekunden herunter. Abbrechen ist jederzeit möglich.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmShutdown = false
-                    runAction("/shutdown?delay=60", "Herunterfahren in 60 s geplant")
-                }) { Text("Ja") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmShutdown = false }) { Text("Nein") }
-            }
-        )
-    }
-
-    if (showTimer) {
-        AlertDialog(
-            onDismissRequest = { showTimer = false },
-            title = { Text("Timer: Herunterfahren") },
+            onDismissRequest = { showShutdown = false },
+            title = { Text("PC herunterfahren") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf(1, 2, 4, 8).forEach { hours ->
-                        TextButton(
-                            onClick = {
-                                showTimer = false
-                                runAction(
-                                    "/shutdown?delay=${hours * 3600}",
-                                    "Herunterfahren in $hours h geplant"
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("In $hours Stunden") }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showTimer = false }) { Text("Abbrechen") }
-            }
-        )
-    }
-
-    if (showPlan) {
-        AlertDialog(
-            onDismissRequest = { showPlan = false },
-            title = { Text("Energieplan") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Wann soll der PC herunterfahren?", fontSize = 14.sp)
                     listOf(
-                        "high" to "Hoechstleistung",
-                        "balanced" to "Ausbalanciert",
-                        "saver" to "Energiesparen"
-                    ).forEach { (key, label) ->
+                        60 to "In 60 Sekunden",
+                        3600 to "In 1 Stunde",
+                        7200 to "In 2 Stunden",
+                        14400 to "In 4 Stunden",
+                        28800 to "In 8 Stunden",
+                    ).forEach { (seconds, label) ->
                         TextButton(
                             onClick = {
-                                showPlan = false
-                                runAction("/power-plan?name=$key", "Energieplan: $label")
+                                showShutdown = false
+                                runAction("/shutdown?delay=$seconds", "Herunterfahren geplant: $label")
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text(label) }
@@ -589,7 +478,7 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showPlan = false }) { Text("Abbrechen") }
+                TextButton(onClick = { showShutdown = false }) { Text("Abbrechen") }
             }
         )
     }
@@ -615,5 +504,339 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
                 TextButton(onClick = { showLog = false }) { Text("Schliessen") }
             }
         )
+    }
+}
+
+@Composable
+private fun ControlTab(
+    state: AgentState,
+    message: String?,
+    onShutdown: () -> Unit,
+    onWake: () -> Unit,
+    onHibernate: () -> Unit,
+    onAbort: () -> Unit,
+    onShowLog: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "PC Steuerung",
+            fontSize = 30.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            )
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Status",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .background(statusColor(state.status), RoundedCornerShape(50))
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = state.text,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        if (state.status == PcStatus.ERROR) {
+            Text(
+                text = "Bitte Benutzername/Passwort in den Einstellungen pruefen.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.error
+            )
+            TextButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
+                Text("Einstellungen oeffnen")
+            }
+        }
+
+        val online = state.status == PcStatus.ONLINE || state.status == PcStatus.ERROR
+        if (online) {
+            Button(
+                onClick = onShutdown,
+                modifier = Modifier.fillMaxWidth().height(64.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                )
+            ) {
+                Text("PC herunterfahren", fontSize = 18.sp)
+            }
+        } else {
+            Button(
+                onClick = onWake,
+                modifier = Modifier.fillMaxWidth().height(64.dp),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Text("PC einschalten", fontSize = 18.sp)
+            }
+        }
+
+        if (state.pending > 0) {
+            OutlinedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Geplantes Herunterfahren in ${fmtDuration(state.pending)}",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    TextButton(onClick = onAbort) { Text("Abbrechen") }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedButton(
+                onClick = onHibernate,
+                modifier = Modifier.weight(1f).height(52.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("Ruhezustand", fontSize = 14.sp) }
+            OutlinedButton(
+                onClick = onShowLog,
+                modifier = Modifier.weight(1f).height(52.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("Verlauf", fontSize = 14.sp) }
+        }
+
+        message?.let { text ->
+            Text(
+                text = text,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlanTab(
+    activePlan: String,
+    message: String?,
+    onSelect: (String, String) -> Unit,
+) {
+    val plans = listOf(
+        Triple("high", "Hoechstleistung", "Maximale Leistung"),
+        Triple("balanced", "Ausbalanciert", "Guter Kompromiss"),
+        Triple("saver", "Energiesparen", "Wenig Verbrauch"),
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "Energieplan",
+            fontSize = 30.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "Aktiver Plan: " + (plans.firstOrNull { it.first == activePlan }?.second ?: activePlan),
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+
+        plans.forEach { (key, label, description) ->
+            val active = key == activePlan
+            Button(
+                onClick = { onSelect(key, label) },
+                modifier = Modifier.fillMaxWidth().height(78.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (active) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    contentColor = if (active) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(label, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = if (active) "Aktiv" else description,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+
+        message?.let { text ->
+            Text(
+                text = text,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsTab(
+    settings: Settings,
+    message: String?,
+    onSave: (Settings) -> Unit,
+) {
+    var host by remember(settings) { mutableStateOf(settings.host) }
+    var port by remember(settings) { mutableStateOf(settings.port) }
+    var user by remember(settings) { mutableStateOf(settings.user) }
+    var pass by remember(settings) { mutableStateOf(settings.pass) }
+    var mac by remember(settings) { mutableStateOf(settings.mac) }
+    var broadcast by remember(settings) { mutableStateOf(settings.broadcast) }
+    var saved by remember { mutableStateOf(false) }
+    val valid = host.isNotBlank() && port.toIntOrNull() != null
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Einstellungen",
+            fontSize = 30.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "Verbindung und Zugangsdaten",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+
+        OutlinedTextField(
+            value = host,
+            onValueChange = { host = it },
+            label = { Text("IP des PCs") },
+            placeholder = { Text("192.168.1.100") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = port,
+            onValueChange = { port = it },
+            label = { Text("Port") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = user,
+            onValueChange = { user = it },
+            label = { Text("Benutzername") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = pass,
+            onValueChange = { pass = it },
+            label = { Text("Passwort") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = mac,
+            onValueChange = { mac = it },
+            label = { Text("MAC-Adresse (fuer WoL)") },
+            placeholder = { Text("AA:BB:CC:DD:EE:FF") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = broadcast,
+            onValueChange = { broadcast = it },
+            label = { Text("Broadcast-Adresse (WoL)") },
+            placeholder = { Text("255.255.255.255") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Button(
+            onClick = {
+                onSave(
+                    Settings(
+                        host = host.trim(),
+                        port = port.trim(),
+                        user = user.trim(),
+                        pass = pass,
+                        mac = mac.trim(),
+                        broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
+                    )
+                )
+                saved = true
+            },
+            enabled = valid,
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text("Speichern", fontSize = 16.sp)
+        }
+        if (saved) {
+            Text(
+                text = "Gespeichert.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Text(
+            text = "Zugangsdaten einmalig in der Web-Oberflaeche am PC anlegen: http://localhost:8000/",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+
+        message?.let { text ->
+            Text(
+                text = text,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

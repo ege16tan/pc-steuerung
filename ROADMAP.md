@@ -11,6 +11,7 @@
 - [x] Autostart-Skripte (Agent + Tray)
 - [x] Agent-Endpunkte im Simulationsmodus getestet
 - [x] Dauerhafte Logs mit Datum/Uhrzeit + Verlauf in App und Web
+- [x] UI-Redesign: Bottom-Navigation, kombinierter Power-Button, Timer im Shutdown-Dialog
 
 ## Geplant
 
