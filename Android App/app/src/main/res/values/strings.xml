@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PC Steuerung</string>
+
+    <!-- Homescreen-Widget -->
+    <string name="widget_title">PC Steuerung</string>
+    <string name="widget_description">PC per Knopfdruck einschalten oder herunterfahren.</string>
+    <string name="widget_wake">Einschalten</string>
+    <string name="widget_shutdown">Herunterfahren</string>
+    <string name="widget_status_idle">Bereit</string>
+    <string name="widget_status_sending">Sende ...</string>
+    <string name="widget_status_wake_sent">Wake gesendet</string>
+    <string name="widget_status_wake_failed">Wake fehlgeschlagen</string>
+    <string name="widget_status_shutdown_sent">Herunterfahren in 60 s</string>
+    <string name="widget_status_no_host">Host fehlt - bitte in der App einstellen</string>
+    <string name="widget_status_no_mac">MAC fehlt - bitte in der App einstellen</string>
+    <string name="widget_status_login">Login falsch (HTTP 401)</string>
+    <string name="widget_status_forbidden">Token falsch (HTTP 403)</string>
+    <string name="widget_status_http_error">Fehler: HTTP %1$d</string>
+    <string name="widget_status_unreachable">Nicht erreichbar: %1$s</string>
+    <string name="widget_status_error">Fehler</string>
+</resources>
