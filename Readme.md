@@ -125,6 +125,24 @@ docs/          Planung und Hintergründe
 
 Geplante Erweiterungen stehen in [ROADMAP.md](ROADMAP.md).
 
+## Sicherheit vor dem Push
+
+Ein **Pre-Push-Hook** und eine **GitHub Action** prüfen bei jedem Push:
+
+- keine Zugangsdaten (`credentials.json`, `.env`, Keys/Zertifikate)
+- keine Build-Artefakte (`build/`, `.gradle/`, `__pycache__/`, APKs)
+- keine offensichtlichen Secrets (GitHub-Tokens, AWS-Keys, Private Keys)
+- keine Dateien über 10 MB
+
+Einmalig aktivieren:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-hooks.ps1
+```
+
+Manuell prüfen: `bash scripts/check-sensitive.sh`  
+Umgehen (nicht empfohlen): `git push --no-verify`
+
 ## Lizenz
 
 [MIT](LICENSE) – frei nutzbar, änderbar und teilbar.

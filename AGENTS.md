@@ -21,6 +21,8 @@ Status).
 - `PC_WOL_BROADCAST` (Default `192.168.1.255`) = Broadcast-Ziel für `/wake`.
 - Tray-Steuerung (Taskleiste): `PC App/start-tray.bat` (Agent starten/stoppen,
   Status, Web-UI öffnen).
+- Push-Schutz: `scripts/check-sensitive.sh` (Pre-Push-Hook in `.githooks/`,
+  aktivieren mit `scripts/install-hooks.ps1`); GitHub Actions prüft dasselbe.
 
 ## Architektur / Wichtige Fakten
 

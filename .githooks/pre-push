@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# Pre-Push-Hook: prüft das Repository vor jedem Push.
+root="$(git rev-parse --show-toplevel)"
+exec sh "$root/scripts/check-sensitive.sh"
