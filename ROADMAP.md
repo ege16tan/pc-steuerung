@@ -18,6 +18,12 @@
 - [x] Buttons je nach PC-Zustand (online/offline/login)
 - [x] Snackbar-Feedback + rote ECHT-Modus-Warnung
 - [x] Umlaute in der App-Oberfläche
+- [x] Lade-/Sperrzustand (Busy) + Fortschrittsanzeige
+- [x] Verbindungstest in der App
+- [x] Countdown-Fix (Sekunden statt „0 min") + Duplikat entfernt
+- [x] Log-Dialog aktualisierbar + Text auswählbar
+- [x] Eingabevalidierung (Port/MAC/Passwort) + Passwort-Sichtbarkeit
+- [x] Widget-Status wird von der App aktualisiert
 
 ## Geplant
 

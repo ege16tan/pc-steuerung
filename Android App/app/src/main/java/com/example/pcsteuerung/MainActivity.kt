@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -25,10 +26,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -143,6 +147,25 @@ private fun statusColor(status: PcStatus): Color = when (status) {
     PcStatus.OFFLINE, PcStatus.UNKNOWN -> Color(0xFF9E9E9E)
 }
 
+private fun statusLabel(status: PcStatus): String = when (status) {
+    PcStatus.ONLINE -> "Online"
+    PcStatus.ERROR -> "Fehler"
+    PcStatus.OFFLINE -> "Offline"
+    PcStatus.UNKNOWN -> "Unbekannt"
+}
+
+private fun planLabel(plan: String): String = when (plan) {
+    "high" -> "Höchstleistung"
+    "balanced" -> "Ausbalanciert"
+    "saver" -> "Energiesparen"
+    "anderer" -> "Anderer Plan"
+    "unbekannt", "?" -> "Unbekannt"
+    else -> plan
+}
+
+private fun isValidMac(mac: String): Boolean =
+    mac.isBlank() || Regex("^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$").matches(mac.trim())
+
 private fun fmtDuration(seconds: Int): String {
     val s = seconds.coerceAtLeast(0)
     return when {
@@ -224,6 +247,9 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
     var mac by remember { mutableStateOf(initial.mac) }
     var broadcast by remember { mutableStateOf(initial.broadcast) }
     var defaultDelay by remember { mutableStateOf(initial.defaultDelay) }
+    var showPass by remember { mutableStateOf(false) }
+    var pass2 by remember { mutableStateOf(initial.pass) }
+    var formError by remember { mutableStateOf<String?>(null) }
     val valid = host.isNotBlank() && port.toIntOrNull() != null
 
     Box(
@@ -289,10 +315,33 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                     )
                     OutlinedTextField(
                         value = pass,
-                        onValueChange = { pass = it },
+                        onValueChange = { pass = it; formError = null },
                         label = { Text("Passwort") },
                         singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
+                        visualTransformation = if (showPass) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            TextButton(onClick = { showPass = !showPass }) {
+                                Text(if (showPass) "Verbergen" else "Anzeigen", fontSize = 12.sp)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = pass2,
+                        onValueChange = { pass2 = it; formError = null },
+                        label = { Text("Passwort wiederholen") },
+                        singleLine = true,
+                        isError = pass2.isNotEmpty() && pass != pass2,
+                        visualTransformation = if (showPass) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -303,10 +352,11 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                     )
                     OutlinedTextField(
                         value = mac,
-                        onValueChange = { mac = it },
+                        onValueChange = { mac = it; formError = null },
                         label = { Text("MAC-Adresse (für WoL)") },
                         placeholder = { Text("AA:BB:CC:DD:EE:FF") },
                         singleLine = true,
+                        isError = formError?.startsWith("MAC") == true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -323,19 +373,33 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                         color = MaterialTheme.colorScheme.outline
                     )
                     DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it })
+                    formError?.let {
+                        Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    }
                     Button(
                         onClick = {
-                            onSave(
-                                Settings(
-                                    host = host.trim(),
-                                    port = port.trim(),
-                                    user = user.trim(),
-                                    pass = pass,
-                                    mac = mac.trim(),
-                                    broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
-                                    defaultDelay = defaultDelay,
-                                )
-                            )
+                            when {
+                                pass.isNotEmpty() && pass != pass2 -> {
+                                    formError = "Passwörter stimmen nicht überein"
+                                }
+                                !isValidMac(mac) -> {
+                                    formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
+                                }
+                                else -> {
+                                    formError = null
+                                    onSave(
+                                        Settings(
+                                            host = host.trim(),
+                                            port = port.trim(),
+                                            user = user.trim(),
+                                            pass = pass,
+                                            mac = mac.trim(),
+                                            broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
+                                            defaultDelay = defaultDelay,
+                                        )
+                                    )
+                                }
+                            }
                         },
                         enabled = valid,
                         modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -375,6 +439,9 @@ fun MainApp(
     var timerMinutes by remember { mutableStateOf("") }
     var showLog by remember { mutableStateOf(false) }
     var logText by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var lastWidgetText by remember { mutableStateOf("") }
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -393,48 +460,86 @@ fun MainApp(
     }
 
     fun runAction(path: String, success: String) {
+        if (busy) return
         scope.launch {
-            message = "Sende ..."
-            val result = withContext(Dispatchers.IO) {
-                try {
-                    httpCall(settings.base, path, settings.authHeader(), "POST")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Aktion fehlgeschlagen: $path", e)
-                    "Nicht erreichbar: ${e.message ?: "Fehler"}"
+            busy = true
+            try {
+                message = "Sende ..."
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(settings.base, path, settings.authHeader(), "POST")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Aktion fehlgeschlagen: $path", e)
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
                 }
+                val shown = if (result.startsWith("HTTP ") || result.startsWith("Nicht")) result else success
+                message = shown
+                refresh++
+            } finally {
+                busy = false
             }
-            val shown = if (result.startsWith("HTTP ") || result.startsWith("Nicht")) result else success
-            message = shown
-            refresh++
         }
     }
 
     fun doWake() {
+        if (busy) return
         if (settings.mac.isBlank()) {
             message = "MAC-Adresse fehlt - bitte in den Einstellungen eintragen"
             return
         }
         scope.launch {
-            message = "Sende Wake ..."
-            val ok = withContext(Dispatchers.IO) {
-                sendMagicPacket(settings.mac, settings.broadcast)
+            busy = true
+            try {
+                message = "Sende Wake ..."
+                val ok = withContext(Dispatchers.IO) {
+                    sendMagicPacket(settings.mac, settings.broadcast)
+                }
+                Log.d(TAG, "WoL an ${settings.mac} via ${settings.broadcast} -> $ok")
+                message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
+            } finally {
+                busy = false
             }
-            Log.d(TAG, "WoL an ${settings.mac} via ${settings.broadcast} -> $ok")
-            message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
         }
     }
 
     fun loadLog() {
+        if (busy) return
         scope.launch {
-            val text = withContext(Dispatchers.IO) {
-                try {
-                    httpCall(settings.base, "/log?lines=200", settings.authHeader())
-                } catch (e: Exception) {
-                    "Nicht erreichbar: ${e.message ?: "Fehler"}"
+            busy = true
+            try {
+                val text = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(settings.base, "/log?lines=200", settings.authHeader())
+                    } catch (e: Exception) {
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
                 }
+                logText = text.trim().ifBlank { "Noch keine Einträge." }
+                showLog = true
+            } finally {
+                busy = false
             }
-            logText = text.trim().ifBlank { "Noch keine Einträge." }
-            showLog = true
+        }
+    }
+
+    fun testConnection() {
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        val body = httpCall(settings.base, "/status", settings.authHeader())
+                        if (body.startsWith("HTTP ")) body else "Verbindung OK"
+                    } catch (e: Exception) {
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
+                }
+                message = result
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -455,8 +560,7 @@ fun MainApp(
                         val plan = json.optString("power_plan", "?")
                         val pending = json.optInt("pending_shutdown", 0)
                         val simulate = json.optBoolean("simulate", true)
-                        val text = "Online · Plan: $plan" +
-                            if (pending > 0) " · Aus in ${pending / 60} min" else ""
+                        val text = "Online · ${planLabel(plan)}"
                         AgentState(text, PcStatus.ONLINE, plan, pending, simulate)
                     }
                 } catch (e: Exception) {
@@ -465,6 +569,16 @@ fun MainApp(
                 }
             }
             state = next
+            val widgetText = when (next.status) {
+                PcStatus.ONLINE -> "PC an · ${planLabel(next.plan)}"
+                PcStatus.OFFLINE -> "PC aus"
+                PcStatus.ERROR -> "Login prüfen"
+                PcStatus.UNKNOWN -> "Bereit"
+            }
+            if (widgetText != lastWidgetText) {
+                lastWidgetText = widgetText
+                WidgetProvider.updateAll(context, widgetText)
+            }
             delay(5000)
         }
     }
@@ -498,6 +612,7 @@ fun MainApp(
             when (tab) {
                 0 -> ControlTab(
                     state = state,
+                    busy = busy,
                     onShutdown = { showShutdownConfirm = true },
                     onTimer = {
                         timerHours = ""
@@ -512,6 +627,7 @@ fun MainApp(
                 )
                 1 -> PlanTab(
                     activePlan = state.plan,
+                    busy = busy,
                     onSelect = { key, label ->
                         state = state.copy(plan = key)
                         runAction("/power-plan?name=$key", "Energieplan: $label")
@@ -520,6 +636,8 @@ fun MainApp(
                 else -> SettingsTab(
                     settings = settings,
                     simulate = state.simulate,
+                    busy = busy,
+                    onTestConnection = ::testConnection,
                     onModeChange = { real ->
                         if (real) {
                             showRealModeConfirm = true
@@ -541,25 +659,28 @@ fun MainApp(
             title = { Text("PC herunterfahren?") },
             text = {
                 Text(
-                    if (delay == 0) {
-                        "Der PC fährt sofort herunter."
+                    (if (delay == 0) {
+                        "Der PC ${settings.host} fährt sofort herunter."
                     } else {
-                        "Der PC fährt in $delay Sekunden herunter."
-                    }
+                        "Der PC ${settings.host} fährt in $delay Sekunden herunter."
+                    }) + "\n\nAbbrechen ist danach im Steuerungs-Tab möglich."
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showShutdownConfirm = false
-                    runAction(
-                        "/shutdown?delay=$delay",
-                        if (delay == 0) {
-                            "Herunterfahren ausgelöst"
-                        } else {
-                            "Herunterfahren in $delay s geplant"
-                        }
-                    )
-                }) { Text("Ja") }
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        showShutdownConfirm = false
+                        runAction(
+                            "/shutdown?delay=$delay",
+                            if (delay == 0) {
+                                "Herunterfahren ausgelöst"
+                            } else {
+                                "Herunterfahren in $delay s geplant"
+                            }
+                        )
+                    }
+                ) { Text("Ja") }
             },
             dismissButton = {
                 TextButton(onClick = { showShutdownConfirm = false }) { Text("Nein") }
@@ -575,6 +696,7 @@ fun MainApp(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(1, 2, 4, 8).forEach { hours ->
                         TextButton(
+                            enabled = !busy,
                             onClick = {
                                 showTimer = false
                                 runAction("/shutdown?delay=${hours * 3600}", "Herunterfahren in $hours h geplant")
@@ -608,7 +730,7 @@ fun MainApp(
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(enabled = !busy, onClick = {
                     val total = (timerHours.toIntOrNull() ?: 0) * 3600 +
                         (timerMinutes.toIntOrNull() ?: 0) * 60
                     if (total <= 0) {
@@ -638,7 +760,7 @@ fun MainApp(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(enabled = !busy, onClick = {
                     showRealModeConfirm = false
                     state = state.copy(simulate = false)
                     runAction("/mode?simulate=false", "Echtzeitmodus aktiviert")
@@ -655,20 +777,25 @@ fun MainApp(
             onDismissRequest = { showLog = false },
             title = { Text("Verlauf") },
             text = {
-                Box(
-                    modifier = Modifier
-                        .heightIn(max = 400.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        text = logText,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
+                SelectionContainer {
+                    Box(
+                        modifier = Modifier
+                            .heightIn(max = 400.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = logText,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showLog = false }) { Text("Schließen") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { loadLog() }) { Text("Aktualisieren") }
             }
         )
     }
@@ -677,6 +804,7 @@ fun MainApp(
 @Composable
 private fun ControlTab(
     state: AgentState,
+    busy: Boolean,
     onShutdown: () -> Unit,
     onTimer: () -> Unit,
     onWake: () -> Unit,
@@ -699,6 +827,10 @@ private fun ControlTab(
             color = MaterialTheme.colorScheme.onBackground
         )
 
+        if (busy) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+
         ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
@@ -716,7 +848,12 @@ private fun ControlTab(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.semantics {
+                        contentDescription = "${statusLabel(state.status)}: ${state.text}"
+                    },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier
                             .size(12.dp)
@@ -777,6 +914,7 @@ private fun ControlTab(
             PcStatus.ONLINE -> {
                 Button(
                     onClick = onShutdown,
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth().height(64.dp),
                     shape = RoundedCornerShape(18.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -788,6 +926,7 @@ private fun ControlTab(
                 }
                 OutlinedButton(
                     onClick = onTimer,
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     shape = RoundedCornerShape(14.dp)
                 ) {
@@ -808,7 +947,7 @@ private fun ControlTab(
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
-                            TextButton(onClick = onAbort) { Text("Abbrechen") }
+                            TextButton(enabled = !busy, onClick = onAbort) { Text("Abbrechen") }
                         }
                     }
                 }
@@ -819,11 +958,13 @@ private fun ControlTab(
                 ) {
                     OutlinedButton(
                         onClick = onHibernate,
+                        enabled = !busy,
                         modifier = Modifier.weight(1f).height(52.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) { Text("Ruhezustand", fontSize = 14.sp) }
                     OutlinedButton(
                         onClick = onShowLog,
+                        enabled = !busy,
                         modifier = Modifier.weight(1f).height(52.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) { Text("Verlauf", fontSize = 14.sp) }
@@ -833,6 +974,7 @@ private fun ControlTab(
             PcStatus.OFFLINE -> {
                 Button(
                     onClick = onWake,
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth().height(64.dp),
                     shape = RoundedCornerShape(18.dp)
                 ) {
@@ -849,6 +991,7 @@ private fun ControlTab(
 @Composable
 private fun PlanTab(
     activePlan: String,
+    busy: Boolean,
     onSelect: (String, String) -> Unit,
 ) {
     val plans = listOf(
@@ -870,15 +1013,20 @@ private fun PlanTab(
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
-            text = "Aktiver Plan: " + (plans.firstOrNull { it.first == activePlan }?.second ?: activePlan),
+            text = "Aktiver Plan: " + planLabel(activePlan),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.outline
         )
+
+        if (busy) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
 
         plans.forEach { (key, label, description) ->
             val active = key == activePlan
             Button(
                 onClick = { onSelect(key, label) },
+                enabled = !busy,
                 modifier = Modifier.fillMaxWidth().height(78.dp),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -911,6 +1059,8 @@ private fun PlanTab(
 private fun SettingsTab(
     settings: Settings,
     simulate: Boolean?,
+    busy: Boolean,
+    onTestConnection: () -> Unit,
     onModeChange: (Boolean) -> Unit,
     onSave: (Settings) -> Unit,
 ) {
@@ -921,6 +1071,8 @@ private fun SettingsTab(
     var mac by remember(settings) { mutableStateOf(settings.mac) }
     var broadcast by remember(settings) { mutableStateOf(settings.broadcast) }
     var defaultDelay by remember(settings) { mutableStateOf(settings.defaultDelay) }
+    var showPass by remember { mutableStateOf(false) }
+    var macError by remember { mutableStateOf<String?>(null) }
     var saved by remember { mutableStateOf(false) }
     val valid = host.isNotBlank() && port.toIntOrNull() != null
 
@@ -945,7 +1097,7 @@ private fun SettingsTab(
 
         OutlinedTextField(
             value = host,
-            onValueChange = { host = it },
+            onValueChange = { host = it; saved = false },
             label = { Text("IP des PCs") },
             placeholder = { Text("192.168.1.100") },
             singleLine = true,
@@ -954,39 +1106,53 @@ private fun SettingsTab(
         )
         OutlinedTextField(
             value = port,
-            onValueChange = { port = it },
+            onValueChange = { port = it; saved = false },
             label = { Text("Port") },
             singleLine = true,
+            isError = port.toIntOrNull() == null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = user,
-            onValueChange = { user = it },
+            onValueChange = { user = it; saved = false },
             label = { Text("Benutzername") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = pass,
-            onValueChange = { pass = it },
+            onValueChange = { pass = it; saved = false },
             label = { Text("Passwort") },
             singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (showPass) {
+                VisualTransformation.None
+            } else {
+                PasswordVisualTransformation()
+            },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = {
+                TextButton(onClick = { showPass = !showPass }) {
+                    Text(if (showPass) "Verbergen" else "Anzeigen", fontSize = 12.sp)
+                }
+            },
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = mac,
-            onValueChange = { mac = it },
+            onValueChange = { mac = it; macError = null; saved = false },
             label = { Text("MAC-Adresse (für WoL)") },
             placeholder = { Text("AA:BB:CC:DD:EE:FF") },
             singleLine = true,
+            isError = macError != null,
             modifier = Modifier.fillMaxWidth()
         )
+        macError?.let {
+            Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+        }
         OutlinedTextField(
             value = broadcast,
-            onValueChange = { broadcast = it },
+            onValueChange = { broadcast = it; saved = false },
             label = { Text("Broadcast-Adresse (WoL)") },
             placeholder = { Text("255.255.255.255") },
             singleLine = true,
@@ -997,7 +1163,7 @@ private fun SettingsTab(
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.outline
         )
-        DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it })
+        DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it; saved = false })
 
         Text(
             text = "Debug-Modus",
@@ -1027,18 +1193,23 @@ private fun SettingsTab(
 
         Button(
             onClick = {
-                onSave(
-                    Settings(
-                        host = host.trim(),
-                        port = port.trim(),
-                        user = user.trim(),
-                        pass = pass,
-                        mac = mac.trim(),
-                        broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
-                        defaultDelay = defaultDelay,
+                if (!isValidMac(mac)) {
+                    macError = "Format: AA:BB:CC:DD:EE:FF"
+                } else {
+                    macError = null
+                    onSave(
+                        Settings(
+                            host = host.trim(),
+                            port = port.trim(),
+                            user = user.trim(),
+                            pass = pass,
+                            mac = mac.trim(),
+                            broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
+                            defaultDelay = defaultDelay,
+                        )
                     )
-                )
-                saved = true
+                    saved = true
+                }
             },
             enabled = valid,
             modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -1052,6 +1223,19 @@ private fun SettingsTab(
                 fontSize = 14.sp,
                 color = MaterialTheme.colorScheme.primary
             )
+        }
+
+        OutlinedButton(
+            onClick = onTestConnection,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            if (busy) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text("Verbindung testen", fontSize = 15.sp)
         }
 
         Text(

@@ -110,6 +110,16 @@ class WidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
+        /** Aktualisiert die Statuszeile aller vorhandenen Widgets. */
+        fun updateAll(context: Context, text: String) {
+            val manager = AppWidgetManager.getInstance(context)
+            val ids = manager.getAppWidgetIds(ComponentName(context, WidgetProvider::class.java))
+            if (ids.isEmpty()) return
+            val views = RemoteViews(context.packageName, R.layout.widget)
+            views.setTextViewText(R.id.widget_status, text)
+            manager.updateAppWidget(ids, views)
+        }
+
         private const val ACTION_WAKE = "com.example.pcsteuerung.action.WIDGET_WAKE"
         private const val PREFS_NAME = "settings"
         private const val KEY_MAC = "mac"

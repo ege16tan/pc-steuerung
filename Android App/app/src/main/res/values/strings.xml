@@ -15,7 +15,7 @@
     <string name="widget_status_no_host">Host fehlt - bitte in der App einstellen</string>
     <string name="widget_status_no_mac">MAC fehlt - bitte in der App einstellen</string>
     <string name="widget_status_login">Login falsch (HTTP 401)</string>
-    <string name="widget_status_forbidden">Token falsch (HTTP 403)</string>
+    <string name="widget_status_forbidden">Zugriff verweigert (HTTP 403)</string>
     <string name="widget_status_http_error">Fehler: HTTP %1$d</string>
     <string name="widget_status_unreachable">Nicht erreichbar: %1$s</string>
     <string name="widget_status_error">Fehler</string>
