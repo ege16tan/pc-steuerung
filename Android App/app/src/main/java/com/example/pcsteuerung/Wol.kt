@@ -1,5 +1,6 @@
 package com.example.pcsteuerung
 
+import android.util.Log
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -39,8 +40,10 @@ fun sendMagicPacket(mac: String, broadcast: String, port: Int = 9): Boolean {
                 )
             )
         }
+        Log.d("PCSteuerung", "WoL an $mac via ${broadcast.ifBlank { "255.255.255.255" }}:$port -> ok")
         true
     } catch (e: Exception) {
+        Log.e("PCSteuerung", "WoL an $mac fehlgeschlagen", e)
         false
     }
 }

@@ -23,12 +23,16 @@ Status).
   Status, Web-UI öffnen).
 - Push-Schutz: `scripts/check-sensitive.sh` (Pre-Push-Hook in `.githooks/`,
   aktivieren mit `scripts/install-hooks.ps1`); GitHub Actions prüft dasselbe.
+- **Entwicklungsversion:** privat, Simulationsmodus als Default. Vor einer
+  Veröffentlichung die Checkliste in `SECURITY.md` beachten.
 
 ## Architektur / Wichtige Fakten
 
 - Endpunkte: `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
-  `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /ping`,
-  `GET /setup-status`, `POST /setup`, `GET /`.
+  `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
+  `GET /ping`, `GET /setup-status`, `POST /setup`, `GET /`.
+- Logdatei: `PC App/agent.log` (Datum/Uhrzeit, Rotation nach `agent.log.1`,
+  gitignored).
 - Auth: Basic Auth (Benutzername/Passwort, PBKDF2-Hash in `PC App/credentials.json`)
   für LAN-Zugriffe; localhost ohne Login. Ersteinrichtung über die Web-UI
   (`POST /setup`, nur localhost). Alter `PC_AGENT_TOKEN`/`X-Token` bleibt als Fallback.

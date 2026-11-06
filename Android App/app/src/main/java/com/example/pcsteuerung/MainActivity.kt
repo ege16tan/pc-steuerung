@@ -3,6 +3,7 @@ package com.example.pcsteuerung
 import android.content.Context
 import android.os.Bundle
 import android.util.Base64
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -57,10 +58,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private const val TAG = "PCSteuerung"
+
 data class AuthHeader(val name: String, val value: String)
 
 /** Blockierender HTTP-Aufruf, immer aus Dispatchers.IO heraus verwenden. */
 fun httpCall(base: String, path: String, auth: AuthHeader?, method: String = "GET"): String {
+    Log.d(TAG, "HTTP $method ${base + path}")
     val conn = URL(base + path).openConnection() as HttpURLConnection
     try {
         conn.requestMethod = method
@@ -70,6 +74,7 @@ fun httpCall(base: String, path: String, auth: AuthHeader?, method: String = "GE
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        Log.d(TAG, "HTTP $method ${base + path} -> $code")
         return if (code in 200..299) body else "HTTP $code: $body"
     } finally {
         conn.disconnect()
@@ -285,6 +290,8 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
     var confirmShutdown by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
     var showPlan by remember { mutableStateOf(false) }
+    var showLog by remember { mutableStateOf(false) }
+    var logText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     fun runAction(path: String, success: String) {
@@ -294,6 +301,7 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
                 try {
                     httpCall(settings.base, path, settings.authHeader(), "POST")
                 } catch (e: Exception) {
+                    Log.e(TAG, "Aktion fehlgeschlagen: $path", e)
                     "Nicht erreichbar: ${e.message ?: "Fehler"}"
                 }
             }
@@ -314,6 +322,7 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
                     val pending = Regex("\"pending_shutdown\":(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                     "Online · Plan: ${plan ?: "?"}" + if (pending > 0) " · Aus in ${pending / 60} min" else ""
                 } catch (e: Exception) {
+                    Log.e(TAG, "Status-Abfrage fehlgeschlagen", e)
                     "Nicht erreichbar: ${e.message ?: "Fehler"}"
                 }
             }
@@ -455,6 +464,7 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
                                 val ok = withContext(Dispatchers.IO) {
                                     sendMagicPacket(settings.mac, settings.broadcast)
                                 }
+                                Log.d(TAG, "WoL an ${settings.mac} via ${settings.broadcast} -> $ok")
                                 message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
                                 delay(4000)
                                 if (message?.startsWith("Wake") == true) message = null
@@ -477,6 +487,30 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text("Spaeter herunterfahren", fontSize = 16.sp)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            message = "Lade Verlauf ..."
+                            val text = withContext(Dispatchers.IO) {
+                                try {
+                                    httpCall(settings.base, "/log?lines=200", settings.authHeader())
+                                } catch (e: Exception) {
+                                    "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                                }
+                            }
+                            logText = text.trim().ifBlank { "Noch keine Einträge." }
+                            message = null
+                            showLog = true
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("Verlauf anzeigen", fontSize = 16.sp)
                 }
 
                 message?.let { text ->
@@ -556,6 +590,29 @@ fun MainScreen(settings: Settings, onOpenSetup: () -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = { showPlan = false }) { Text("Abbrechen") }
+            }
+        )
+    }
+
+    if (showLog) {
+        AlertDialog(
+            onDismissRequest = { showLog = false },
+            title = { Text("Verlauf") },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = logText,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLog = false }) { Text("Schliessen") }
             }
         )
     }

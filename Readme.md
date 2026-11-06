@@ -22,6 +22,7 @@
 | ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden |
 | 🧩 **Homescreen-Widget** | Ein/Aus direkt vom Startbildschirm |
 | 🖥️ **Web-Oberfläche** | Status, Steuerung und Ereignis-Log im Browser |
+| 📝 **Verlauf** | Dauerhafte Logdatei mit Datum/Uhrzeit – einsehbar in App und Web |
 | 🪟 **Tray-Steuerung** | Agent starten/stoppen, Quick-Action-Popup unter Windows |
 | 🔐 **Login** | Benutzername/Passwort (Basic Auth) für LAN-Zugriffe |
 
@@ -99,7 +100,8 @@ In der App eintragen:
 | POST | `/hibernate` | Ruhezustand |
 | POST | `/power-plan?name=high\|balanced\|saver` | Energieplan wechseln |
 | POST | `/wake?mac=AA:BB:CC:DD:EE:FF&port=9` | Magic Packet senden |
-| GET | `/events` | letzte 50 Kommandos |
+| GET | `/events` | letzte 50 Kommandos (mit Datum/Uhrzeit) |
+| GET | `/log?lines=200` | letzte Zeilen der Logdatei (Klartext) |
 | GET | `/setup-status` | ob Zugangsdaten noch fehlen |
 | POST | `/setup` | Zugangsdaten anlegen (nur localhost) |
 
@@ -124,6 +126,12 @@ docs/          Planung und Hintergründe
 ## Roadmap
 
 Geplante Erweiterungen stehen in [ROADMAP.md](ROADMAP.md).
+
+## Entwicklungsstand & Sicherheit
+
+Dies ist eine **Entwicklungsversion** (privat, Simulationsmodus als Default).
+Vor einer Veröffentlichung oder dem Echtbetrieb bitte die Checkliste in
+[SECURITY.md](SECURITY.md) beachten.
 
 ## Sicherheit vor dem Push
 

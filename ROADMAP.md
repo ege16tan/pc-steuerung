@@ -10,6 +10,7 @@
 - [x] Tray-Steuerung mit Quick-Action-Popup
 - [x] Autostart-Skripte (Agent + Tray)
 - [x] Agent-Endpunkte im Simulationsmodus getestet
+- [x] Dauerhafte Logs mit Datum/Uhrzeit + Verlauf in App und Web
 
 ## Geplant
 

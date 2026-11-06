@@ -11,6 +11,10 @@ PC App/credentials.json
 opencode.json
 Android App/.codex/
 
+# Lokale Logs
+PC App/agent.log
+PC App/agent.log.1
+
 # Windows / Editor
 Thumbs.db
 .DS_Store
