@@ -23,6 +23,7 @@
 | 🧩 **Homescreen-Widget** | Ein/Aus direkt vom Startbildschirm |
 | 🖥️ **Web-Oberfläche** | Status, Steuerung und Ereignis-Log im Browser |
 | 📝 **Verlauf** | Dauerhafte Logdatei mit Datum/Uhrzeit – einsehbar in App und Web |
+| 🐞 **Debug-Modus** | Simulation ↔ Echtzeit umschalten (für Tests) |
 | 🪟 **Tray-Steuerung** | Agent starten/stoppen, Quick-Action-Popup unter Windows |
 | 🔐 **Login** | Benutzername/Passwort (Basic Auth) für LAN-Zugriffe |
 
@@ -104,6 +105,7 @@ In der App eintragen:
 | GET | `/log?lines=200` | letzte Zeilen der Logdatei (Klartext) |
 | GET | `/setup-status` | ob Zugangsdaten noch fehlen |
 | POST | `/setup` | Zugangsdaten anlegen (nur localhost) |
+| POST | `/mode?simulate=true\|false` | Simulation/Echtzeit umschalten |
 
 ## Sicherheit
 

@@ -30,7 +30,7 @@ Status).
 
 - Endpunkte: `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
-  `GET /ping`, `GET /setup-status`, `POST /setup`, `GET /`.
+  `GET /ping`, `GET /setup-status`, `POST /setup`, `POST /mode?simulate=`, `GET /`.
 - Logdatei: `PC App/agent.log` (Datum/Uhrzeit, Rotation nach `agent.log.1`,
   gitignored).
 - Auth: Basic Auth (Benutzername/Passwort, PBKDF2-Hash in `PC App/credentials.json`)

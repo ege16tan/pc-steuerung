@@ -92,6 +92,7 @@ data class Settings(
     val pass: String = "",
     val mac: String = "",
     val broadcast: String = "255.255.255.255",
+    val defaultDelay: Int = 60,
     val token: String = "",
 ) {
     val base: String get() = "http://$host:$port"
@@ -115,6 +116,7 @@ private data class AgentState(
     val status: PcStatus = PcStatus.UNKNOWN,
     val plan: String = "?",
     val pending: Int = 0,
+    val simulate: Boolean? = null,
 )
 
 private fun statusColor(status: PcStatus): Color = when (status) {
@@ -133,6 +135,19 @@ private fun fmtDuration(seconds: Int): String {
 }
 
 @Composable
+private fun DelayChips(selected: Int, onSelect: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(0 to "Sofort", 10 to "10 s", 30 to "30 s", 60 to "60 s").forEach { (value, label) ->
+            FilterChip(
+                selected = selected == value,
+                onClick = { onSelect(value) },
+                label = { Text(label) }
+            )
+        }
+    }
+}
+
+@Composable
 fun AppRoot() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
@@ -145,6 +160,7 @@ fun AppRoot() {
                 pass = prefs.getString("pass", "").orEmpty(),
                 mac = prefs.getString("mac", "").orEmpty(),
                 broadcast = prefs.getString("broadcast", "255.255.255.255").orEmpty(),
+                defaultDelay = prefs.getInt("default_delay", 60),
                 token = prefs.getString("token", "").orEmpty(),
             )
         )
@@ -159,6 +175,7 @@ fun AppRoot() {
             .putString("pass", newSettings.pass)
             .putString("mac", newSettings.mac)
             .putString("broadcast", newSettings.broadcast)
+            .putInt("default_delay", newSettings.defaultDelay)
             .remove("token")
             .apply()
         settings = newSettings.copy(token = "")
@@ -183,6 +200,7 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
     var pass by remember { mutableStateOf(initial.pass) }
     var mac by remember { mutableStateOf(initial.mac) }
     var broadcast by remember { mutableStateOf(initial.broadcast) }
+    var defaultDelay by remember { mutableStateOf(initial.defaultDelay) }
     val valid = host.isNotBlank() && port.toIntOrNull() != null
 
     Box(
@@ -276,6 +294,12 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Text(
+                        text = "Standard-Timer beim Herunterfahren",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                    DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it })
                     Button(
                         onClick = {
                             onSave(
@@ -286,6 +310,7 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                                     pass = pass,
                                     mac = mac.trim(),
                                     broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
+                                    defaultDelay = defaultDelay,
                                 )
                             )
                         },
@@ -315,7 +340,11 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
     var state by remember { mutableStateOf(AgentState()) }
     var message by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableStateOf(0) }
-    var showShutdown by remember { mutableStateOf(false) }
+    var showShutdownConfirm by remember { mutableStateOf(false) }
+    var showTimer by remember { mutableStateOf(false) }
+    var showRealModeConfirm by remember { mutableStateOf(false) }
+    var timerHours by remember { mutableStateOf("") }
+    var timerMinutes by remember { mutableStateOf("") }
     var showLog by remember { mutableStateOf(false) }
     var logText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -387,9 +416,11 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                             .find(body)?.groupValues?.get(1) ?: "?"
                         val pending = Regex("\"pending_shutdown\":(\\d+)")
                             .find(body)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                        val simulate = Regex("\"simulate\":(true|false)")
+                            .find(body)?.groupValues?.get(1) == "true"
                         val text = "Online · Plan: $plan" +
                             if (pending > 0) " · Aus in ${pending / 60} min" else ""
-                        AgentState(text, PcStatus.ONLINE, plan, pending)
+                        AgentState(text, PcStatus.ONLINE, plan, pending, simulate)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Status-Abfrage fehlgeschlagen", e)
@@ -430,7 +461,12 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                 0 -> ControlTab(
                     state = state,
                     message = message,
-                    onShutdown = { showShutdown = true },
+                    onShutdown = { showShutdownConfirm = true },
+                    onTimer = {
+                        timerHours = ""
+                        timerMinutes = ""
+                        showTimer = true
+                    },
                     onWake = ::doWake,
                     onHibernate = { runAction("/hibernate", "Ruhezustand ausgeloest") },
                     onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
@@ -441,44 +477,138 @@ fun MainApp(settings: Settings, onSave: (Settings) -> Unit) {
                     activePlan = state.plan,
                     message = message,
                     onSelect = { key, label ->
+                        state = state.copy(plan = key)
                         runAction("/power-plan?name=$key", "Energieplan: $label")
                     },
                 )
                 else -> SettingsTab(
                     settings = settings,
                     message = message,
+                    simulate = state.simulate,
+                    onModeChange = { real ->
+                        if (real) {
+                            showRealModeConfirm = true
+                        } else {
+                            state = state.copy(simulate = true)
+                            runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
+                        }
+                    },
                     onSave = onSave,
                 )
             }
         }
     }
 
-    if (showShutdown) {
+    if (showShutdownConfirm) {
+        val delay = settings.defaultDelay
         AlertDialog(
-            onDismissRequest = { showShutdown = false },
-            title = { Text("PC herunterfahren") },
+            onDismissRequest = { showShutdownConfirm = false },
+            title = { Text("PC herunterfahren?") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Wann soll der PC herunterfahren?", fontSize = 14.sp)
-                    listOf(
-                        60 to "In 60 Sekunden",
-                        3600 to "In 1 Stunde",
-                        7200 to "In 2 Stunden",
-                        14400 to "In 4 Stunden",
-                        28800 to "In 8 Stunden",
-                    ).forEach { (seconds, label) ->
+                Text(
+                    if (delay == 0) {
+                        "Der PC faehrt sofort herunter."
+                    } else {
+                        "Der PC faehrt in $delay Sekunden herunter."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showShutdownConfirm = false
+                    runAction(
+                        "/shutdown?delay=$delay",
+                        if (delay == 0) {
+                            "Herunterfahren ausgeloest"
+                        } else {
+                            "Herunterfahren in $delay s geplant"
+                        }
+                    )
+                }) { Text("Ja") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showShutdownConfirm = false }) { Text("Nein") }
+            }
+        )
+    }
+
+    if (showTimer) {
+        AlertDialog(
+            onDismissRequest = { showTimer = false },
+            title = { Text("Timer: Herunterfahren") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1, 2, 4, 8).forEach { hours ->
                         TextButton(
                             onClick = {
-                                showShutdown = false
-                                runAction("/shutdown?delay=$seconds", "Herunterfahren geplant: $label")
+                                showTimer = false
+                                runAction("/shutdown?delay=${hours * 3600}", "Herunterfahren in $hours h geplant")
                             },
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text(label) }
+                        ) { Text("In $hours Stunden") }
+                    }
+                    Text(
+                        text = "Eigene Zeit:",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = timerHours,
+                            onValueChange = { timerHours = it.filter(Char::isDigit) },
+                            label = { Text("Stunden") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = timerMinutes,
+                            onValueChange = { timerMinutes = it.filter(Char::isDigit) },
+                            label = { Text("Minuten") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showShutdown = false }) { Text("Abbrechen") }
+                TextButton(onClick = {
+                    val total = (timerHours.toIntOrNull() ?: 0) * 3600 +
+                        (timerMinutes.toIntOrNull() ?: 0) * 60
+                    if (total > 0) {
+                        showTimer = false
+                        runAction("/shutdown?delay=$total", "Herunterfahren in ${total / 60} min geplant")
+                    } else {
+                        message = "Bitte Stunden oder Minuten angeben"
+                    }
+                }) { Text("Starten") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimer = false }) { Text("Abbrechen") }
+            }
+        )
+    }
+
+    if (showRealModeConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRealModeConfirm = false },
+            title = { Text("Echtzeitmodus aktivieren?") },
+            text = {
+                Text(
+                    "Achtung: Befehle werden wirklich ausgefuehrt - " +
+                        "Herunterfahren, Ruhezustand und Energieplan wirken sofort."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRealModeConfirm = false
+                    state = state.copy(simulate = false)
+                    runAction("/mode?simulate=false", "Echtzeitmodus aktiviert")
+                }) { Text("Ja, aktivieren") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRealModeConfirm = false }) { Text("Abbrechen") }
             }
         )
     }
@@ -512,6 +642,7 @@ private fun ControlTab(
     state: AgentState,
     message: String?,
     onShutdown: () -> Unit,
+    onTimer: () -> Unit,
     onWake: () -> Unit,
     onHibernate: () -> Unit,
     onAbort: () -> Unit,
@@ -562,6 +693,14 @@ private fun ControlTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                state.simulate?.let { sim ->
+                    Text(
+                        text = if (sim) "Modus: SIMULATION (nur Log)" else "Modus: ECHT",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (sim) Color(0xFFF9A825) else MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         }
 
@@ -588,6 +727,13 @@ private fun ControlTab(
                 )
             ) {
                 Text("PC herunterfahren", fontSize = 18.sp)
+            }
+            OutlinedButton(
+                onClick = onTimer,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text("Timer...", fontSize = 15.sp)
             }
         } else {
             Button(
@@ -717,6 +863,8 @@ private fun PlanTab(
 private fun SettingsTab(
     settings: Settings,
     message: String?,
+    simulate: Boolean?,
+    onModeChange: (Boolean) -> Unit,
     onSave: (Settings) -> Unit,
 ) {
     var host by remember(settings) { mutableStateOf(settings.host) }
@@ -725,6 +873,7 @@ private fun SettingsTab(
     var pass by remember(settings) { mutableStateOf(settings.pass) }
     var mac by remember(settings) { mutableStateOf(settings.mac) }
     var broadcast by remember(settings) { mutableStateOf(settings.broadcast) }
+    var defaultDelay by remember(settings) { mutableStateOf(settings.defaultDelay) }
     var saved by remember { mutableStateOf(false) }
     val valid = host.isNotBlank() && port.toIntOrNull() != null
 
@@ -796,6 +945,38 @@ private fun SettingsTab(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
+        Text(
+            text = "Standard-Timer beim Herunterfahren",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+        DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it })
+
+        Text(
+            text = "Debug-Modus",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Echtzeitmodus", fontSize = 15.sp)
+                Text(
+                    text = when (simulate) {
+                        true -> "Simulation aktiv - Befehle werden nur geloggt."
+                        false -> "ECHT - Befehle werden wirklich ausgefuehrt."
+                        null -> "Modus unbekannt."
+                    },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+            Switch(
+                checked = simulate == false,
+                enabled = simulate != null,
+                onCheckedChange = { real -> onModeChange(real) }
+            )
+        }
 
         Button(
             onClick = {
@@ -807,6 +988,7 @@ private fun SettingsTab(
                         pass = pass,
                         mac = mac.trim(),
                         broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
+                        defaultDelay = defaultDelay,
                     )
                 )
                 saved = true

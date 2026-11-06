@@ -12,6 +12,8 @@
 - [x] Agent-Endpunkte im Simulationsmodus getestet
 - [x] Dauerhafte Logs mit Datum/Uhrzeit + Verlauf in App und Web
 - [x] UI-Redesign: Bottom-Navigation, kombinierter Power-Button, Timer im Shutdown-Dialog
+- [x] Default-Timer (Sofort/10/30/60 s) + Custom-Timer in der App
+- [x] Debug-Umschalter Simulation/Echtzeit (App, Web-UI, API)
 
 ## Geplant
 
