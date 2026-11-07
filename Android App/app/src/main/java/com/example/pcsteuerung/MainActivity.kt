@@ -55,6 +55,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -454,6 +457,7 @@ fun MainApp(
     var lastWidgetText by remember { mutableStateOf("") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Marktplatz-Zustand: installierte Module sind persistent, der Katalog
@@ -616,27 +620,32 @@ fun MainApp(
     }
 
     LaunchedEffect(active, refresh) {
-        while (true) {
-            val next = withContext(Dispatchers.IO) {
-                try {
-                    parseStatus(httpCall(active.base, "/status", active.authHeader()))
-                } catch (e: Exception) {
-                    Log.e(TAG, "Status-Abfrage fehlgeschlagen", e)
-                    AgentState("Nicht erreichbar: ${e.message ?: "Fehler"}", PcStatus.OFFLINE, "?", 0)
+        // Status nur abfragen, solange die App sichtbar (STARTED) ist: Im
+        // Hintergrund pausiert die Schleife, bei Rueckkehr startet sie frisch -
+        // die Anzeige ist sofort aktuell und Akku/Datenvolumen werden gespart.
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                val next = withContext(Dispatchers.IO) {
+                    try {
+                        parseStatus(httpCall(active.base, "/status", active.authHeader()))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Status-Abfrage fehlgeschlagen", e)
+                        AgentState("Nicht erreichbar: ${e.message ?: "Fehler"}", PcStatus.OFFLINE, "?", 0)
+                    }
                 }
+                state = next
+                val widgetText = when (next.status) {
+                    PcStatus.ONLINE -> "${active.name} an · ${planLabel(next.plan)}"
+                    PcStatus.OFFLINE -> "${active.name} aus"
+                    PcStatus.ERROR -> "Login prüfen"
+                    PcStatus.UNKNOWN -> "Bereit"
+                }
+                if (widgetText != lastWidgetText) {
+                    lastWidgetText = widgetText
+                    WidgetProvider.updateAll(context, widgetText)
+                }
+                delay(5000)
             }
-            state = next
-            val widgetText = when (next.status) {
-                PcStatus.ONLINE -> "${active.name} an · ${planLabel(next.plan)}"
-                PcStatus.OFFLINE -> "${active.name} aus"
-                PcStatus.ERROR -> "Login prüfen"
-                PcStatus.UNKNOWN -> "Bereit"
-            }
-            if (widgetText != lastWidgetText) {
-                lastWidgetText = widgetText
-                WidgetProvider.updateAll(context, widgetText)
-            }
-            delay(5000)
         }
     }
 

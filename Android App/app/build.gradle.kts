@@ -39,7 +39,14 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8-Minifikation + ungenutzte Ressourcen entfernen: kleinere APK,
+            // weniger Speicher. Regeln in proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -65,6 +72,10 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+
+    // Lifecycle: Status-Polling nur im Vordergrund (repeatOnLifecycle).
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

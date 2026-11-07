@@ -1,6 +1,7 @@
 package com.example.pcsteuerung
 
 import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -9,11 +10,12 @@ import java.util.UUID
  * Verwaltet mehrere PC-Profile in SharedPreferences.
  *
  * Format:
- *   "profiles"       -> JSON-Array aller Profile
+ *   "profiles"       -> verschluesseltes JSON-Array aller Profile (Keystore)
  *   "active_profile" -> id des aktiven Profils
  *
- * Beim ersten Zugriff werden die alten Einzel-Keys
- * (host/port/user/pass/mac/broadcast/default_delay) in ein Profil migriert.
+ * Alte Bestaende wandern beim ersten Laden automatisch in den verschluesselten
+ * Speicher: sowohl der Klartext-Altestand (JSON-Array) als auch die mangels
+ * Profile-Struktur noch aelteren Einzel-Keys (host/port/user/pass/...).
  */
 object ProfileStore {
 
@@ -30,14 +32,27 @@ object ProfileStore {
     private const val K_BROADCAST = "broadcast"
     private const val K_DELAY = "default_delay"
 
-    fun load(context: Context): List<Profile> {
+    fun load(context: Context, codec: SecretCodec = KeystoreCodec): List<Profile> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val raw = prefs.getString(KEY_PROFILES, null)
-        if (raw != null) return decode(raw)
+        val legacy = legacyFromSingleKeys(prefs)
+        val raw = prefs.getString(KEY_PROFILES, null) ?: legacy ?: return emptyList()
 
-        // Migration aus den alten Einzel-Keys.
+        return if (raw.trim().startsWith("[")) {
+            // Klartext-Altestand: einmal uebernehmen und verschluesselt ablegen.
+            val profiles = decode(raw)
+            if (profiles.isNotEmpty()) {
+                save(context, profiles, prefs.getString(KEY_ACTIVE, null), codec)
+            }
+            profiles
+        } else {
+            decode(codec.decrypt(raw) ?: return emptyList())
+        }
+    }
+
+    /** Baut aus den uralten Einzel-Keys ein Klartext-JSON (oder null). */
+    private fun legacyFromSingleKeys(prefs: SharedPreferences): String? {
         val host = prefs.getString(K_HOST, "").orEmpty()
-        if (host.isBlank()) return emptyList()
+        if (host.isBlank()) return null
         val profile = Profile(
             id = newId(),
             name = "PC",
@@ -49,8 +64,7 @@ object ProfileStore {
             broadcast = prefs.getString(K_BROADCAST, "255.255.255.255").orEmpty(),
             defaultDelay = prefs.getInt(K_DELAY, 60),
         )
-        save(context, listOf(profile), profile.id)
-        return listOf(profile)
+        return encode(listOf(profile))
     }
 
     fun activeId(context: Context): String? {
@@ -66,10 +80,15 @@ object ProfileStore {
         return profiles.firstOrNull { it.id == id } ?: profiles.firstOrNull()
     }
 
-    fun save(context: Context, profiles: List<Profile>, activeId: String?) {
+    fun save(
+        context: Context,
+        profiles: List<Profile>,
+        activeId: String?,
+        codec: SecretCodec = KeystoreCodec,
+    ) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs.edit()
-            .putString(KEY_PROFILES, encode(profiles))
+            .putString(KEY_PROFILES, codec.encrypt(encode(profiles)))
             .putString(KEY_ACTIVE, activeId)
             .remove(K_HOST)
             .remove(K_PORT)
@@ -83,6 +102,7 @@ object ProfileStore {
 
     fun newId(): String = UUID.randomUUID().toString()
 
+    /** Profile als Klartext-JSON (nur intern und fuer Tests). */
     private fun encode(profiles: List<Profile>): String {
         val arr = JSONArray()
         profiles.forEach { p ->
@@ -102,6 +122,7 @@ object ProfileStore {
         return arr.toString()
     }
 
+    /** Klartext-JSON -> Profile (nur intern und fuer Tests). */
     private fun decode(raw: String): List<Profile> {
         val arr = JSONArray(raw)
         val result = ArrayList<Profile>(arr.length())
