@@ -7,6 +7,22 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -26,6 +42,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -117,6 +134,57 @@ private fun statusLabel(status: PcStatus): String = when (status) {
     PcStatus.ERROR -> "Fehler"
     PcStatus.OFFLINE -> "Offline"
     PcStatus.UNKNOWN -> "Unbekannt"
+}
+
+/**
+ * Statuspunkt. In der Animation sitzt hinter dem Punkt ein sanft
+ * pulsierender Schein, der "lebt" von selbst - typisch für den Online-Zustand.
+ */
+@Composable
+private fun StatusDot(color: Color, pulsing: Boolean) {
+    val halo by rememberInfiniteTransition(label = "statusHalo").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1100, easing = LinearOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "statusHaloAlpha"
+    )
+    Box(modifier = Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+        if (pulsing) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(color.copy(alpha = 0.34f * halo))
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .clip(RoundedCornerShape(50))
+                .background(color)
+        )
+    }
+}
+
+/**
+ * Lässt Inhalte gestaffelt (Kaskade) einfliegen. Index bestimmt die
+ * Verzoegerung in Millisekunden.
+ */
+@Composable
+private fun Appearing(index: Int, content: @Composable () -> Unit) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+    val delay = (index * 70).coerceAtMost(350)
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(300, delayMillis = delay, easing = FastOutSlowInEasing)) +
+            expandVertically(tween(340, delayMillis = delay, easing = FastOutSlowInEasing))
+    ) {
+        content()
+    }
 }
 
 @Composable
@@ -558,52 +626,63 @@ fun MainApp(
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (tab) {
-                0 -> ControlTab(
-                    profiles = profiles,
-                    active = active,
-                    state = state,
-                    busy = busy,
-                    onSwitchProfile = ::switchProfile,
-                    onShutdown = { showShutdownConfirm = true },
-                    onTimer = {
-                        timerHours = ""
-                        timerMinutes = ""
-                        showTimer = true
-                    },
-                    onWake = ::doWake,
-                    onHibernate = { runAction("/hibernate", "Ruhezustand ausgelöst") },
-                    onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
-                    onShowLog = ::loadLog,
-                    onOpenSettings = { tab = 2 },
-                )
-                1 -> PlanTab(
-                    activePlan = state.plan,
-                    busy = busy,
-                    onSelect = { key, label ->
-                        state = state.copy(plan = key)
-                        runAction("/power-plan?name=$key", "Energieplan: $label")
-                    },
-                )
-                else -> SettingsTab(
-                    profiles = profiles,
-                    active = active,
-                    simulate = state.simulate,
-                    busy = busy,
-                    onSwitch = ::switchProfile,
-                    onAdd = ::addProfile,
-                    onDelete = ::deleteProfile,
-                    onSave = ::saveProfile,
-                    onTestConnection = ::testConnection,
-                    onModeChange = { real ->
-                        if (real) {
-                            showRealModeConfirm = true
-                        } else {
-                            state = state.copy(simulate = true)
-                            runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
-                        }
-                    },
-                )
+            AnimatedContent(
+                targetState = tab,
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
+                    (fadeIn(tween(220, easing = FastOutSlowInEasing)) +
+                        slideInVertically(tween(220, easing = FastOutSlowInEasing)) { it / 40 }) togetherWith
+                        fadeOut(tween(150))
+                },
+                label = "tabContent"
+            ) { page ->
+                when (page) {
+                    0 -> ControlTab(
+                        profiles = profiles,
+                        active = active,
+                        state = state,
+                        busy = busy,
+                        onSwitchProfile = ::switchProfile,
+                        onShutdown = { showShutdownConfirm = true },
+                        onTimer = {
+                            timerHours = ""
+                            timerMinutes = ""
+                            showTimer = true
+                        },
+                        onWake = ::doWake,
+                        onHibernate = { runAction("/hibernate", "Ruhezustand ausgelöst") },
+                        onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
+                        onShowLog = ::loadLog,
+                        onOpenSettings = { tab = 2 },
+                    )
+                    1 -> PlanTab(
+                        activePlan = state.plan,
+                        busy = busy,
+                        onSelect = { key, label ->
+                            state = state.copy(plan = key)
+                            runAction("/power-plan?name=$key", "Energieplan: $label")
+                        },
+                    )
+                    else -> SettingsTab(
+                        profiles = profiles,
+                        active = active,
+                        simulate = state.simulate,
+                        busy = busy,
+                        onSwitch = ::switchProfile,
+                        onAdd = ::addProfile,
+                        onDelete = ::deleteProfile,
+                        onSave = ::saveProfile,
+                        onTestConnection = ::testConnection,
+                        onModeChange = { real ->
+                            if (real) {
+                                showRealModeConfirm = true
+                            } else {
+                                state = state.copy(simulate = true)
+                                runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
+                            }
+                        },
+                    )
+                }
             }
         }
     }
@@ -830,19 +909,32 @@ private fun ControlTab(
                     },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .background(statusColor(state.status), RoundedCornerShape(50))
+                    StatusDot(
+                        color = statusColor(state.status),
+                        pulsing = state.status == PcStatus.ONLINE
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = state.text,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    AnimatedContent(
+                        targetState = state.text,
+                        transitionSpec = {
+                            (fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 4 }) togetherWith
+                                fadeOut(tween(180))
+                        },
+                        label = "statusText"
+                    ) { text ->
+                        Text(
+                            text = text,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 state.simulate?.let { sim ->
+                    val modeColor by animateColorAsState(
+                        targetValue = if (sim) Color(0xFFF9A825) else Color(0xFFE53935),
+                        animationSpec = tween(320, easing = FastOutSlowInEasing),
+                        label = "modeColor"
+                    )
                     Text(
                         text = if (sim) {
                             "Modus: SIMULATION (nur Log)"
@@ -851,13 +943,17 @@ private fun ControlTab(
                         },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (sim) Color(0xFFF9A825) else Color(0xFFE53935)
+                        color = modeColor
                     )
                 }
             }
         }
 
-        if (state.simulate == false) {
+        AnimatedVisibility(
+            visible = state.simulate == false,
+            enter = fadeIn(tween(240)) + expandVertically(tween(320)),
+            exit = fadeOut(tween(180)) + shrinkVertically(tween(320))
+        ) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -886,79 +982,94 @@ private fun ControlTab(
             }
         }
 
-        when (state.status) {
-            PcStatus.ONLINE -> {
-                Button(
-                    onClick = onShutdown,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().height(64.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
-                ) {
-                    Text("PC herunterfahren", fontSize = 18.sp)
-                }
-                OutlinedButton(
-                    onClick = onTimer,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Text("Timer...", fontSize = 15.sp)
-                }
-
-                if (state.pending > 0) {
-                    OutlinedCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "Geplantes Herunterfahren in ${fmtDuration(state.pending)}",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold
+        AnimatedContent(
+            targetState = state.status,
+            transitionSpec = {
+                (fadeIn(tween(300)) + expandVertically(tween(360))) togetherWith
+                    (fadeOut(tween(200)) + shrinkVertically(tween(360)))
+            },
+            label = "actions"
+        ) { status ->
+            when (status) {
+                PcStatus.ONLINE -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Button(
+                            onClick = onShutdown,
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth().height(64.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError
                             )
-                            TextButton(enabled = !busy, onClick = onAbort) { Text("Abbrechen") }
+                        ) {
+                            Text("PC herunterfahren", fontSize = 18.sp)
+                        }
+                        OutlinedButton(
+                            onClick = onTimer,
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text("Timer...", fontSize = 15.sp)
+                        }
+
+                        AnimatedVisibility(
+                            visible = state.pending > 0,
+                            enter = fadeIn(tween(240)) + expandVertically(tween(320)),
+                            exit = fadeOut(tween(180)) + shrinkVertically(tween(320))
+                        ) {
+                            OutlinedCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(18.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "Geplantes Herunterfahren in ${fmtDuration(state.pending)}",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    TextButton(enabled = !busy, onClick = onAbort) { Text("Abbrechen") }
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onHibernate,
+                                enabled = !busy,
+                                modifier = Modifier.weight(1f).height(52.dp),
+                                shape = RoundedCornerShape(14.dp)
+                            ) { Text("Ruhezustand", fontSize = 14.sp) }
+                            OutlinedButton(
+                                onClick = onShowLog,
+                                enabled = !busy,
+                                modifier = Modifier.weight(1f).height(52.dp),
+                                shape = RoundedCornerShape(14.dp)
+                            ) { Text("Verlauf", fontSize = 14.sp) }
                         }
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onHibernate,
+                PcStatus.OFFLINE -> {
+                    Button(
+                        onClick = onWake,
                         enabled = !busy,
-                        modifier = Modifier.weight(1f).height(52.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) { Text("Ruhezustand", fontSize = 14.sp) }
-                    OutlinedButton(
-                        onClick = onShowLog,
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f).height(52.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) { Text("Verlauf", fontSize = 14.sp) }
+                        modifier = Modifier.fillMaxWidth().height(64.dp),
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Text("PC einschalten", fontSize = 18.sp)
+                    }
                 }
-            }
 
-            PcStatus.OFFLINE -> {
-                Button(
-                    onClick = onWake,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().height(64.dp),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text("PC einschalten", fontSize = 18.sp)
-                }
+                PcStatus.ERROR, PcStatus.UNKNOWN -> Unit
             }
-
-            PcStatus.ERROR, PcStatus.UNKNOWN -> Unit
         }
 
     }
@@ -1000,22 +1111,32 @@ private fun PlanTab(
 
         plans.forEach { (key, label, description) ->
             val active = key == activePlan
+            val planContainer by animateColorAsState(
+                targetValue = if (active) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                },
+                animationSpec = tween(320, easing = FastOutSlowInEasing),
+                label = "planContainer"
+            )
+            val planContent by animateColorAsState(
+                targetValue = if (active) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                animationSpec = tween(320, easing = FastOutSlowInEasing),
+                label = "planContent"
+            )
             Button(
                 onClick = { onSelect(key, label) },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().height(78.dp),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (active) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    contentColor = if (active) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                    containerColor = planContainer,
+                    contentColor = planContent
                 )
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1028,6 +1149,73 @@ private fun PlanTab(
             }
         }
 
+    }
+}
+
+/**
+ * Karte fuer ein PC-Profil: erscheint gestaffelt (Kaskade) und animiert die
+ * Auswahl-Farbe weich. "deletable" verhindert das Loeschen der letzten Karte.
+ */
+@Composable
+private fun ProfileCard(
+    profile: Profile,
+    isActive: Boolean,
+    index: Int,
+    deletable: Boolean,
+    onSwitch: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Appearing(index = index) {
+        val containerColor by animateColorAsState(
+            targetValue = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            },
+            animationSpec = tween(320, easing = FastOutSlowInEasing),
+            label = "profileCardColor"
+        )
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = containerColor)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = profile.name + if (isActive) " (aktiv)" else "",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (profile.isComplete) {
+                            "${profile.host}:${profile.port}"
+                        } else {
+                            "noch nicht eingerichtet"
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                if (!isActive) {
+                    TextButton(onClick = onSwitch) { Text("Aktivieren") }
+                }
+                if (deletable) {
+                    IconButton(onClick = onDelete) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Profil löschen",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1078,50 +1266,15 @@ private fun SettingsTab(
             color = MaterialTheme.colorScheme.onBackground
         )
 
-        profiles.forEach { p ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (p.id == active.id) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    }
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = p.name + if (p.id == active.id) " (aktiv)" else "",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = if (p.isComplete) "${p.host}:${p.port}" else "noch nicht eingerichtet",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                    if (p.id != active.id) {
-                        TextButton(onClick = { onSwitch(p.id) }) { Text("Aktivieren") }
-                    }
-                    if (profiles.size > 1) {
-                        IconButton(onClick = { onDelete(p.id) }) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Profil löschen",
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                }
-            }
+        profiles.forEachIndexed { index, p ->
+            ProfileCard(
+                profile = p,
+                isActive = p.id == active.id,
+                index = index,
+                deletable = profiles.size > 1,
+                onSwitch = { onSwitch(p.id) },
+                onDelete = { onDelete(p.id) }
+            )
         }
 
         OutlinedButton(

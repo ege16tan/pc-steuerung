@@ -27,10 +27,11 @@
 - [x] Mehrere PCs (Profile): verwalten, umschalten, hinzufügen, löschen
 - [x] App-Icon (adaptiv, Power-Symbol auf Teal/Navy-Verlauf)
 - [x] Unit-Tests: Magic-Packet, MAC-Parsing, Status-Auswertung, Dauer
+- [x] Animationen: Statuspuls, weiche Übergänge, Kaskaden-Einblendung, plan- und Kartenfarben
 
 ## Geplant
 
-- [ ] Finales Design (Feinschliff)
+- [ ] Finales Design (Restpolitur)
 - [ ] Automatisierte Tests für den FastAPI-Agent
 - [ ] CI über GitHub Actions
 - [ ] Screenshots fürs README
