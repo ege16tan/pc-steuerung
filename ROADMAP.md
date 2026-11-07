@@ -29,8 +29,12 @@
 - [x] Unit-Tests: Magic-Packet, MAC-Parsing, Status-Auswertung, Dauer
 - [x] Animationen: Statuspuls, weiche Übergänge, Kaskaden-Einblendung, plan- und Kartenfarben
 - [x] Fortschrittsbalken als Overlay am oberen Rand (kein Layout-Verschieben mehr), dezenter Statuspuls
+- [x] Marktplatz (v0.6.0): 4. Tab „Markt+“ – Basis (An/Aus, Status, Ruhezustand, Energieplan) immer gratis, Timer + Verlauf als installierbare Module
+- [x] Remote-Modulkatalog: `module-catalog/modules.json` im Repo, Katalog-Refresh per GitHub + lokaler Fallback offline, 8 neue Unit-Tests
 
 ## Geplant
+
+- [ ] Module: Katalog künftig per Release erweitern (z. B. Screenshots, Dateien)
 
 - [ ] Finales Design (Restpolitur)
 - [ ] Automatisierte Tests für den FastAPI-Agent

@@ -44,6 +44,12 @@ Status).
   bietet zusätzlich `/wake` für Web-UI/Tests (`PC_WOL_BROADCAST`). Im
   Simulationsmodus loggt der Agent nur.
 - Plan-/Status-Quelle: `docs/planung.md`.
+- Android-Marktplatz (ab v0.6.0): Basis (An/Aus, Status, Ruhezustand, Energieplan)
+  bleibt immer drin; Zusatz-Features sind Module (`Modules.kt`: Datenmodell, Katalog-Parsing,
+  `ModuleStore`, `SUPPORTED_MODULES`). Remote-Katalog:
+  `module-catalog/modules.json` im Repo (raw.githubusercontent.com), lokaler Fallback
+  bei offline. Installierte Modul-IDs: SharedPreferences `"settings"`,
+  Key `installed_modules` (JSON-Array).
 
 ## Gotchas
 

@@ -1,0 +1,18 @@
+{
+  "catalogVersion": 1,
+  "source": "github:ege16tan/pc-steuerung",
+  "modules": [
+    {
+      "id": "timer",
+      "name": "Zeitschaltuhr",
+      "description": "Herunterfahren in Sekunden oder Stunden planen.",
+      "version": 1
+    },
+    {
+      "id": "log",
+      "name": "Verlauf",
+      "description": "Log-Ausgabe des Agenten direkt in der App ansehen.",
+      "version": 1
+    }
+  ]
+}
