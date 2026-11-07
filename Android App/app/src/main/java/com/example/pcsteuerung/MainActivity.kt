@@ -3,12 +3,12 @@ package com.example.pcsteuerung
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.util.Base64
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -17,6 +17,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -41,7 +43,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
-import org.json.JSONObject
 
 const val EXTRA_CONFIRM_SHUTDOWN = "confirm_shutdown"
 
@@ -86,8 +87,6 @@ class MainActivity : ComponentActivity() {
 
 private const val TAG = "PCSteuerung"
 
-data class AuthHeader(val name: String, val value: String)
-
 /** Blockierender HTTP-Aufruf, immer aus Dispatchers.IO heraus verwenden. */
 fun httpCall(base: String, path: String, auth: AuthHeader?, method: String = "GET"): String {
     Log.d(TAG, "HTTP $method ${base + path}")
@@ -107,40 +106,6 @@ fun httpCall(base: String, path: String, auth: AuthHeader?, method: String = "GE
     }
 }
 
-data class Settings(
-    val host: String,
-    val port: String,
-    val user: String = "",
-    val pass: String = "",
-    val mac: String = "",
-    val broadcast: String = "255.255.255.255",
-    val defaultDelay: Int = 60,
-    val token: String = "",
-) {
-    val base: String get() = "http://$host:$port"
-    val isComplete: Boolean get() = host.isNotBlank() && port.isNotBlank()
-
-    /** Basic Auth, wenn Benutzername/Passwort gesetzt sind; sonst alter X-Token. */
-    fun authHeader(): AuthHeader? = when {
-        user.isNotBlank() && pass.isNotBlank() -> {
-            val raw = "$user:$pass".toByteArray(Charsets.UTF_8)
-            AuthHeader("Authorization", "Basic " + Base64.encodeToString(raw, Base64.NO_WRAP))
-        }
-        token.isNotBlank() -> AuthHeader("X-Token", token)
-        else -> null
-    }
-}
-
-enum class PcStatus { ONLINE, ERROR, OFFLINE, UNKNOWN }
-
-private data class AgentState(
-    val text: String = "Verbinde ...",
-    val status: PcStatus = PcStatus.UNKNOWN,
-    val plan: String = "?",
-    val pending: Int = 0,
-    val simulate: Boolean? = null,
-)
-
 private fun statusColor(status: PcStatus): Color = when (status) {
     PcStatus.ONLINE -> Color(0xFF4CAF50)
     PcStatus.ERROR -> Color(0xFFFFC107)
@@ -152,27 +117,6 @@ private fun statusLabel(status: PcStatus): String = when (status) {
     PcStatus.ERROR -> "Fehler"
     PcStatus.OFFLINE -> "Offline"
     PcStatus.UNKNOWN -> "Unbekannt"
-}
-
-private fun planLabel(plan: String): String = when (plan) {
-    "high" -> "Höchstleistung"
-    "balanced" -> "Ausbalanciert"
-    "saver" -> "Energiesparen"
-    "anderer" -> "Anderer Plan"
-    "unbekannt", "?" -> "Unbekannt"
-    else -> plan
-}
-
-private fun isValidMac(mac: String): Boolean =
-    mac.isBlank() || Regex("^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$").matches(mac.trim())
-
-private fun fmtDuration(seconds: Int): String {
-    val s = seconds.coerceAtLeast(0)
-    return when {
-        s < 60 -> "$s s"
-        s < 3600 -> "${s / 60} min"
-        else -> "${s / 3600} h ${(s % 3600) / 60} min"
-    }
 }
 
 @Composable
@@ -191,47 +135,33 @@ private fun DelayChips(selected: Int, onSelect: (Int) -> Unit) {
 @Composable
 fun AppRoot(confirmShutdown: Boolean = false, onConfirmConsumed: () -> Unit = {}) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
-    var settings by remember {
-        mutableStateOf(
-            Settings(
-                host = prefs.getString("host", "").orEmpty(),
-                port = prefs.getString("port", "8000").orEmpty(),
-                user = prefs.getString("user", "").orEmpty(),
-                pass = prefs.getString("pass", "").orEmpty(),
-                mac = prefs.getString("mac", "").orEmpty(),
-                broadcast = prefs.getString("broadcast", "255.255.255.255").orEmpty(),
-                defaultDelay = prefs.getInt("default_delay", 60),
-                token = prefs.getString("token", "").orEmpty(),
-            )
-        )
-    }
-    var showSetup by remember { mutableStateOf(!settings.isComplete) }
+    var profiles by remember { mutableStateOf(ProfileStore.load(context)) }
+    var activeId by remember { mutableStateOf(ProfileStore.activeId(context)) }
 
-    fun persist(newSettings: Settings) {
-        prefs.edit()
-            .putString("host", newSettings.host)
-            .putString("port", newSettings.port)
-            .putString("user", newSettings.user)
-            .putString("pass", newSettings.pass)
-            .putString("mac", newSettings.mac)
-            .putString("broadcast", newSettings.broadcast)
-            .putInt("default_delay", newSettings.defaultDelay)
-            .remove("token")
-            .apply()
-        settings = newSettings.copy(token = "")
+    fun persist(newProfiles: List<Profile>, newActiveId: String?) {
+        ProfileStore.save(context, newProfiles, newActiveId)
+        profiles = newProfiles
+        activeId = newActiveId
     }
 
-    if (showSetup) {
+    val active = profiles.firstOrNull { it.id == activeId } ?: profiles.firstOrNull()
+
+    if (active == null || !active.isComplete) {
         SetupScreen(
-            initial = settings,
-            onSave = { persist(it); showSetup = false },
-            onCancel = if (settings.isComplete) ({ showSetup = false }) else null,
+            profile = active ?: Profile(id = ProfileStore.newId(), name = "PC"),
+            onSave = { saved ->
+                val others = profiles.filter { it.id != saved.id }
+                persist(others + saved, saved.id)
+            },
+            onCancel = if (active != null && profiles.size > 1) {
+                { persist(profiles, profiles.firstOrNull { it.id != active.id }?.id) }
+            } else null,
         )
     } else {
         MainApp(
-            settings = settings,
-            onSave = { persist(it) },
+            profiles = profiles,
+            activeId = active.id,
+            onProfilesChange = ::persist,
             startWithShutdownConfirm = confirmShutdown,
             onConfirmConsumed = onConfirmConsumed,
         )
@@ -239,16 +169,17 @@ fun AppRoot(confirmShutdown: Boolean = false, onConfirmConsumed: () -> Unit = {}
 }
 
 @Composable
-fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> Unit)?) {
-    var host by remember { mutableStateOf(initial.host) }
-    var port by remember { mutableStateOf(initial.port) }
-    var user by remember { mutableStateOf(initial.user) }
-    var pass by remember { mutableStateOf(initial.pass) }
-    var mac by remember { mutableStateOf(initial.mac) }
-    var broadcast by remember { mutableStateOf(initial.broadcast) }
-    var defaultDelay by remember { mutableStateOf(initial.defaultDelay) }
+fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Unit)?) {
+    var name by remember { mutableStateOf(profile.name) }
+    var host by remember { mutableStateOf(profile.host) }
+    var port by remember { mutableStateOf(profile.port) }
+    var user by remember { mutableStateOf(profile.user) }
+    var pass by remember { mutableStateOf(profile.pass) }
+    var mac by remember { mutableStateOf(profile.mac) }
+    var broadcast by remember { mutableStateOf(profile.broadcast) }
+    var defaultDelay by remember { mutableStateOf(profile.defaultDelay) }
     var showPass by remember { mutableStateOf(false) }
-    var pass2 by remember { mutableStateOf(initial.pass) }
+    var pass2 by remember { mutableStateOf(profile.pass) }
     var formError by remember { mutableStateOf<String?>(null) }
     val valid = host.isNotBlank() && port.toIntOrNull() != null
 
@@ -266,7 +197,7 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = "Einrichten",
+                text = if (profile.isComplete) "Profil bearbeiten" else "Einrichten",
                 fontSize = 34.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
@@ -288,6 +219,13 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                     modifier = Modifier.fillMaxWidth().padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Name (z. B. Wohnzimmer-PC)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     OutlinedTextField(
                         value = host,
                         onValueChange = { host = it },
@@ -388,7 +326,8 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
                                 else -> {
                                     formError = null
                                     onSave(
-                                        Settings(
+                                        profile.copy(
+                                            name = name.trim().ifBlank { "PC" },
                                             host = host.trim(),
                                             port = port.trim(),
                                             user = user.trim(),
@@ -423,11 +362,14 @@ fun SetupScreen(initial: Settings, onSave: (Settings) -> Unit, onCancel: (() -> 
 
 @Composable
 fun MainApp(
-    settings: Settings,
-    onSave: (Settings) -> Unit,
+    profiles: List<Profile>,
+    activeId: String,
+    onProfilesChange: (List<Profile>, String?) -> Unit,
     startWithShutdownConfirm: Boolean = false,
     onConfirmConsumed: () -> Unit = {},
 ) {
+    val active = profiles.firstOrNull { it.id == activeId } ?: profiles.first()
+
     var tab by remember { mutableStateOf(0) }
     var state by remember { mutableStateOf(AgentState()) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -467,7 +409,7 @@ fun MainApp(
                 message = "Sende ..."
                 val result = withContext(Dispatchers.IO) {
                     try {
-                        httpCall(settings.base, path, settings.authHeader(), "POST")
+                        httpCall(active.base, path, active.authHeader(), "POST")
                     } catch (e: Exception) {
                         Log.e(TAG, "Aktion fehlgeschlagen: $path", e)
                         "Nicht erreichbar: ${e.message ?: "Fehler"}"
@@ -484,7 +426,7 @@ fun MainApp(
 
     fun doWake() {
         if (busy) return
-        if (settings.mac.isBlank()) {
+        if (active.mac.isBlank()) {
             message = "MAC-Adresse fehlt - bitte in den Einstellungen eintragen"
             return
         }
@@ -493,9 +435,9 @@ fun MainApp(
             try {
                 message = "Sende Wake ..."
                 val ok = withContext(Dispatchers.IO) {
-                    sendMagicPacket(settings.mac, settings.broadcast)
+                    sendMagicPacket(active.mac, active.broadcast)
                 }
-                Log.d(TAG, "WoL an ${settings.mac} via ${settings.broadcast} -> $ok")
+                Log.d(TAG, "WoL an ${active.mac} via ${active.broadcast} -> $ok")
                 message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
             } finally {
                 busy = false
@@ -510,7 +452,7 @@ fun MainApp(
             try {
                 val text = withContext(Dispatchers.IO) {
                     try {
-                        httpCall(settings.base, "/log?lines=200", settings.authHeader())
+                        httpCall(active.base, "/log?lines=200", active.authHeader())
                     } catch (e: Exception) {
                         "Nicht erreichbar: ${e.message ?: "Fehler"}"
                     }
@@ -530,7 +472,7 @@ fun MainApp(
             try {
                 val result = withContext(Dispatchers.IO) {
                     try {
-                        val body = httpCall(settings.base, "/status", settings.authHeader())
+                        val body = httpCall(active.base, "/status", active.authHeader())
                         if (body.startsWith("HTTP ")) body else "Verbindung OK"
                     } catch (e: Exception) {
                         "Nicht erreichbar: ${e.message ?: "Fehler"}"
@@ -543,26 +485,33 @@ fun MainApp(
         }
     }
 
-    LaunchedEffect(settings, refresh) {
+    fun switchProfile(id: String) {
+        if (id == active.id) return
+        onProfilesChange(profiles, id)
+    }
+
+    fun addProfile() {
+        val p = Profile(id = ProfileStore.newId(), name = "Neuer PC")
+        onProfilesChange(profiles + p, p.id)
+    }
+
+    fun deleteProfile(id: String) {
+        val newList = profiles.filter { it.id != id }
+        if (newList.isEmpty()) return
+        val newActive = if (active.id == id) newList.first().id else active.id
+        onProfilesChange(newList, newActive)
+    }
+
+    fun saveProfile(updated: Profile) {
+        val newList = profiles.map { if (it.id == updated.id) updated else it }
+        onProfilesChange(newList, updated.id)
+    }
+
+    LaunchedEffect(active, refresh) {
         while (true) {
             val next = withContext(Dispatchers.IO) {
                 try {
-                    val body = httpCall(settings.base, "/status", settings.authHeader())
-                    if (body.startsWith("HTTP ")) {
-                        val hint = when {
-                            body.startsWith("HTTP 401") -> "Login fehlt oder falsch"
-                            body.startsWith("HTTP 403") -> "Zugriff verweigert"
-                            else -> body
-                        }
-                        AgentState(hint, PcStatus.ERROR, "?", 0)
-                    } else {
-                        val json = JSONObject(body)
-                        val plan = json.optString("power_plan", "?")
-                        val pending = json.optInt("pending_shutdown", 0)
-                        val simulate = json.optBoolean("simulate", true)
-                        val text = "Online · ${planLabel(plan)}"
-                        AgentState(text, PcStatus.ONLINE, plan, pending, simulate)
-                    }
+                    parseStatus(httpCall(active.base, "/status", active.authHeader()))
                 } catch (e: Exception) {
                     Log.e(TAG, "Status-Abfrage fehlgeschlagen", e)
                     AgentState("Nicht erreichbar: ${e.message ?: "Fehler"}", PcStatus.OFFLINE, "?", 0)
@@ -570,8 +519,8 @@ fun MainApp(
             }
             state = next
             val widgetText = when (next.status) {
-                PcStatus.ONLINE -> "PC an · ${planLabel(next.plan)}"
-                PcStatus.OFFLINE -> "PC aus"
+                PcStatus.ONLINE -> "${active.name} an · ${planLabel(next.plan)}"
+                PcStatus.OFFLINE -> "${active.name} aus"
                 PcStatus.ERROR -> "Login prüfen"
                 PcStatus.UNKNOWN -> "Bereit"
             }
@@ -611,8 +560,11 @@ fun MainApp(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
                 0 -> ControlTab(
+                    profiles = profiles,
+                    active = active,
                     state = state,
                     busy = busy,
+                    onSwitchProfile = ::switchProfile,
                     onShutdown = { showShutdownConfirm = true },
                     onTimer = {
                         timerHours = ""
@@ -634,9 +586,14 @@ fun MainApp(
                     },
                 )
                 else -> SettingsTab(
-                    settings = settings,
+                    profiles = profiles,
+                    active = active,
                     simulate = state.simulate,
                     busy = busy,
+                    onSwitch = ::switchProfile,
+                    onAdd = ::addProfile,
+                    onDelete = ::deleteProfile,
+                    onSave = ::saveProfile,
                     onTestConnection = ::testConnection,
                     onModeChange = { real ->
                         if (real) {
@@ -646,23 +603,22 @@ fun MainApp(
                             runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
                         }
                     },
-                    onSave = onSave,
                 )
             }
         }
     }
 
     if (showShutdownConfirm) {
-        val delay = settings.defaultDelay
+        val delay = active.defaultDelay
         AlertDialog(
             onDismissRequest = { showShutdownConfirm = false },
             title = { Text("PC herunterfahren?") },
             text = {
                 Text(
                     (if (delay == 0) {
-                        "Der PC ${settings.host} fährt sofort herunter."
+                        "Der PC ${active.name} fährt sofort herunter."
                     } else {
-                        "Der PC ${settings.host} fährt in $delay Sekunden herunter."
+                        "Der PC ${active.name} fährt in $delay Sekunden herunter."
                     }) + "\n\nAbbrechen ist danach im Steuerungs-Tab möglich."
                 )
             },
@@ -803,8 +759,11 @@ fun MainApp(
 
 @Composable
 private fun ControlTab(
+    profiles: List<Profile>,
+    active: Profile,
     state: AgentState,
     busy: Boolean,
+    onSwitchProfile: (String) -> Unit,
     onShutdown: () -> Unit,
     onTimer: () -> Unit,
     onWake: () -> Unit,
@@ -827,6 +786,23 @@ private fun ControlTab(
             color = MaterialTheme.colorScheme.onBackground
         )
 
+        if (profiles.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                profiles.forEach { p ->
+                    FilterChip(
+                        selected = p.id == active.id,
+                        onClick = { onSwitchProfile(p.id) },
+                        label = { Text(p.name) }
+                    )
+                }
+            }
+        }
+
         if (busy) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
@@ -843,7 +819,7 @@ private fun ControlTab(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    text = "Status",
+                    text = "Status · ${active.name}",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -1057,20 +1033,25 @@ private fun PlanTab(
 
 @Composable
 private fun SettingsTab(
-    settings: Settings,
+    profiles: List<Profile>,
+    active: Profile,
     simulate: Boolean?,
     busy: Boolean,
+    onSwitch: (String) -> Unit,
+    onAdd: () -> Unit,
+    onDelete: (String) -> Unit,
+    onSave: (Profile) -> Unit,
     onTestConnection: () -> Unit,
     onModeChange: (Boolean) -> Unit,
-    onSave: (Settings) -> Unit,
 ) {
-    var host by remember(settings) { mutableStateOf(settings.host) }
-    var port by remember(settings) { mutableStateOf(settings.port) }
-    var user by remember(settings) { mutableStateOf(settings.user) }
-    var pass by remember(settings) { mutableStateOf(settings.pass) }
-    var mac by remember(settings) { mutableStateOf(settings.mac) }
-    var broadcast by remember(settings) { mutableStateOf(settings.broadcast) }
-    var defaultDelay by remember(settings) { mutableStateOf(settings.defaultDelay) }
+    var name by remember(active) { mutableStateOf(active.name) }
+    var host by remember(active) { mutableStateOf(active.host) }
+    var port by remember(active) { mutableStateOf(active.port) }
+    var user by remember(active) { mutableStateOf(active.user) }
+    var pass by remember(active) { mutableStateOf(active.pass) }
+    var mac by remember(active) { mutableStateOf(active.mac) }
+    var broadcast by remember(active) { mutableStateOf(active.broadcast) }
+    var defaultDelay by remember(active) { mutableStateOf(active.defaultDelay) }
     var showPass by remember { mutableStateOf(false) }
     var macError by remember { mutableStateOf<String?>(null) }
     var saved by remember { mutableStateOf(false) }
@@ -1089,12 +1070,86 @@ private fun SettingsTab(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
         )
+
         Text(
-            text = "Verbindung und Zugangsdaten",
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.outline
+            text = "PC-Profile",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
         )
 
+        profiles.forEach { p ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (p.id == active.id) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    }
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = p.name + if (p.id == active.id) " (aktiv)" else "",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (p.isComplete) "${p.host}:${p.port}" else "noch nicht eingerichtet",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    if (p.id != active.id) {
+                        TextButton(onClick = { onSwitch(p.id) }) { Text("Aktivieren") }
+                    }
+                    if (profiles.size > 1) {
+                        IconButton(onClick = { onDelete(p.id) }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Profil löschen",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        OutlinedButton(
+            onClick = onAdd,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Neuen PC hinzufügen")
+        }
+
+        HorizontalDivider()
+
+        Text(
+            text = "Profil bearbeiten: ${active.name}",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it; saved = false },
+            label = { Text("Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
         OutlinedTextField(
             value = host,
             onValueChange = { host = it; saved = false },
@@ -1198,7 +1253,8 @@ private fun SettingsTab(
                 } else {
                     macError = null
                     onSave(
-                        Settings(
+                        active.copy(
+                            name = name.trim().ifBlank { "PC" },
                             host = host.trim(),
                             port = port.trim(),
                             user = user.trim(),

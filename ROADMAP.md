@@ -24,14 +24,16 @@
 - [x] Log-Dialog aktualisierbar + Text auswählbar
 - [x] Eingabevalidierung (Port/MAC/Passwort) + Passwort-Sichtbarkeit
 - [x] Widget-Status wird von der App aktualisiert
+- [x] Mehrere PCs (Profile): verwalten, umschalten, hinzufügen, löschen
+- [x] App-Icon (adaptiv, Power-Symbol auf Teal/Navy-Verlauf)
+- [x] Unit-Tests: Magic-Packet, MAC-Parsing, Status-Auswertung, Dauer
 
 ## Geplant
 
-- [ ] App-Icon und finales Design
-- [ ] Automatisierte Tests (Agent + Magic-Packet)
+- [ ] Finales Design (Feinschliff)
+- [ ] Automatisierte Tests für den FastAPI-Agent
 - [ ] CI über GitHub Actions
 - [ ] Screenshots fürs README
 - [ ] App-Shortcuts (Long-Press aufs Icon)
 - [ ] Zeitplan (z. B. täglich 23:00 herunterfahren)
 - [ ] Home-Assistant-/Tasker-Integration
-- [ ] Mehrere PCs (Profile)

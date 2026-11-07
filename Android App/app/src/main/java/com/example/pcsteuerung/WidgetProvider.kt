@@ -83,9 +83,9 @@ class WidgetProvider : AppWidgetProvider() {
     }
 
     private fun handleWake(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val mac = prefs.getString(KEY_MAC, "").orEmpty().trim()
-        val broadcast = prefs.getString(KEY_BROADCAST, DEFAULT_BROADCAST).orEmpty()
+        val active = ProfileStore.active(context)
+        val mac = active?.mac?.trim().orEmpty()
+        val broadcast = active?.broadcast?.ifBlank { DEFAULT_BROADCAST } ?: DEFAULT_BROADCAST
 
         if (mac.isBlank()) {
             showStatus(context, context.getString(R.string.widget_status_no_mac))
@@ -121,9 +121,6 @@ class WidgetProvider : AppWidgetProvider() {
         }
 
         private const val ACTION_WAKE = "com.example.pcsteuerung.action.WIDGET_WAKE"
-        private const val PREFS_NAME = "settings"
-        private const val KEY_MAC = "mac"
-        private const val KEY_BROADCAST = "broadcast"
         private const val DEFAULT_BROADCAST = "255.255.255.255"
     }
 }

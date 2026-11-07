@@ -6,3 +6,7 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Signatur (nicht committen!)
+app/release.keystore
+app/keystore.properties

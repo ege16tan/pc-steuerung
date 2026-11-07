@@ -1,0 +1,110 @@
+package com.example.pcsteuerung
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CoreTest {
+
+    @Test
+    fun macValid_acceptsColonFormat() {
+        assertTrue(isValidMac("AA:BB:CC:DD:EE:FF"))
+        assertTrue(isValidMac("aa:bb:cc:dd:ee:ff"))
+    }
+
+    @Test
+    fun macValid_acceptsDashFormat() {
+        assertTrue(isValidMac("AA-BB-CC-DD-EE-FF"))
+    }
+
+    @Test
+    fun macValid_acceptsBlank() {
+        assertTrue(isValidMac(""))
+        assertTrue(isValidMac("   "))
+    }
+
+    @Test
+    fun macValid_rejectsBadFormats() {
+        assertFalse(isValidMac("AA:BB:CC:DD:EE"))
+        assertFalse(isValidMac("AA:BB:CC:DD:EE:FF:11"))
+        assertFalse(isValidMac("GG:BB:CC:DD:EE:FF"))
+        assertFalse(isValidMac("hello"))
+    }
+
+    @Test
+    fun duration_formatsSeconds() {
+        assertEquals("0 s", fmtDuration(0))
+        assertEquals("59 s", fmtDuration(59))
+    }
+
+    @Test
+    fun duration_formatsMinutes() {
+        assertEquals("1 min", fmtDuration(60))
+        assertEquals("59 min", fmtDuration(3599))
+    }
+
+    @Test
+    fun duration_formatsHours() {
+        assertEquals("1 h 0 min", fmtDuration(3600))
+        assertEquals("2 h 30 min", fmtDuration(9000))
+    }
+
+    @Test
+    fun duration_clampsNegativeToZero() {
+        assertEquals("0 s", fmtDuration(-5))
+    }
+
+    @Test
+    fun planLabel_mapsKnownPlans() {
+        assertEquals("Höchstleistung", planLabel("high"))
+        assertEquals("Ausbalanciert", planLabel("balanced"))
+        assertEquals("Energiesparen", planLabel("saver"))
+        assertEquals("Anderer Plan", planLabel("anderer"))
+        assertEquals("Unbekannt", planLabel("unbekannt"))
+        assertEquals("Unbekannt", planLabel("?"))
+    }
+
+    @Test
+    fun planLabel_passesThroughUnknown() {
+        assertEquals("custom", planLabel("custom"))
+    }
+
+    @Test
+    fun status_parsesOnlineJson() {
+        val state = parseStatus("""{"power_plan":"balanced","pending_shutdown":120,"simulate":true}""")
+        assertEquals(PcStatus.ONLINE, state.status)
+        assertEquals("balanced", state.plan)
+        assertEquals(120, state.pending)
+        assertEquals(true, state.simulate)
+        assertEquals("Online · Ausbalanciert", state.text)
+    }
+
+    @Test
+    fun status_mapsUnauthorized() {
+        val state = parseStatus("HTTP 401: wrong")
+        assertEquals(PcStatus.ERROR, state.status)
+        assertEquals("Login fehlt oder falsch", state.text)
+    }
+
+    @Test
+    fun status_mapsForbidden() {
+        val state = parseStatus("HTTP 403: denied")
+        assertEquals(PcStatus.ERROR, state.status)
+        assertEquals("Zugriff verweigert", state.text)
+    }
+
+    @Test
+    fun status_mapsOtherHttpError() {
+        val state = parseStatus("HTTP 500: kaputt")
+        assertEquals(PcStatus.ERROR, state.status)
+        assertEquals("HTTP 500: kaputt", state.text)
+    }
+
+    @Test
+    fun status_handlesMalformedJson() {
+        val state = parseStatus("kein json")
+        assertEquals(PcStatus.ERROR, state.status)
+        assertEquals("Antwort unlesbar", state.text)
+    }
+}
