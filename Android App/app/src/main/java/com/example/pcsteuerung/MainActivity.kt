@@ -146,18 +146,18 @@ private fun StatusDot(color: Color, pulsing: Boolean) {
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = LinearOutSlowInEasing),
+            animation = tween(1400, easing = LinearOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "statusHaloAlpha"
     )
-    Box(modifier = Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
         if (pulsing) {
             Box(
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(20.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(color.copy(alpha = 0.34f * halo))
+                    .background(color.copy(alpha = 0.26f * halo))
             )
         }
         Box(
@@ -684,6 +684,21 @@ fun MainApp(
                     )
                 }
             }
+
+            // Duenner Fortschrittsbalken am oberen Rand: liegt ueber dem Inhalt,
+            // verschiebt also nichts und stiehlt keinen Platz (statt dem alten
+            // breiten Balken, der die ganze Seite nach unten geschoben hat).
+            AnimatedVisibility(
+                visible = busy,
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(260)),
+                modifier = Modifier.align(Alignment.TopCenter)
+            ) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    trackColor = Color.Transparent
+                )
+            }
         }
     }
 
@@ -880,10 +895,6 @@ private fun ControlTab(
                     )
                 }
             }
-        }
-
-        if (busy) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
         ElevatedCard(
@@ -1104,10 +1115,6 @@ private fun PlanTab(
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.outline
         )
-
-        if (busy) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
 
         plans.forEach { (key, label, description) ->
             val active = key == activePlan

@@ -28,6 +28,7 @@
 - [x] App-Icon (adaptiv, Power-Symbol auf Teal/Navy-Verlauf)
 - [x] Unit-Tests: Magic-Packet, MAC-Parsing, Status-Auswertung, Dauer
 - [x] Animationen: Statuspuls, weiche Übergänge, Kaskaden-Einblendung, plan- und Kartenfarben
+- [x] Fortschrittsbalken als Overlay am oberen Rand (kein Layout-Verschieben mehr), dezenter Statuspuls
 
 ## Geplant
 
