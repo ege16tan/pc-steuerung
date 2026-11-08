@@ -1,0 +1,8 @@
+[package]
+name = "windows-link"
+version = "0.2.1"
+edition = "2021"
+description = "Lokaler Patch: klassische #[link]-Bibliotheken anstatt raw-dylib (fuer die Windows-GNU-Toolchain, die kein dlltool mitbringt)"
+publish = false
+
+[dependencies]

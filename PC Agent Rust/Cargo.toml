@@ -1,0 +1,22 @@
+[package]
+name = "pc-agent"
+version = "0.1.0"
+edition = "2021"
+description = "PC-Agent: schaltet einen Windows-PC im Heimnetz (Rust-Version des FastAPI-Agenten)"
+publish = false
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+base64 = "0.22"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2"
+getrandom = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[patch.crates-io]
+windows-link = { path = "patches/windows-link" }

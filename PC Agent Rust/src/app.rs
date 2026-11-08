@@ -1,0 +1,133 @@
+//! Zentraler Zustand des Agenten.
+//!
+//! Gleich wie der Python-Agent: Die Zugangsdaten liegen neben der EXE in
+//! `credentials.json`, das Ereignis-Log ist ein Ringpuffer (neueste zuerst)
+//! und ein geplantes Herunterfahren wird als Zeitpunkt (Unix-Epoche) gespeichert.
+
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+
+/// Kappungsgrenze = 50 Ereignisse (wie Deque(maxlen=50) im Python-Agent).
+pub const EVENT_MAX: usize = 50;
+
+/// Zugangsdaten aus `credentials.json` (Passwort nur als PBKDF2-Hash).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Credentials {
+    pub user: String,
+    pub salt: String,
+    pub hash: String,
+}
+
+impl Credentials {
+    /// Wie der Python-Agent: user, salt und hash muessen vorhanden sein.
+    pub fn is_usable(&self) -> bool {
+        !self.user.is_empty() && !self.salt.is_empty() && !self.hash.is_empty()
+    }
+}
+
+/// Ereignis fuer `/events` — Feldnamen identisch zum Python-Agent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Event {
+    pub time: String,
+    pub action: String,
+    pub detail: String,
+    pub ok: bool,
+}
+
+/// Veraenderbarer Zustand; alles ueber den Mutex geschuetzt.
+pub struct InnerApp {
+    pub simulate: bool,
+    pub sim_plan: Option<String>,
+    pub pending_at: Option<f64>,
+    pub pending_seconds: i64,
+    pub events: VecDeque<Event>,
+    pub credentials: Option<Credentials>,
+}
+
+/// Gesamter Agenten-Zustand (wird per Arc geteilt).
+pub struct App {
+    pub inner: Mutex<InnerApp>,
+    /// Env `PC_AGENT_TOKEN` beim Start (feste Quelle, wie im Python-Agent).
+    pub token: String,
+    /// Logdatei neben der EXE (wie `Path(__file__).with_name(...)`).
+    pub log_file: PathBuf,
+    /// Zugangsdatei neben der EXE.
+    pub creds_file: PathBuf,
+}
+
+impl App {
+    pub fn new(token: String, simulate: bool, base_dir: &Path) -> App {
+        let creds_file = base_dir.join("credentials.json");
+        let log_file = base_dir.join("agent.log");
+        let credentials = load_credentials(&creds_file);
+        App {
+            inner: Mutex::new(InnerApp {
+                simulate,
+                sim_plan: None,
+                pending_at: None,
+                pending_seconds: 0,
+                events: VecDeque::new(),
+                credentials,
+            }),
+            token,
+            log_file,
+            creds_file,
+        }
+    }
+}
+
+/// Laedt `credentials.json`; None bei Lesefehler/leeren Feldern (Paritaet).
+pub fn load_credentials(path: &Path) -> Option<Credentials> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let data: Credentials = serde_json::from_str(&text).ok()?;
+    if data.is_usable() {
+        Some(data)
+    } else {
+        None
+    }
+}
+
+/// Restsekunden eines geplanten Herunterfahrens (reine Funktion fuer Tests).
+/// Python: max(0, round(at - time.time()).
+pub fn remaining_seconds(pending_at: Option<f64>, now: f64) -> i64 {
+    match pending_at {
+        None => 0,
+        Some(at) => ((at - now).max(0.0)).round() as i64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usable_nur_mit_vollstaendigen_feldern() {
+        let usable = Credentials {
+            user: "u".into(),
+            salt: "00".into(),
+            hash: "11".into(),
+        };
+        assert!(usable.is_usable());
+
+        let broken = Credentials {
+            user: "".into(),
+            salt: "00".into(),
+            hash: "11".into(),
+        };
+        assert!(!broken.is_usable());
+    }
+
+    #[test]
+    fn remaining_seconds_berechnet_verbleibende_zeit() {
+        // 120 s geplant, 30 s vergangen -> 90 s
+        let now = 1_000_000.0;
+        assert_eq!(remaining_seconds(Some(now + 90.0), now), 90);
+        // Abgelaufen -> 0
+        assert_eq!(remaining_seconds(Some(now - 5.0), now), 0);
+        // Es ist nichts geplant -> 0
+        assert_eq!(remaining_seconds(None, now), 0);
+    }
+}

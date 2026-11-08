@@ -1,0 +1,10 @@
+# Build-Artefakte nie committen
+target/
+pc-agent.exe
+
+# Agent schreibt neben der EXE (wie der Python-Agent neben main.py)
+agent.log
+agent.log.1
+credentials.json
+
+__pycache__/
