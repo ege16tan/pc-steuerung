@@ -36,6 +36,7 @@
 - [x] In-App-Updater über GitHub Releases mit Android-Systemdialog oder optionaler Shizuku-Installation
 - [x] PC-Agent in Rust (1:1 zum Python-Agent, einzelne EXE)
 - [x] Python und Rust bleiben verfügbar; Rust ist Standard, Versionswechsel über gemeinsame Web-UI und Tray-Verwaltung
+- [x] Android-Einstellungen als gruppierte Kartenübersicht mit Detailseiten für PC-Profile, Darstellung, Updates und App-Info
 
 ## Geplant
 

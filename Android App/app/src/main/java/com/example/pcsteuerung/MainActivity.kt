@@ -27,7 +27,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -37,9 +39,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
@@ -1699,6 +1703,18 @@ private fun ProfileCard(
     }
 }
 
+private enum class SettingsDestination(
+    val title: String,
+    val subtitle: String,
+) {
+    PROFILE("PC-Profile", "Verbindung und Geräte verwalten"),
+    APPEARANCE("Darstellung", "Farbschema und Aktualisierung"),
+    UPDATES("Aktualisierungen", "Neue App-Versionen laden"),
+    ABOUT("Über die App", "Version und weitere Informationen"),
+}
+
+private val SettingsAccent = Color(0xFFB39DDB)
+
 @Composable
 private fun SettingsTab(
     profiles: List<Profile>,
@@ -1716,6 +1732,8 @@ private fun SettingsTab(
     onTestConnection: () -> Unit,
     onModeChange: (Boolean) -> Unit,
 ) {
+    var destination by remember { mutableStateOf<SettingsDestination?>(null) }
+
     var name by remember(active) { mutableStateOf(active.name) }
     var host by remember(active) { mutableStateOf(active.host) }
     var port by remember(active) { mutableStateOf(active.port) }
@@ -1729,300 +1747,645 @@ private fun SettingsTab(
     var saved by remember { mutableStateOf(false) }
     val valid = host.isNotBlank() && isValidPort(port)
 
+    BackHandler(enabled = destination != null) { destination = null }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        val page = destination
+        if (page == null) {
+            SettingsOverview(
+                active = active,
+                simulate = simulate,
+                busy = busy,
+                settings = settings,
+                versionName = versionName,
+                onOpenPage = { destination = it },
+                onOpenWeb = onOpenWeb,
+                onTestConnection = onTestConnection,
+                onModeChange = onModeChange,
+            )
+        } else {
+            SettingsPageHeader(
+                title = page.title,
+                subtitle = page.subtitle,
+                onBack = { destination = null },
+            )
+
+            when (page) {
+                SettingsDestination.PROFILE -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Text(
+                            text = "Gespeicherte PCs",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        profiles.forEachIndexed { index, profile ->
+                            ProfileCard(
+                                profile = profile,
+                                isActive = profile.id == active.id,
+                                index = index,
+                                deletable = profiles.size > 1,
+                                onSwitch = { onSwitch(profile.id) },
+                                onDelete = { onDelete(profile.id) },
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = onAdd,
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            shape = RoundedCornerShape(16.dp),
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("PC hinzufügen")
+                        }
+
+                        SettingsDetailCard {
+                            Text(
+                                text = "Profil bearbeiten: " + active.name,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = { name = it; saved = false },
+                                label = { Text("Name") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = host,
+                                onValueChange = { host = it; saved = false },
+                                label = { Text("IP des PCs") },
+                                placeholder = { Text("192.168.1.100") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = port,
+                                onValueChange = { port = it; saved = false },
+                                label = { Text("Port") },
+                                singleLine = true,
+                                isError = !isValidPort(port),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = user,
+                                onValueChange = { user = it; saved = false },
+                                label = { Text("Benutzername") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = pass,
+                                onValueChange = { pass = it; saved = false },
+                                label = { Text("Passwort") },
+                                singleLine = true,
+                                visualTransformation = if (showPass) {
+                                    VisualTransformation.None
+                                } else {
+                                    PasswordVisualTransformation()
+                                },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                trailingIcon = {
+                                    TextButton(onClick = { showPass = !showPass }) {
+                                        Text(if (showPass) "Verbergen" else "Anzeigen", fontSize = 12.sp)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = mac,
+                                onValueChange = { mac = it; macError = null; saved = false },
+                                label = { Text("MAC-Adresse (für WoL)") },
+                                placeholder = { Text("AA:BB:CC:DD:EE:FF") },
+                                singleLine = true,
+                                isError = macError != null,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            macError?.let {
+                                Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            }
+                            OutlinedTextField(
+                                value = broadcast,
+                                onValueChange = { broadcast = it; saved = false },
+                                label = { Text("Broadcast-Adresse (WoL)") },
+                                placeholder = { Text("255.255.255.255") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Standard-Timer beim Herunterfahren",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            DelayChips(
+                                selected = defaultDelay,
+                                onSelect = { defaultDelay = it; saved = false },
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                if (!isValidMac(mac)) {
+                                    macError = "Format: AA:BB:CC:DD:EE:FF"
+                                } else {
+                                    macError = null
+                                    onSave(
+                                        active.copy(
+                                            name = name.trim().ifBlank { "PC" },
+                                            host = host.trim(),
+                                            port = port.trim(),
+                                            user = user.trim(),
+                                            pass = pass,
+                                            mac = mac.trim(),
+                                            broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
+                                            defaultDelay = defaultDelay,
+                                        ),
+                                    )
+                                    saved = true
+                                }
+                            },
+                            enabled = valid,
+                            modifier = Modifier.fillMaxWidth().height(54.dp),
+                            shape = RoundedCornerShape(16.dp),
+                        ) {
+                            Text("Änderungen speichern", fontSize = 16.sp)
+                        }
+                        if (saved) {
+                            Text(
+                                text = "Profil gespeichert.",
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = onTestConnection,
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            shape = RoundedCornerShape(16.dp),
+                        ) {
+                            if (busy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                            Text("Verbindung testen", fontSize = 15.sp)
+                        }
+                        Text(
+                            text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                }
+
+                SettingsDestination.APPEARANCE -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        SettingsDetailCard {
+                            Text("Farbschema", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Wähle, ob PC Steuerung dem System folgt oder immer hell bzw. dunkel bleibt.",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ThemeMode.entries.forEach { mode ->
+                                    FilterChip(
+                                        selected = settings.themeMode == mode,
+                                        onClick = { onSettingsChange(settings.copy(themeMode = mode)) },
+                                        label = { Text(themeModeLabel(mode)) },
+                                    )
+                                }
+                            }
+                        }
+
+                        SettingsDetailCard {
+                            Text(
+                                "Status-Aktualisierung",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                "Wie oft die App den PC-Status abfragt. Ein größeres Intervall spart Akku und Daten.",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                AppSettingsStore.REFRESH_CHOICES.forEach { seconds ->
+                                    FilterChip(
+                                        selected = settings.refreshSeconds == seconds,
+                                        onClick = {
+                                            onSettingsChange(settings.copy(refreshSeconds = seconds))
+                                        },
+                                        label = { Text("$seconds s") },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SettingsDestination.UPDATES -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                    ) {
+                        SettingsDetailCard {
+                            AppUpdaterPanel(
+                                versionName = versionName,
+                                settings = settings,
+                                onSettingsChange = onSettingsChange,
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                }
+
+                SettingsDestination.ABOUT -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        SettingsDetailCard {
+                            Text("PC Steuerung", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Version " + versionName,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                "Die App prüft Aktualisierungen über GitHub Releases.",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        SettingsDetailCard {
+                            SettingsOverviewRow(
+                                icon = Icons.Default.Home,
+                                title = "PC-Weboberfläche",
+                                subtitle = active.base,
+                                onClick = onOpenWeb,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsOverview(
+    active: Profile,
+    simulate: Boolean?,
+    busy: Boolean,
+    settings: AppSettings,
+    versionName: String,
+    onOpenPage: (SettingsDestination) -> Unit,
+    onOpenWeb: () -> Unit,
+    onTestConnection: () -> Unit,
+    onModeChange: (Boolean) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(horizontal = 20.dp)
+            .padding(top = 20.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
             text = "Einstellungen",
             fontSize = 30.sp,
+            lineHeight = 36.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onBackground,
         )
-
         Text(
-            text = "PC-Profile",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
+            text = "PC Steuerung anpassen",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        profiles.forEachIndexed { index, p ->
-            ProfileCard(
-                profile = p,
-                isActive = p.id == active.id,
-                index = index,
-                deletable = profiles.size > 1,
-                onSwitch = { onSwitch(p.id) },
-                onDelete = { onDelete(p.id) }
+        SettingsSectionLabel("VERBINDUNG")
+        SettingsGroup {
+            SettingsOverviewRow(
+                icon = Icons.Default.Settings,
+                title = "PC-Profile",
+                subtitle = if (active.isComplete) {
+                    active.name + "  ·  " + active.host + ":" + active.port
+                } else {
+                    active.name + "  ·  Noch nicht eingerichtet"
+                },
+                onClick = { onOpenPage(SettingsDestination.PROFILE) },
             )
-        }
-
-        OutlinedButton(
-            onClick = onAdd,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Neuen PC hinzufügen")
-        }
-
-        HorizontalDivider()
-
-        Text(
-            text = "Profil bearbeiten: ${active.name}",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it; saved = false },
-            label = { Text("Name") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = host,
-            onValueChange = { host = it; saved = false },
-            label = { Text("IP des PCs") },
-            placeholder = { Text("192.168.1.100") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = port,
-            onValueChange = { port = it; saved = false },
-            label = { Text("Port") },
-            singleLine = true,
-            isError = !isValidPort(port),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = user,
-            onValueChange = { user = it; saved = false },
-            label = { Text("Benutzername") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = pass,
-            onValueChange = { pass = it; saved = false },
-            label = { Text("Passwort") },
-            singleLine = true,
-            visualTransformation = if (showPass) {
-                VisualTransformation.None
-            } else {
-                PasswordVisualTransformation()
-            },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = {
-                TextButton(onClick = { showPass = !showPass }) {
-                    Text(if (showPass) "Verbergen" else "Anzeigen", fontSize = 12.sp)
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = mac,
-            onValueChange = { mac = it; macError = null; saved = false },
-            label = { Text("MAC-Adresse (für WoL)") },
-            placeholder = { Text("AA:BB:CC:DD:EE:FF") },
-            singleLine = true,
-            isError = macError != null,
-            modifier = Modifier.fillMaxWidth()
-        )
-        macError?.let {
-            Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-        }
-        OutlinedTextField(
-            value = broadcast,
-            onValueChange = { broadcast = it; saved = false },
-            label = { Text("Broadcast-Adresse (WoL)") },
-            placeholder = { Text("255.255.255.255") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Text(
-            text = "Standard-Timer beim Herunterfahren",
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
-        DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it; saved = false })
-
-        HorizontalDivider()
-
-        Text(
-            text = "Darstellung",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ThemeMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = settings.themeMode == mode,
-                    onClick = { onSettingsChange(settings.copy(themeMode = mode)) },
-                    label = {
-                        Text(
-                            when (mode) {
-                                ThemeMode.SYSTEM -> "System"
-                                ThemeMode.LIGHT -> "Hell"
-                                ThemeMode.DARK -> "Dunkel"
-                            }
+            SettingsGroupDivider()
+            SettingsOverviewRow(
+                icon = Icons.Default.Refresh,
+                title = "Verbindung testen",
+                subtitle = "Erreichbarkeit des aktiven PCs prüfen",
+                enabled = !busy,
+                onClick = onTestConnection,
+                trailing = if (busy) {
+                    {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
                         )
                     }
-                )
-            }
+                } else {
+                    null
+                },
+            )
         }
 
-        Text(
-            text = "Status-Aktualisierung",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AppSettingsStore.REFRESH_CHOICES.forEach { seconds ->
-                FilterChip(
-                    selected = settings.refreshSeconds == seconds,
-                    onClick = { onSettingsChange(settings.copy(refreshSeconds = seconds)) },
-                    label = { Text("$seconds s") }
-                )
-            }
+        SettingsSectionLabel("APP-OPTIONEN")
+        SettingsGroup {
+            SettingsOverviewRow(
+                icon = Icons.Default.Star,
+                title = "Darstellung",
+                subtitle = themeModeLabel(settings.themeMode),
+                onClick = { onOpenPage(SettingsDestination.APPEARANCE) },
+            )
+            SettingsGroupDivider()
+            SettingsOverviewRow(
+                icon = Icons.Default.Refresh,
+                title = "Status-Aktualisierung",
+                subtitle = "Alle " + settings.refreshSeconds + " Sekunden",
+                onClick = { onOpenPage(SettingsDestination.APPEARANCE) },
+            )
         }
-        Text(
-            text = "Häufiger = aktueller; seltener spart Akku und Datenvolumen.",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
 
-        HorizontalDivider()
-
-        Text(
-            text = "Debug-Modus",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Echtzeitmodus", fontSize = 15.sp)
-                Text(
-                    text = when (simulate) {
-                        true -> "Simulation aktiv - Befehle werden nur geloggt."
-                        false -> "ECHT - Befehle werden wirklich ausgeführt."
-                        null -> "Modus unbekannt."
-                    },
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-            Switch(
+        SettingsSectionLabel("STEUERUNG")
+        SettingsGroup {
+            SettingsSwitchRow(
+                icon = Icons.Default.Settings,
+                title = "Echtzeitmodus",
+                subtitle = when (simulate) {
+                    true -> "Simulation aktiv – Befehle werden nur geloggt"
+                    false -> "ECHT – Befehle werden wirklich ausgeführt"
+                    null -> "Modus kann gerade nicht ermittelt werden"
+                },
                 checked = simulate == false,
                 enabled = simulate != null,
-                onCheckedChange = { real -> onModeChange(real) }
+                onCheckedChange = onModeChange,
+            )
+            SettingsGroupDivider()
+            SettingsOverviewRow(
+                icon = Icons.Default.Home,
+                title = "PC-Weboberfläche",
+                subtitle = active.base,
+                onClick = onOpenWeb,
             )
         }
 
-        Button(
-            onClick = {
-                if (!isValidMac(mac)) {
-                    macError = "Format: AA:BB:CC:DD:EE:FF"
-                } else {
-                    macError = null
-                    onSave(
-                        active.copy(
-                            name = name.trim().ifBlank { "PC" },
-                            host = host.trim(),
-                            port = port.trim(),
-                            user = user.trim(),
-                            pass = pass,
-                            mac = mac.trim(),
-                            broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
-                            defaultDelay = defaultDelay,
-                        )
-                    )
-                    saved = true
-                }
-            },
-            enabled = valid,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Text("Speichern", fontSize = 16.sp)
-        }
-        if (saved) {
-            Text(
-                text = "Gespeichert.",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.primary
+        SettingsSectionLabel("UPDATES")
+        SettingsGroup {
+            SettingsOverviewRow(
+                icon = Icons.Default.Refresh,
+                title = "Aktualisierungen",
+                subtitle = "GitHub Releases · PC Steuerung " + versionName,
+                onClick = { onOpenPage(SettingsDestination.UPDATES) },
             )
         }
 
-        OutlinedButton(
-            onClick = onTestConnection,
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            if (busy) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            Text("Verbindung testen", fontSize = 15.sp)
+        SettingsSectionLabel("WEITERE INFORMATIONEN")
+        SettingsGroup {
+            SettingsOverviewRow(
+                icon = Icons.Default.Info,
+                title = "Über die App",
+                subtitle = "Version " + versionName,
+                onClick = { onOpenPage(SettingsDestination.ABOUT) },
+            )
         }
-
-        Text(
-            text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
-
-        HorizontalDivider()
-
-        Text(
-            text = "Über die App",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Text(
-            text = "PC Steuerung $versionName",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            text = "Die App prüft Updates direkt bei GitHub Releases.",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
-        OutlinedButton(
-            onClick = onOpenWeb,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            Text("Web-Oberfläche im Browser öffnen", fontSize = 15.sp)
-        }
-
-        AppUpdaterPanel(
-            versionName = versionName,
-            settings = settings,
-            onSettingsChange = onSettingsChange,
-        )
-
     }
+}
+
+@Composable
+private fun SettingsPageHeader(
+    title: String,
+    subtitle: String,
+    onBack: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück")
+        }
+        Column(modifier = Modifier.padding(start = 8.dp)) {
+            Text(
+                text = title,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionLabel(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+        fontSize = 12.sp,
+        letterSpacing = 1.1.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+        ),
+    ) {
+        Column(content = content)
+    }
+}
+
+@Composable
+private fun SettingsDetailCard(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun SettingsOverviewRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(SettingsAccent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = SettingsAccent,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        if (trailing != null) {
+            trailing()
+        } else {
+            Text(
+                text = "›",
+                fontSize = 28.sp,
+                lineHeight = 28.sp,
+                color = SettingsAccent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsGroupDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f),
+    )
+}
+
+@Composable
+private fun SettingsSwitchRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(SettingsAccent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = SettingsAccent,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Switch(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onCheckedChange,
+        )
+    }
+}
+
+@Composable
+private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
+    ThemeMode.SYSTEM -> "System"
+    ThemeMode.LIGHT -> "Hell"
+    ThemeMode.DARK -> "Dunkel"
 }
