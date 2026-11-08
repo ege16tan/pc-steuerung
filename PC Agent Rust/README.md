@@ -54,9 +54,11 @@ Build-Ordner an. Das ist nur fuer `x86_64-pc-windows-gnu` aktiv.
 
 ## Starten
 
-- `start.bat` wählt Rust als bevorzugte Version. Der gemeinsame Manager baut
-  bei Bedarf die Release-EXE, kopiert sie als `pc-agent.exe` neben `start.bat`
-  und startet sie. Der Standardstart aus dem Projektstamm ist `start-agent.bat`;
+- `start.bat` wählt Rust als bevorzugte Version. Wenn Cargo verfügbar ist,
+  baut der gemeinsame Manager den aktuellen Quellstand (Cargo überspringt
+  unveränderte Builds), ersetzt danach sicher die EXE und startet sie. Ohne
+  Cargo nutzt er eine vorhandene `pc-agent.exe`. Der Standardstart aus dem
+  Projektstamm ist `start-agent.bat`;
   in der Web-UI oder im Tray kann zwischen Rust und Python gewechselt werden.
 - Bestehende Zugangsdaten werden beim ersten Start automatisch aus
   `PC App\credentials.json` uebernommen. Sonst einmalig Ersteinrichtung unter

@@ -14,6 +14,7 @@ $rustDir = Join-Path $projectRoot 'PC Agent Rust'
 $stateDir = Join-Path $env:LOCALAPPDATA 'PC Steuerung'
 $versionFile = Join-Path $stateDir 'agent-version.txt'
 $managerLog = Join-Path $stateDir 'agent-manager.log'
+$script:stagedRustExe = $null
 
 function Write-ManagerLog([string]$message) {
     if (-not (Test-Path -LiteralPath $stateDir)) {
@@ -116,32 +117,46 @@ function Prepare-Agent([string]$targetVersion) {
     }
 
     $exe = Join-Path $rustDir 'pc-agent.exe'
-    if (-not (Test-Path -LiteralPath $exe)) {
-        $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
-        if (-not (Test-Path -LiteralPath $cargo)) {
-            $cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
-            if ($cargoCommand) { $cargo = $cargoCommand.Source }
-        }
-        if (-not (Test-Path -LiteralPath $cargo)) {
-            throw 'Rust-Agent ist noch nicht gebaut und Cargo wurde nicht gefunden.'
-        }
+    $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+    if (-not (Test-Path -LiteralPath $cargo)) {
+        $cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
+        if ($cargoCommand) { $cargo = $cargoCommand.Source }
+    }
+    if (Test-Path -LiteralPath $cargo) {
         Write-ManagerLog 'Building Rust agent.'
         Push-Location $rustDir
         try {
             & $cargo build --release *>> $managerLog
             if ($LASTEXITCODE -ne 0) { throw "Rust-Build fehlgeschlagen (Exit-Code $LASTEXITCODE)." }
-            Copy-Item -LiteralPath (Join-Path $rustDir 'target\release\pc-agent.exe') -Destination $exe -Force
+            $script:stagedRustExe = Join-Path $rustDir 'target\release\pc-agent.exe'
+            if (-not (Test-Path -LiteralPath $script:stagedRustExe -PathType Leaf)) {
+                throw 'Rust-Build hat pc-agent.exe nicht erzeugt.'
+            }
         } finally {
             Pop-Location
         }
+    } elseif (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+        throw 'Rust-Agent ist noch nicht gebaut und Cargo wurde nicht gefunden.'
     }
     Sync-Credentials $rustDir
 }
 
 function Start-Agent([string]$targetVersion) {
     $running = Get-AgentProcess
+    $replaceRust = $false
+    $exe = Join-Path $rustDir 'pc-agent.exe'
+    if ($targetVersion -eq 'rust' -and $script:stagedRustExe) {
+        $replaceRust = -not (Test-Path -LiteralPath $exe -PathType Leaf)
+        if (-not $replaceRust) {
+            $deployedHash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+            $builtHash = (Get-FileHash -LiteralPath $script:stagedRustExe -Algorithm SHA256).Hash
+            $replaceRust = $deployedHash -ne $builtHash
+        }
+    }
     if ($running) {
-        if ($running.version -eq $targetVersion) { return "Agent ($targetVersion) laeuft bereits." }
+        if ($running.version -eq $targetVersion -and -not $replaceRust) {
+            return "Agent ($targetVersion) laeuft bereits."
+        }
         if ($running.version -eq 'unknown') { throw "Port $Port gehoert zu einem anderen Dienst." }
         Stop-Agent | Out-Null
     } elseif (Get-ListenerIds) {
@@ -152,7 +167,9 @@ function Start-Agent([string]$targetVersion) {
         $arguments = "-m uvicorn main:app --host 0.0.0.0 --port $Port --app-dir `"$pythonDir`""
         Start-Process -FilePath 'python' -ArgumentList $arguments -WorkingDirectory $pythonDir -WindowStyle Hidden | Out-Null
     } else {
-        $exe = Join-Path $rustDir 'pc-agent.exe'
+        if ($script:stagedRustExe -and $replaceRust) {
+            Copy-Item -LiteralPath $script:stagedRustExe -Destination $exe -Force
+        }
         $oldPort = $env:PC_AGENT_PORT
         $oldSimulation = $env:PC_AGENT_SIMULATE
         try {
@@ -192,13 +209,15 @@ switch ($Action) {
     'start' {
         $desired = if ($Version) { $Version } else { Get-PreferredVersion }
         Prepare-Agent $desired
+        $result = Start-Agent $desired
         Set-PreferredVersion $desired
-        Start-Agent $desired
+        $result
     }
     'switch' {
         if (-not $Version) { throw 'Version python oder rust fehlt.' }
         Prepare-Agent $Version
+        $result = Start-Agent $Version
         Set-PreferredVersion $Version
-        Start-Agent $Version
+        $result
     }
 }
