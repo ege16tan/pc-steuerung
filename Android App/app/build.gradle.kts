@@ -22,8 +22,8 @@ android {
         applicationId = "com.example.pcsteuerung"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.7.1"
+        versionCode = 10
+        versionName = "0.8.0"
     }
 
     signingConfigs {
@@ -53,6 +53,7 @@ android {
 
     buildFeatures {
         compose = true
+        aidl = true
     }
 
     compileOptions {
@@ -72,6 +73,9 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 
     // Lifecycle: Status-Polling nur im Vordergrund (repeatOnLifecycle).
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")

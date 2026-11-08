@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <shortcut
+        android:shortcutId="shutdown"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_shutdown"
+        android:shortcutShortLabel="@string/shortcut_shutdown_short"
+        android:shortcutLongLabel="@string/shortcut_shutdown_long">
+        <intent
+            android:action="com.example.pcsteuerung.action.SHORTCUT_SHUTDOWN"
+            android:targetClass="com.example.pcsteuerung.MainActivity"
+            android:targetPackage="com.example.pcsteuerung" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="wake"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_wake"
+        android:shortcutShortLabel="@string/shortcut_wake_short"
+        android:shortcutLongLabel="@string/shortcut_wake_long">
+        <intent
+            android:action="com.example.pcsteuerung.action.SHORTCUT_WAKE"
+            android:targetClass="com.example.pcsteuerung.MainActivity"
+            android:targetPackage="com.example.pcsteuerung" />
+    </shortcut>
+
+</shortcuts>

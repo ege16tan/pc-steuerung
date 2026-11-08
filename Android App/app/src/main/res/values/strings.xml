@@ -19,4 +19,10 @@
     <string name="widget_status_http_error">Fehler: HTTP %1$d</string>
     <string name="widget_status_unreachable">Nicht erreichbar: %1$s</string>
     <string name="widget_status_error">Fehler</string>
+
+    <!-- App-Shortcuts (langes Druecken auf das App-Symbol) -->
+    <string name="shortcut_shutdown_short">Herunterfahren</string>
+    <string name="shortcut_shutdown_long">PC herunterfahren (mit Bestätigung)</string>
+    <string name="shortcut_wake_short">Einschalten</string>
+    <string name="shortcut_wake_long">PC per Wake-on-LAN einschalten</string>
 </resources>

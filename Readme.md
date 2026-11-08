@@ -18,9 +18,12 @@
 | ❌ **Abbrechen** | Ein geplantes Herunterfahren stoppen |
 | 🌙 **Ruhezustand** | PC in den Hibernate-Modus schicken |
 | ⚡ **Energieplan** | Höchstleistung, Ausbalanciert oder Energiesparen |
-| 📊 **Status** | PC an/aus, aktiver Plan und Countdown (grün/gelb/grau) |
-| ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden |
+| 📊 **Status** | PC an/aus, aktiver Plan und Live-Countdown (grün/gelb/grau) |
+| ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden – oder eigene Zeit |
 | 🧩 **Homescreen-Widget** | Einschalten direkt, Herunterfahren mit Bestätigung in der App |
+| 🚀 **App-Shortcuts** | Einschalten/Herunterfahren per Long-Press aufs App-Symbol |
+| 🎨 **Darstellung** | Hell, Dunkel oder System – plus einstellbares Status-Intervall |
+| ⬆️ **App-Update** | Neue Version in den Einstellungen über GitHub Releases laden und per Android oder Shizuku installieren |
 | 🖥️ **Web-Oberfläche** | Status, Steuerung und Ereignis-Log im Browser |
 | 📝 **Verlauf** | Dauerhafte Logdatei mit Datum/Uhrzeit – einsehbar in App und Web |
 | 🐞 **Debug-Modus** | Simulation ↔ Echtzeit umschalten (für Tests) |
@@ -31,8 +34,8 @@
 
 ```
 ┌──────────────────┐        HTTP + Basic Auth        ┌──────────────────────┐
-│   Android-App    │ ──────────────────────────────► │  FastAPI-Agent (PC)  │
-│  (Kotlin/Compose)│                                 │  shutdown / powercfg │
+│   Android-App    │ ──────────────────────────────► │   PC-Agent           │
+│  (Kotlin/Compose)│                                 │  Python oder Rust    │
 └────────┬─────────┘                                 └──────────┬───────────┘
          │                                                      │
          │ Wake-on-LAN Magic Packet (UDP-Broadcast)             │ localhost
@@ -43,7 +46,8 @@
 ## Voraussetzungen
 
 - **Windows 10/11** (PC)
-- **Python 3.10+** auf dem PC
+- **Python 3.10+** auf dem PC (nur für die Python-Variante; die Rust-Variante
+  ist eine einzelne EXE ohne Python)
 - **Android 8.0+** (minSdk 26)
 - PC und Handy im **selben Heimnetz**
 - Für Wake-on-LAN: **Ethernet** empfohlen, WoL im BIOS/UEFI und in der
@@ -74,6 +78,10 @@ powershell -ExecutionPolicy Bypass -File .\install-autostart.ps1 -WithTray
 
 Mehr Details: [`PC App/README.md`](PC%20App/README.md)
 
+Alternativ gibt es denselben Agenten als einzelne EXE in Rust:
+[`PC Agent Rust/README.md`](PC%20Agent%20Rust/README.md) (`start.bat` baut und
+startet ihn). Beide Varianten nutzen Port 8000 und dieselben Endpunkte.
+
 ### 2. Android-App installieren
 
 ```powershell
@@ -90,6 +98,13 @@ In der App eintragen:
 - Benutzername + Passwort (wie in der Web-Oberfläche angelegt)
 - MAC-Adresse (für Wake-on-LAN)
 - Broadcast-Adresse (optional, Standard `255.255.255.255`)
+
+### App aktualisieren
+
+Unter Einstellungen → App-Update kann die App das neueste stabile GitHub
+Release prüfen und die APK laden. Zur Installation stehen der Android-
+Systemdialog (mit einmaliger Freigabe für unbekannte Apps) und Shizuku bereit.
+Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 
 ## API (Auszug)
 

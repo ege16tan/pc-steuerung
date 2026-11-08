@@ -1,10 +1,14 @@
 package com.example.pcsteuerung
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -36,16 +40,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -66,19 +74,31 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 const val EXTRA_CONFIRM_SHUTDOWN = "confirm_shutdown"
+const val ACTION_SHORTCUT_SHUTDOWN = "com.example.pcsteuerung.action.SHORTCUT_SHUTDOWN"
+const val ACTION_SHORTCUT_WAKE = "com.example.pcsteuerung.action.SHORTCUT_WAKE"
 
 class MainActivity : ComponentActivity() {
     private val confirmShutdownRequest = mutableStateOf(false)
+    private val wakeRequest = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        confirmShutdownRequest.value =
-            intent?.getBooleanExtra(EXTRA_CONFIRM_SHUTDOWN, false) == true
+        // Bei einer Neuerstellung (z. B. Drehung) den alten Shortcut-Intent
+        // nicht erneut ausloesen - sonst wuerde der PC erneut geweckt.
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+        }
         enableEdgeToEdge()
         setContent {
-            val darkTheme = isSystemInDarkTheme()
+            val context = LocalContext.current
+            var settings by remember { mutableStateOf(AppSettingsStore.load(context)) }
+            val systemDark = isSystemInDarkTheme()
+            val darkTheme = when (settings.themeMode) {
+                ThemeMode.SYSTEM -> systemDark
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
             val colorScheme = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                val context = LocalContext.current
                 if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
             } else {
                 if (darkTheme) darkColorScheme() else lightColorScheme()
@@ -90,8 +110,15 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     AppRoot(
+                        settings = settings,
+                        onSettingsChange = { updated ->
+                            AppSettingsStore.save(context, updated)
+                            settings = updated
+                        },
                         confirmShutdown = confirmShutdownRequest.value,
                         onConfirmConsumed = { confirmShutdownRequest.value = false },
+                        startWithWake = wakeRequest.value,
+                        onWakeConsumed = { wakeRequest.value = false },
                     )
                 }
             }
@@ -100,9 +127,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+        when (intent.action) {
+            ACTION_SHORTCUT_SHUTDOWN -> confirmShutdownRequest.value = true
+            ACTION_SHORTCUT_WAKE -> wakeRequest.value = true
+        }
         if (intent.getBooleanExtra(EXTRA_CONFIRM_SHUTDOWN, false)) {
             confirmShutdownRequest.value = true
         }
+        // Einmal ausgewertet: Bei einer spaeteren Neuerstellung nicht erneut
+        // ausloesen (sonst wuerde z. B. der PC noch einmal geweckt).
+        intent.removeExtra(EXTRA_CONFIRM_SHUTDOWN)
+        intent.action = null
     }
 }
 
@@ -205,7 +246,14 @@ private fun DelayChips(selected: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-fun AppRoot(confirmShutdown: Boolean = false, onConfirmConsumed: () -> Unit = {}) {
+fun AppRoot(
+    settings: AppSettings = AppSettings(),
+    onSettingsChange: (AppSettings) -> Unit = {},
+    confirmShutdown: Boolean = false,
+    onConfirmConsumed: () -> Unit = {},
+    startWithWake: Boolean = false,
+    onWakeConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     var profiles by remember { mutableStateOf(ProfileStore.load(context)) }
     var activeId by remember { mutableStateOf(ProfileStore.activeId(context)) }
@@ -234,8 +282,12 @@ fun AppRoot(confirmShutdown: Boolean = false, onConfirmConsumed: () -> Unit = {}
             profiles = profiles,
             activeId = active.id,
             onProfilesChange = ::persist,
+            settings = settings,
+            onSettingsChange = onSettingsChange,
             startWithShutdownConfirm = confirmShutdown,
             onConfirmConsumed = onConfirmConsumed,
+            startWithWake = startWithWake,
+            onWakeConsumed = onWakeConsumed,
         )
     }
 }
@@ -437,8 +489,12 @@ fun MainApp(
     profiles: List<Profile>,
     activeId: String,
     onProfilesChange: (List<Profile>, String?) -> Unit,
+    settings: AppSettings = AppSettings(),
+    onSettingsChange: (AppSettings) -> Unit = {},
     startWithShutdownConfirm: Boolean = false,
     onConfirmConsumed: () -> Unit = {},
+    startWithWake: Boolean = false,
+    onWakeConsumed: () -> Unit = {},
 ) {
     val active = profiles.firstOrNull { it.id == activeId } ?: profiles.first()
 
@@ -454,11 +510,21 @@ fun MainApp(
     var showLog by remember { mutableStateOf(false) }
     var logText by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
     var lastWidgetText by remember { mutableStateOf("") }
+    var lastUpdatedAt by remember { mutableLongStateOf(0L) }
+    var nowTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var wakePendingUntil by remember { mutableLongStateOf(0L) }
+    var pendingLeft by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val versionName = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: "?"
+    }
 
     // Marktplatz-Zustand: installierte Module sind persistent, der Katalog
     // startet lokal und wird beim ersten Start vom GitHub-Repo aufgefrischt.
@@ -508,6 +574,7 @@ fun MainApp(
 
     LaunchedEffect(startWithShutdownConfirm) {
         if (startWithShutdownConfirm) {
+            tab = 0
             showShutdownConfirm = true
             onConfirmConsumed()
         }
@@ -551,6 +618,10 @@ fun MainApp(
                 }
                 Log.d(TAG, "WoL an ${active.mac} via ${active.broadcast} -> $ok")
                 message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"
+                if (ok) {
+                    // 60 s lang alle 2 s pruefen, ob der PC hochkommt.
+                    wakePendingUntil = System.currentTimeMillis() + 60_000
+                }
             } finally {
                 busy = false
             }
@@ -619,7 +690,59 @@ fun MainApp(
         onProfilesChange(newList, updated.id)
     }
 
-    LaunchedEffect(active, refresh) {
+    fun openWebInterface() {
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(active.base)))
+        } catch (e: Exception) {
+            Log.e(TAG, "Browser konnte nicht geoeffnet werden", e)
+            message = "Kein Browser gefunden"
+        }
+    }
+
+    // Zurueck-Taste: aus einem anderen Tab zurueck zur Steuerung statt die App
+    // zu schliessen (typisches Android-Verhalten bei Bottom-Navigation).
+    BackHandler(enabled = tab != 0) { tab = 0 }
+
+    // Sekundentakt fuer Countdown und "zuletzt geprueft"-Anzeige. Nur im
+    // Vordergrund aktiv, damit im Hintergrund keine Recomposition laeuft.
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(1000)
+                nowTick = System.currentTimeMillis()
+            }
+        }
+    }
+
+    // Countdown lokal weiterzaehlen; die Server-Antwort synchronisiert ihn
+    // alle paar Sekunden. Bei 0 einmal frisch nachfragen.
+    LaunchedEffect(state.pending, state.status) {
+        pendingLeft = state.pending
+        while (pendingLeft > 0) {
+            delay(1000)
+            pendingLeft -= 1
+        }
+        if (state.pending > 0) refresh++
+    }
+
+    val lastUpdatedText = when {
+        lastUpdatedAt == 0L -> "gerade eben"
+        else -> {
+            val age = ((nowTick - lastUpdatedAt) / 1000).coerceAtLeast(0)
+            if (age < 2) "gerade eben" else "vor $age s"
+        }
+    }
+    val wakePending = wakePendingUntil > nowTick
+
+    LaunchedEffect(startWithWake) {
+        if (startWithWake) {
+            tab = 0
+            doWake()
+            onWakeConsumed()
+        }
+    }
+
+    LaunchedEffect(active, refresh, settings.refreshSeconds) {
         // Status nur abfragen, solange die App sichtbar (STARTED) ist: Im
         // Hintergrund pausiert die Schleife, bei Rueckkehr startet sie frisch -
         // die Anzeige ist sofort aktuell und Akku/Datenvolumen werden gespart.
@@ -634,8 +757,15 @@ fun MainApp(
                     }
                 }
                 state = next
+                lastUpdatedAt = System.currentTimeMillis()
+                refreshing = false
+                if (next.status == PcStatus.ONLINE) wakePendingUntil = 0L
                 val widgetText = when (next.status) {
-                    PcStatus.ONLINE -> "${active.name} an · ${planLabel(next.plan)}"
+                    PcStatus.ONLINE -> if (next.pending > 0) {
+                        "${active.name}: aus in ${fmtDuration(next.pending)}"
+                    } else {
+                        "${active.name} an · ${planLabel(next.plan)}"
+                    }
                     PcStatus.OFFLINE -> "${active.name} aus"
                     PcStatus.ERROR -> "Login prüfen"
                     PcStatus.UNKNOWN -> "Bereit"
@@ -644,7 +774,9 @@ fun MainApp(
                     lastWidgetText = widgetText
                     WidgetProvider.updateAll(context, widgetText)
                 }
-                delay(5000)
+                // Nach dem Wecken schneller nachsehen, ob der PC hochkommt.
+                val fastPoll = wakePendingUntil > System.currentTimeMillis()
+                delay(if (fastPoll) 2000L else settings.refreshSeconds * 1000L)
             }
         }
     }
@@ -698,6 +830,15 @@ fun MainApp(
                         state = state,
                         busy = busy,
                         installed = installedModules,
+                        pendingLeft = pendingLeft,
+                        wakePending = wakePending,
+                        lastUpdated = lastUpdatedText,
+                        refreshSeconds = settings.refreshSeconds,
+                        refreshing = refreshing,
+                        onRefresh = {
+                            refreshing = true
+                            refresh++
+                        },
                         onSwitchProfile = ::switchProfile,
                         onShutdown = { showShutdownConfirm = true },
                         onTimer = {
@@ -734,6 +875,10 @@ fun MainApp(
                         active = active,
                         simulate = state.simulate,
                         busy = busy,
+                        settings = settings,
+                        onSettingsChange = onSettingsChange,
+                        onOpenWeb = ::openWebInterface,
+                        versionName = versionName,
                         onSwitch = ::switchProfile,
                         onAdd = ::addProfile,
                         onDelete = ::deleteProfile,
@@ -911,12 +1056,26 @@ fun MainApp(
                 TextButton(onClick = { showLog = false }) { Text("Schließen") }
             },
             dismissButton = {
-                TextButton(enabled = !busy, onClick = { loadLog() }) { Text("Aktualisieren") }
+                Row {
+                    TextButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                                as? ClipboardManager
+                            clipboard?.setPrimaryClip(
+                                ClipData.newPlainText("PC-Agent-Verlauf", logText)
+                            )
+                            message = "Verlauf kopiert"
+                            showLog = false
+                        }
+                    ) { Text("Kopieren") }
+                    TextButton(enabled = !busy, onClick = { loadLog() }) { Text("Aktualisieren") }
+                }
             }
         )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ControlTab(
     profiles: List<Profile>,
@@ -924,6 +1083,12 @@ private fun ControlTab(
     state: AgentState,
     busy: Boolean,
     installed: Set<String>,
+    pendingLeft: Int,
+    wakePending: Boolean,
+    lastUpdated: String,
+    refreshSeconds: Int,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
     onSwitchProfile: (String) -> Unit,
     onShutdown: () -> Unit,
     onTimer: () -> Unit,
@@ -934,248 +1099,316 @@ private fun ControlTab(
     onOpenMarket: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    val haptics = LocalHapticFeedback.current
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize()
     ) {
-        Text(
-            text = "PC Steuerung",
-            fontSize = 30.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-
-        if (profiles.size > 1) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                profiles.forEach { p ->
-                    FilterChip(
-                        selected = p.id == active.id,
-                        onClick = { onSwitchProfile(p.id) },
-                        label = { Text(p.name) }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "PC Steuerung",
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Zuletzt geprüft: $lastUpdated · alle ${refreshSeconds} s",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                IconButton(onClick = onRefresh, enabled = !busy) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Status aktualisieren",
+                        tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }
-        }
 
-        ElevatedCard(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-            )
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "Status · ${active.name}",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+            if (profiles.size > 1) {
                 Row(
-                    modifier = Modifier.semantics {
-                        contentDescription = "${statusLabel(state.status)}: ${state.text}"
-                    },
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    StatusDot(
-                        color = statusColor(state.status),
-                        pulsing = state.status == PcStatus.ONLINE
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    AnimatedContent(
-                        targetState = state.text,
-                        transitionSpec = {
-                            (fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 4 }) togetherWith
-                                fadeOut(tween(180))
-                        },
-                        label = "statusText"
-                    ) { text ->
-                        Text(
-                            text = text,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    profiles.forEach { p ->
+                        FilterChip(
+                            selected = p.id == active.id,
+                            onClick = { onSwitchProfile(p.id) },
+                            label = { Text(p.name) }
                         )
                     }
                 }
-                state.simulate?.let { sim ->
-                    val modeColor by animateColorAsState(
-                        targetValue = if (sim) Color(0xFFF9A825) else Color(0xFFE53935),
-                        animationSpec = tween(320, easing = FastOutSlowInEasing),
-                        label = "modeColor"
+            }
+
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Status · ${active.name}",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = if (sim) {
-                            "Modus: SIMULATION (nur Log)"
-                        } else {
-                            "Modus: ECHT - Befehle werden ausgeführt!"
+                        text = "${active.host}:${active.port}",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                    Row(
+                        modifier = Modifier.semantics {
+                            contentDescription = "${statusLabel(state.status)}: ${state.text}"
                         },
-                        fontSize = 13.sp,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        StatusDot(
+                            color = statusColor(state.status),
+                            pulsing = state.status == PcStatus.ONLINE
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        AnimatedContent(
+                            targetState = state.text,
+                            transitionSpec = {
+                                (fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 4 }) togetherWith
+                                    fadeOut(tween(180))
+                            },
+                            label = "statusText"
+                        ) { text ->
+                            Text(
+                                text = text,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    state.simulate?.let { sim ->
+                        val modeColor by animateColorAsState(
+                            targetValue = if (sim) Color(0xFFF9A825) else Color(0xFFE53935),
+                            animationSpec = tween(320, easing = FastOutSlowInEasing),
+                            label = "modeColor"
+                        )
+                        Text(
+                            text = if (sim) {
+                                "Modus: SIMULATION (nur Log)"
+                            } else {
+                                "Modus: ECHT - Befehle werden ausgeführt!"
+                            },
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = modeColor
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = state.simulate == false,
+                enter = fadeIn(tween(240)) + expandVertically(tween(320)),
+                exit = fadeOut(tween(180)) + shrinkVertically(tween(320))
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Text(
+                        text = "ECHT-MODUS AKTIV - Befehle werden wirklich ausgeführt!",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = modeColor
+                        modifier = Modifier.padding(16.dp)
                     )
                 }
             }
-        }
 
-        AnimatedVisibility(
-            visible = state.simulate == false,
-            enter = fadeIn(tween(240)) + expandVertically(tween(320)),
-            exit = fadeOut(tween(180)) + shrinkVertically(tween(320))
-        ) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
+            if (state.status == PcStatus.ERROR) {
                 Text(
-                    text = "ECHT-MODUS AKTIV - Befehle werden wirklich ausgeführt!",
-                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    text = "Bitte Benutzername/Passwort in den Einstellungen prüfen.",
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(16.dp)
+                    color = MaterialTheme.colorScheme.error
                 )
+                TextButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
+                    Text("Einstellungen öffnen")
+                }
             }
-        }
 
-        if (state.status == PcStatus.ERROR) {
-            Text(
-                text = "Bitte Benutzername/Passwort in den Einstellungen prüfen.",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.error
-            )
-            TextButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-                Text("Einstellungen öffnen")
-            }
-        }
-
-        AnimatedContent(
-            targetState = state.status,
-            transitionSpec = {
-                (fadeIn(tween(300)) + expandVertically(tween(360))) togetherWith
-                    (fadeOut(tween(200)) + shrinkVertically(tween(360)))
-            },
-            label = "actions"
-        ) { status ->
-            when (status) {
-                PcStatus.ONLINE -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Button(
-                            onClick = onShutdown,
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth().height(64.dp),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error,
-                                contentColor = MaterialTheme.colorScheme.onError
-                            )
-                        ) {
-                            Text("PC herunterfahren", fontSize = 18.sp)
-                        }
-                        // Timer nur als installiertes Marktplatz-Modul.
-                        if (MODULE_TIMER in installed) {
-                            OutlinedButton(
-                                onClick = onTimer,
+            AnimatedContent(
+                targetState = state.status,
+                transitionSpec = {
+                    (fadeIn(tween(300)) + expandVertically(tween(360))) togetherWith
+                        (fadeOut(tween(200)) + shrinkVertically(tween(360)))
+                },
+                label = "actions"
+            ) { status ->
+                when (status) {
+                    PcStatus.ONLINE -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Button(
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onShutdown()
+                                },
                                 enabled = !busy,
-                                modifier = Modifier.fillMaxWidth().height(52.dp),
-                                shape = RoundedCornerShape(14.dp)
+                                modifier = Modifier.fillMaxWidth().height(64.dp),
+                                shape = RoundedCornerShape(18.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError
+                                )
                             ) {
-                                Text("Timer...", fontSize = 15.sp)
+                                Text("PC herunterfahren", fontSize = 18.sp)
                             }
-                        }
-
-                        // Countdown-Karte bleibt immer da: Eine laufende
-                        // Abschaltung muss unabhaengig vom Modul abbrichbar sein.
-                        AnimatedVisibility(
-                            visible = state.pending > 0,
-                            enter = fadeIn(tween(240)) + expandVertically(tween(320)),
-                            exit = fadeOut(tween(180)) + shrinkVertically(tween(320))
-                        ) {
-                            OutlinedCard(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(18.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                            // Timer nur als installiertes Marktplatz-Modul.
+                            if (MODULE_TIMER in installed) {
+                                OutlinedButton(
+                                    onClick = onTimer,
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                                    shape = RoundedCornerShape(14.dp)
                                 ) {
-                                    Text(
-                                        text = "Geplantes Herunterfahren in ${fmtDuration(state.pending)}",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    TextButton(enabled = !busy, onClick = onAbort) { Text("Abbrechen") }
+                                    Text("Timer...", fontSize = 15.sp)
+                                }
+                            }
+
+                            // Countdown-Karte bleibt immer da: Eine laufende
+                            // Abschaltung muss unabhaengig vom Modul abbrichbar sein.
+                            AnimatedVisibility(
+                                visible = pendingLeft > 0,
+                                enter = fadeIn(tween(240)) + expandVertically(tween(320)),
+                                exit = fadeOut(tween(180)) + shrinkVertically(tween(320))
+                            ) {
+                                OutlinedCard(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(18.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "Geplantes Herunterfahren in ${fmtDuration(pendingLeft)}",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        TextButton(enabled = !busy, onClick = onAbort) { Text("Abbrechen") }
+                                    }
+                                }
+                            }
+
+                            if (MODULE_LOG in installed) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onHibernate()
+                                        },
+                                        enabled = !busy,
+                                        modifier = Modifier.weight(1f).height(52.dp),
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) { Text("Ruhezustand", fontSize = 14.sp) }
+                                    OutlinedButton(
+                                        onClick = onShowLog,
+                                        enabled = !busy,
+                                        modifier = Modifier.weight(1f).height(52.dp),
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) { Text("Verlauf", fontSize = 14.sp) }
+                                }
+                            } else {
+                                // Ohne Verlauf-Modul hat Ruhezustand die volle Breite.
+                                OutlinedButton(
+                                    onClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onHibernate()
+                                    },
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) { Text("Ruhezustand", fontSize = 14.sp) }
+                            }
+
+                            // Entdecker-Hinweis: Basis ist da, Zusaetze gibt es im Markt.
+                            if (MODULE_TIMER !in installed && MODULE_LOG !in installed) {
+                                TextButton(
+                                    onClick = onOpenMarket,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Mehr Funktionen im Markt+ …", fontSize = 14.sp)
                                 }
                             }
                         }
+                    }
 
-                        if (MODULE_LOG in installed) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                OutlinedButton(
-                                    onClick = onHibernate,
-                                    enabled = !busy,
-                                    modifier = Modifier.weight(1f).height(52.dp),
-                                    shape = RoundedCornerShape(14.dp)
-                                ) { Text("Ruhezustand", fontSize = 14.sp) }
-                                OutlinedButton(
-                                    onClick = onShowLog,
-                                    enabled = !busy,
-                                    modifier = Modifier.weight(1f).height(52.dp),
-                                    shape = RoundedCornerShape(14.dp)
-                                ) { Text("Verlauf", fontSize = 14.sp) }
-                            }
-                        } else {
-                            // Ohne Verlauf-Modul hat Ruhezustand die volle Breite.
-                            OutlinedButton(
-                                onClick = onHibernate,
+                    PcStatus.OFFLINE -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onWake()
+                                },
                                 enabled = !busy,
-                                modifier = Modifier.fillMaxWidth().height(52.dp),
-                                shape = RoundedCornerShape(14.dp)
-                            ) { Text("Ruhezustand", fontSize = 14.sp) }
-                        }
-
-                        // Entdecker-Hinweis: Basis ist da, Zusaetze gibt es im Markt.
-                        if (MODULE_TIMER !in installed && MODULE_LOG !in installed) {
-                            TextButton(
-                                onClick = onOpenMarket,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth().height(64.dp),
+                                shape = RoundedCornerShape(18.dp)
                             ) {
-                                Text("Mehr Funktionen im Markt+ …", fontSize = 14.sp)
+                                if (wakePending) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text("PC startet ...", fontSize = 18.sp)
+                                } else {
+                                    Text("PC einschalten", fontSize = 18.sp)
+                                }
+                            }
+                            Text(
+                                text = if (wakePending) {
+                                    "Wake-on-LAN gesendet. Der PC braucht oft 10–30 Sekunden."
+                                } else {
+                                    "Wake-on-LAN: Ethernet empfohlen; WoL im BIOS/UEFI und im Netzwerkadapter aktivieren."
+                                },
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            if (wakePending) {
+                                TextButton(
+                                    onClick = onRefresh,
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Jetzt prüfen") }
                             }
                         }
                     }
-                }
 
-                PcStatus.OFFLINE -> {
-                    Button(
-                        onClick = onWake,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth().height(64.dp),
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Text("PC einschalten", fontSize = 18.sp)
-                    }
+                    PcStatus.ERROR, PcStatus.UNKNOWN -> Unit
                 }
-
-                PcStatus.ERROR, PcStatus.UNKNOWN -> Unit
             }
-        }
 
+        }
     }
 }
 
@@ -1472,6 +1705,10 @@ private fun SettingsTab(
     active: Profile,
     simulate: Boolean?,
     busy: Boolean,
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    onOpenWeb: () -> Unit,
+    versionName: String,
     onSwitch: (String) -> Unit,
     onAdd: () -> Unit,
     onDelete: (String) -> Unit,
@@ -1620,6 +1857,61 @@ private fun SettingsTab(
         )
         DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it; saved = false })
 
+        HorizontalDivider()
+
+        Text(
+            text = "Darstellung",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ThemeMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = settings.themeMode == mode,
+                    onClick = { onSettingsChange(settings.copy(themeMode = mode)) },
+                    label = {
+                        Text(
+                            when (mode) {
+                                ThemeMode.SYSTEM -> "System"
+                                ThemeMode.LIGHT -> "Hell"
+                                ThemeMode.DARK -> "Dunkel"
+                            }
+                        )
+                    }
+                )
+            }
+        }
+
+        Text(
+            text = "Status-Aktualisierung",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AppSettingsStore.REFRESH_CHOICES.forEach { seconds ->
+                FilterChip(
+                    selected = settings.refreshSeconds == seconds,
+                    onClick = { onSettingsChange(settings.copy(refreshSeconds = seconds)) },
+                    label = { Text("$seconds s") }
+                )
+            }
+        }
+        Text(
+            text = "Häufiger = aktueller; seltener spart Akku und Datenvolumen.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+
+        HorizontalDivider()
+
         Text(
             text = "Debug-Modus",
             fontSize = 16.sp,
@@ -1698,6 +1990,38 @@ private fun SettingsTab(
             text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.outline
+        )
+
+        HorizontalDivider()
+
+        Text(
+            text = "Über die App",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "PC Steuerung $versionName",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = "Die App prüft Updates direkt bei GitHub Releases.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+        OutlinedButton(
+            onClick = onOpenWeb,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Text("Web-Oberfläche im Browser öffnen", fontSize = 15.sp)
+        }
+
+        AppUpdaterPanel(
+            versionName = versionName,
+            settings = settings,
+            onSettingsChange = onSettingsChange,
         )
 
     }

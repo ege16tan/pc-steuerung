@@ -31,15 +31,19 @@
 - [x] Fortschrittsbalken als Overlay am oberen Rand (kein Layout-Verschieben mehr), dezenter Statuspuls
 - [x] Marktplatz (v0.6.0): 4. Tab „Markt+“ – Basis (An/Aus, Status, Ruhezustand, Energieplan) immer gratis, Timer + Verlauf als installierbare Module
 - [x] Remote-Modulkatalog: `module-catalog/modules.json` im Repo, Katalog-Refresh per GitHub + lokaler Fallback offline, 8 neue Unit-Tests
+- [x] App-Shortcuts (Long-Press aufs Icon): Einschalten und Herunterfahren
+- [x] v0.8.0-preview: Live-Countdown, Pull-to-Refresh, Hell/Dunkel/System, einstellbares Status-Intervall, Wake-Fortschritt, Verlauf kopieren
+- [x] In-App-Updater über GitHub Releases mit Android-Systemdialog oder optionaler Shizuku-Installation
+- [x] PC-Agent in Rust (1:1 zum Python-Agent, einzelne EXE)
 
 ## Geplant
 
+- [ ] Agent-Auswahl Python/Rust in der Web-Oberfläche (gemeinsamer Launcher, wirksam nach Neustart)
 - [ ] Module: Katalog künftig per Release erweitern (z. B. Screenshots, Dateien)
 
 - [ ] Finales Design (Restpolitur)
 - [ ] Automatisierte Tests für den FastAPI-Agent
 - [ ] CI über GitHub Actions
 - [ ] Screenshots fürs README
-- [ ] App-Shortcuts (Long-Press aufs Icon)
 - [ ] Zeitplan (z. B. täglich 23:00 herunterfahren)
 - [ ] Home-Assistant-/Tasker-Integration
