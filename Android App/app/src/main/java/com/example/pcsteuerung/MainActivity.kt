@@ -547,7 +547,7 @@ fun MainApp(
             try {
                 message = "Sende Wake ..."
                 val ok = withContext(Dispatchers.IO) {
-                    sendMagicPacket(active.mac, active.broadcast)
+                    sendMagicPacket(context, active.mac, active.broadcast)
                 }
                 Log.d(TAG, "WoL an ${active.mac} via ${active.broadcast} -> $ok")
                 message = if (ok) "Wake gesendet (direkt)" else "Wake fehlgeschlagen"

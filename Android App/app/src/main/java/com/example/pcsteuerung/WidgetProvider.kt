@@ -93,7 +93,7 @@ class WidgetProvider : AppWidgetProvider() {
         }
 
         showStatus(context, context.getString(R.string.widget_status_sending))
-        val ok = sendMagicPacket(mac, broadcast)
+        val ok = sendMagicPacket(context, mac, broadcast)
         showStatus(
             context,
             context.getString(if (ok) R.string.widget_status_wake_sent else R.string.widget_status_wake_failed)
