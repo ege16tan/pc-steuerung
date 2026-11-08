@@ -35,10 +35,10 @@
 - [x] v0.8.0-preview: Live-Countdown, Pull-to-Refresh, Hell/Dunkel/System, einstellbares Status-Intervall, Wake-Fortschritt, Verlauf kopieren
 - [x] In-App-Updater über GitHub Releases mit Android-Systemdialog oder optionaler Shizuku-Installation
 - [x] PC-Agent in Rust (1:1 zum Python-Agent, einzelne EXE)
+- [x] Python und Rust bleiben verfügbar; Rust ist Standard, Versionswechsel über gemeinsame Web-UI und Tray-Verwaltung
 
 ## Geplant
 
-- [ ] Agent-Auswahl Python/Rust in der Web-Oberfläche (gemeinsamer Launcher, wirksam nach Neustart)
 - [ ] Module: Katalog künftig per Release erweitern (z. B. Screenshots, Dateien)
 
 - [ ] Finales Design (Restpolitur)

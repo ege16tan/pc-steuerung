@@ -58,13 +58,14 @@
 ### 1. PC-Agent einrichten
 
 ```powershell
-cd "PC App"
-python -m pip install -r requirements.txt
-start.bat
+start-agent.bat
 ```
 
-Danach **`http://localhost:8000/`** öffnen und einmalig **Benutzername +
-Passwort** festlegen. Das Passwort wird nur als Hash gespeichert.
+Der gemeinsame Manager startet standardmäßig den Rust-Agenten. Danach
+**`http://localhost:8000/`** öffnen und einmalig **Benutzername + Passwort**
+festlegen. In der Web-UI kann zwischen Rust und Python gewechselt werden.
+Die Auswahl bleibt für den nächsten Start gespeichert. Für den Python-Agenten
+zuerst `python -m pip install -r "PC App/requirements.txt"` ausführen.
 
 Optional:
 
@@ -72,15 +73,20 @@ Optional:
 # Firewall (als Administrator)
 netsh advfirewall firewall add rule name="PC Agent 8000" dir=in action=allow protocol=TCP localport=8000 remoteip=localsubnet profile=private
 
+# Tray-Symbol starten
+start-tray.bat
+
 # Autostart (inkl. Tray)
-powershell -ExecutionPolicy Bypass -File .\install-autostart.ps1 -WithTray
+powershell -ExecutionPolicy Bypass -File ".\PC Agent Rust\install-autostart.ps1" -WithTray
 ```
 
 Mehr Details: [`PC App/README.md`](PC%20App/README.md)
 
-Alternativ gibt es denselben Agenten als einzelne EXE in Rust:
-[`PC Agent Rust/README.md`](PC%20Agent%20Rust/README.md) (`start.bat` baut und
-startet ihn). Beide Varianten nutzen Port 8000 und dieselben Endpunkte.
+Python und Rust bleiben im Projekt. Die Rust-Version wird bevorzugt; die
+Web-UI und das Tray-Symbol können jederzeit zur Python-Version wechseln.
+Beide nutzen Port 8000 und dieselben Endpunkte. Details stehen in
+[`PC App/README.md`](PC%20App/README.md) und
+[`PC Agent Rust/README.md`](PC%20Agent%20Rust/README.md).
 
 ### 2. Android-App installieren
 
@@ -121,6 +127,8 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 | GET | `/setup-status` | ob Zugangsdaten noch fehlen |
 | POST | `/setup` | Zugangsdaten anlegen (nur localhost) |
 | POST | `/mode?simulate=true\|false` | Simulation/Echtzeit umschalten |
+| GET | `/agent-version` | aktive und bevorzugte Agent-Version |
+| POST | `/agent-version?version=rust\|python` | bevorzugte Version wechseln |
 
 ## Sicherheit
 

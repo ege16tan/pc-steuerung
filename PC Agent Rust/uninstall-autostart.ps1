@@ -1,5 +1,5 @@
 # uninstall-autostart.ps1
-# Entfernt die Rust-Aufgaben aus der Windows-Aufgabenplanung.
+# Entfernt die gemeinsame PC-Steuerung-Aufgabe aus der Windows-Aufgabenplanung.
 #
 # Ausfuehren (im Ordner "PC Agent Rust"):
 #   powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1
@@ -8,14 +8,14 @@
 # Beendet keinen bereits laufenden Agenten - nur der Autostart wird entfernt.
 
 param(
-    [string]$TaskName = 'PC Agent Rust 8000',
+    [string]$TaskName = 'PC Steuerung Agent',
     [switch]$WithTray
 )
 
 $ErrorActionPreference = 'Stop'
 
 $names = @($TaskName)
-if ($WithTray) { $names += 'PC Agent Rust Tray' }
+if ($WithTray) { $names += 'PC Steuerung Tray' }
 
 $removed = 0
 foreach ($name in $names) {

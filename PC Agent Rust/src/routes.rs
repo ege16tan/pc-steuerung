@@ -1,10 +1,13 @@
 //! HTTP-Endpunkte des Agenten — 1:1 vom Python-Agent abgeschaut:
-//! GET /, GET /setup-status, POST /setup, POST /mode, GET /status,
+//! GET /, GET /setup-status, POST /setup, GET/POST /agent-version,
+//! POST /mode, GET /status,
 //! POST /shutdown, POST /abort, POST /hibernate, POST /power-plan,
 //! POST /wake, POST /ping, GET /events, GET /log.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::process::Command;
 
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
@@ -167,6 +170,86 @@ pub async fn setup(
     );
     guard.credentials = Some(credentials);
     Json(json!({ "ok": true, "user": user })).into_response()
+}
+
+fn preferred_version_file() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("PC Steuerung")
+        .join("agent-version.txt")
+}
+
+fn preferred_version() -> String {
+    std::fs::read_to_string(preferred_version_file())
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| value == "python" || value == "rust")
+        .unwrap_or_else(|| "rust".to_string())
+}
+
+/// GET /agent-version — aktive Version und persistente Auswahl fuer die UI.
+pub async fn agent_version(_auth: Auth) -> Response {
+    Json(json!({ "active": "rust", "selected": preferred_version() })).into_response()
+}
+
+/// POST /agent-version?version=python|rust — startet den gemeinsamen Manager,
+/// der den aktiven Prozess sauber austauscht und die Auswahl speichert.
+pub async fn switch_agent_version(
+    State(app): State<SharedApp>,
+    Query(query): Query<Vec<(String, String)>>,
+    _auth: Auth,
+) -> Response {
+    let Some(version) = first_query(&query, "version") else {
+        return error_response(StatusCode::UNPROCESSABLE_ENTITY, "Version fehlt".to_string());
+    };
+    if version != "python" && version != "rust" {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Version muss python oder rust sein".to_string(),
+        );
+    }
+    let Some(rust_dir) = app.creds_file.parent() else {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Agent-Pfad fehlt".to_string());
+    };
+    let Some(project_root) = rust_dir.parent() else {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Projektpfad fehlt".to_string());
+    };
+    let manager = project_root.join("agent-manager.ps1");
+    if !manager.is_file() {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Agent-Verwaltung wurde nicht gefunden".to_string(),
+        );
+    }
+    let mut command = Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+        ])
+        .arg(&manager)
+        .args(["-Action", "switch", "-Version", version, "-Port", "8000"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    if let Err(error) = command.spawn() {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Versionswechsel fehlgeschlagen: {error}"),
+        );
+    }
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "ok": true, "selected": version, "switching": true })),
+    )
+        .into_response()
 }
 
 // ---------------- Endpunkte mit Anmeldung (Auth) ----------------

@@ -65,6 +65,10 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/", axum::routing::get(routes::index))
         .route("/setup-status", axum::routing::get(routes::setup_status))
         .route("/setup", axum::routing::post(routes::setup))
+        .route(
+            "/agent-version",
+            axum::routing::get(routes::agent_version).post(routes::switch_agent_version),
+        )
         .route("/mode", axum::routing::post(routes::set_mode))
         .route("/status", axum::routing::get(routes::status_ep))
         .route("/shutdown", axum::routing::post(routes::shutdown_ep))

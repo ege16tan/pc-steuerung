@@ -8,19 +8,22 @@ Kompakte Agenten-Anleitung für dieses Repository.
 einen Windows-PC (Wake-on-LAN, Herunterfahren, Abbrechen, Ruhezustand, Energieplan,
 Status).
 
-- `PC App/` – FastAPI-Agent (Python), läuft auf dem Windows-PC.
+- `PC Agent Rust/` – bevorzugter Windows-Agent, einzelne Rust-EXE.
+- `PC App/` – alternative FastAPI-Version in Python.
 - `Android App/` – Kotlin/Jetpack Compose-Client, läuft auf dem Handy.
 
 ## Befehle
 
-- Agent (PC): `python -m pip install -r requirements.txt`
-- Agent (PC): `python -m uvicorn main:app --host 0.0.0.0 --port 8000` (oder `start.bat`)
+- Standardstart: `start-agent.bat` (Rust bevorzugt, Auswahl bleibt gespeichert).
+- Python-Alternative: `PC App/start.bat` (setzt Python als bevorzugte Version).
+- Python-Abhängigkeiten: `python -m pip install -r "PC App/requirements.txt"`
 - Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
 - `PC_AGENT_SIMULATE` (Default `1`) = Simulation (nur Loggen); `0` = echte Aktion.
   Sicherheitsschalter: nicht ohne explizite Anweisung auf `0` setzen.
 - `PC_WOL_BROADCAST` (Default `192.168.1.255`) = Broadcast-Ziel für `/wake`.
-- Tray-Steuerung (Taskleiste): `PC App/start-tray.bat` (Agent starten/stoppen,
-  Status, Web-UI öffnen).
+- Gemeinsame Tray-Steuerung: `start-tray.bat` (Web-UI öffnen, Agent starten/
+  stoppen, Python/Rust auswählen). Beide versionsspezifischen Start-Tray-Dateien
+  verweisen auf dieses Symbol.
 - Push-Schutz: `scripts/check-sensitive.sh` (Pre-Push-Hook in `.githooks/`,
   aktivieren mit `scripts/install-hooks.ps1`); GitHub Actions prüft dasselbe.
 - **Entwicklungsversion:** privat, Simulationsmodus als Default. Vor einer
@@ -31,6 +34,8 @@ Status).
 - Endpunkte: `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
   `GET /ping`, `GET /setup-status`, `POST /setup`, `POST /mode?simulate=`, `GET /`.
+- Agent-Auswahl: `GET /agent-version`, `POST /agent-version?version=python|rust`;
+  Rust ist der Standard. Die gemeinsame Auswahl liegt unter `%LOCALAPPDATA%`.
 - Logdatei: `PC App/agent.log` (Datum/Uhrzeit, Rotation nach `agent.log.1`,
   gitignored).
 - Auth: Basic Auth (Benutzername/Passwort, PBKDF2-Hash in `PC App/credentials.json`)
