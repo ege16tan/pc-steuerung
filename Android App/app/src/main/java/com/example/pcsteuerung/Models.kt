@@ -18,7 +18,7 @@ data class Profile(
     val defaultDelay: Int = 60,
 ) {
     val base: String get() = "http://$host:$port"
-    val isComplete: Boolean get() = host.isNotBlank() && port.toIntOrNull() != null
+    val isComplete: Boolean get() = host.isNotBlank() && isValidPort(port)
 
     /** Basic Auth, wenn Benutzername/Passwort gesetzt sind. */
     fun authHeader(): AuthHeader? =

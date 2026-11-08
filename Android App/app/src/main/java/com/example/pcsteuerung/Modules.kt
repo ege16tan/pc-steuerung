@@ -115,10 +115,18 @@ object ModuleStore {
     fun load(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_MODULES, null) ?: return emptySet()
-        val arr = JSONArray(raw)
-        val out = LinkedHashSet<String>(arr.length())
-        for (i in 0 until arr.length()) out.add(arr.optString(i))
-        return out
+        return try {
+            val arr = JSONArray(raw)
+            val out = LinkedHashSet<String>(arr.length())
+            for (i in 0 until arr.length()) {
+                val id = arr.optString(i).trim()
+                if (id.isNotEmpty()) out.add(id)
+            }
+            out
+        } catch (e: Exception) {
+            // Kaputter Altspeicher darf die App nicht am Start hindern.
+            emptySet()
+        }
     }
 
     fun save(context: Context, ids: Set<String>) {

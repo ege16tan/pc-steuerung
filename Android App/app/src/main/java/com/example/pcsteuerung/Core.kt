@@ -10,6 +10,12 @@ import org.json.JSONObject
 fun isValidMac(mac: String): Boolean =
     mac.isBlank() || Regex("^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$").matches(mac.trim())
 
+/** Gueltiger TCP-Port fuer die Agent-URL (1..65535). */
+fun isValidPort(port: String): Boolean {
+    val value = port.trim().toIntOrNull() ?: return false
+    return value in 1..65535
+}
+
 fun fmtDuration(seconds: Int): String {
     val s = seconds.coerceAtLeast(0)
     return when {

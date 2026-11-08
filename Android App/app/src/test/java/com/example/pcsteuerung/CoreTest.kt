@@ -33,6 +33,23 @@ class CoreTest {
     }
 
     @Test
+    fun portValid_acceptsValidPorts() {
+        assertTrue(isValidPort("8000"))
+        assertTrue(isValidPort("1"))
+        assertTrue(isValidPort("65535"))
+        assertTrue(isValidPort(" 8080 "))
+    }
+
+    @Test
+    fun portValid_rejectsInvalidPorts() {
+        assertFalse(isValidPort(""))
+        assertFalse(isValidPort("0"))
+        assertFalse(isValidPort("65536"))
+        assertFalse(isValidPort("-1"))
+        assertFalse(isValidPort("abc"))
+    }
+
+    @Test
     fun duration_formatsSeconds() {
         assertEquals("0 s", fmtDuration(0))
         assertEquals("59 s", fmtDuration(59))

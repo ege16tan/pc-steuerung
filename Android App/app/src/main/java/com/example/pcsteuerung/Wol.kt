@@ -96,9 +96,7 @@ private fun resolveTargets(context: Context, broadcast: String): List<InetAddres
  */
 private fun directedBroadcast(context: Context): InetAddress? {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
-    val network = cm.activeNetwork ?: return null
-    val caps = cm.getNetworkCapabilities(network) ?: return null
-    if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
+    val network = wifiNetwork(context) ?: return null
 
     val linkProps = cm.getLinkProperties(network) ?: return null
     val link = linkProps.linkAddresses.firstOrNull { it.address is Inet4Address } ?: return null
@@ -115,11 +113,19 @@ private fun broadcastOf(link: LinkAddress): InetAddress? {
     return InetAddress.getByAddress(intToBytes(broadcastInt))
 }
 
+/**
+ * Bevorzugt das aktive WLAN. Ist Mobilfunk der Standard (z. B. weil das
+ * WLAN keinen Internetzugang hat, der PC aber im selben LAN steht), wird
+ * trotzdem ein vorhandenes WLAN-Netz gewaehlt.
+ */
 private fun wifiNetwork(context: Context): Network? {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
-    val network = cm.activeNetwork ?: return null
-    val caps = cm.getNetworkCapabilities(network) ?: return null
-    return if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) network else null
+
+    fun isWifi(network: Network): Boolean =
+        cm.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+
+    cm.activeNetwork?.let { if (isWifi(it)) return it }
+    return cm.allNetworks.firstOrNull(::isWifi)
 }
 
 private fun bytesToInt(bytes: ByteArray): Int {

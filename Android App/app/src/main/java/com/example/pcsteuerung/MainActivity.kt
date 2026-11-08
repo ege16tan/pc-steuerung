@@ -253,7 +253,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
     var showPass by remember { mutableStateOf(false) }
     var pass2 by remember { mutableStateOf(profile.pass) }
     var formError by remember { mutableStateOf<String?>(null) }
-    val valid = host.isNotBlank() && port.toIntOrNull() != null
+    val valid = host.isNotBlank() && isValidPort(port)
 
     Box(
         modifier = Modifier
@@ -312,7 +312,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                         onValueChange = { port = it },
                         label = { Text("Port") },
                         singleLine = true,
-                        isError = port.toIntOrNull() == null,
+                        isError = !isValidPort(port),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1488,9 +1488,9 @@ private fun SettingsTab(
     var broadcast by remember(active) { mutableStateOf(active.broadcast) }
     var defaultDelay by remember(active) { mutableStateOf(active.defaultDelay) }
     var showPass by remember { mutableStateOf(false) }
-    var macError by remember { mutableStateOf<String?>(null) }
+    var macError by remember(active) { mutableStateOf<String?>(null) }
     var saved by remember { mutableStateOf(false) }
-    val valid = host.isNotBlank() && port.toIntOrNull() != null
+    val valid = host.isNotBlank() && isValidPort(port)
 
     Column(
         modifier = Modifier
@@ -1564,7 +1564,7 @@ private fun SettingsTab(
             onValueChange = { port = it; saved = false },
             label = { Text("Port") },
             singleLine = true,
-            isError = port.toIntOrNull() == null,
+            isError = !isValidPort(port),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth()
         )

@@ -41,47 +41,6 @@ class WidgetProvider : AppWidgetProvider() {
         }, "widget-wol").start()
     }
 
-    private fun buildViews(context: Context): RemoteViews {
-        val views = RemoteViews(context.packageName, R.layout.widget)
-        views.setTextViewText(R.id.widget_status, context.getString(R.string.widget_status_idle))
-        views.setOnClickPendingIntent(R.id.widget_wake, wakeIntent(context))
-        views.setOnClickPendingIntent(R.id.widget_shutdown, confirmShutdownIntent(context))
-
-        // Tippen auf den Titel oeffnet die App.
-        context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launchIntent ->
-            val pending = PendingIntent.getActivity(
-                context,
-                0,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            views.setOnClickPendingIntent(R.id.widget_title, pending)
-        }
-        return views
-    }
-
-    private fun wakeIntent(context: Context): PendingIntent {
-        val intent = Intent(context, WidgetProvider::class.java).setAction(ACTION_WAKE)
-        return PendingIntent.getBroadcast(
-            context,
-            1,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-    }
-
-    private fun confirmShutdownIntent(context: Context): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java)
-            .putExtra(EXTRA_CONFIRM_SHUTDOWN, true)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        return PendingIntent.getActivity(
-            context,
-            2,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-    }
-
     private fun handleWake(context: Context) {
         val active = ProfileStore.active(context)
         val mac = active?.mac?.trim().orEmpty()
@@ -104,9 +63,7 @@ class WidgetProvider : AppWidgetProvider() {
         val manager = AppWidgetManager.getInstance(context)
         val ids = manager.getAppWidgetIds(ComponentName(context, WidgetProvider::class.java))
         if (ids.isEmpty()) return
-        val views = RemoteViews(context.packageName, R.layout.widget)
-        views.setTextViewText(R.id.widget_status, text)
-        manager.updateAppWidget(ids, views)
+        manager.updateAppWidget(ids, buildViews(context, text))
     }
 
     companion object {
@@ -115,9 +72,56 @@ class WidgetProvider : AppWidgetProvider() {
             val manager = AppWidgetManager.getInstance(context)
             val ids = manager.getAppWidgetIds(ComponentName(context, WidgetProvider::class.java))
             if (ids.isEmpty()) return
+            manager.updateAppWidget(ids, buildViews(context, text))
+        }
+
+        /**
+         * Baut die Widget-Ansicht inklusive aller Klick-Handler. Wichtig:
+         * Status-Updates duerfen die RemoteViews nicht neu ohne PendingIntents
+         * aufbauen, sonst reagieren die Buttons nach dem ersten Update nicht mehr.
+         */
+        private fun buildViews(context: Context, status: String? = null): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget)
-            views.setTextViewText(R.id.widget_status, text)
-            manager.updateAppWidget(ids, views)
+            views.setTextViewText(
+                R.id.widget_status,
+                status ?: context.getString(R.string.widget_status_idle),
+            )
+            views.setOnClickPendingIntent(R.id.widget_wake, wakeIntent(context))
+            views.setOnClickPendingIntent(R.id.widget_shutdown, confirmShutdownIntent(context))
+
+            // Tippen auf den Titel oeffnet die App.
+            context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launchIntent ->
+                val pending = PendingIntent.getActivity(
+                    context,
+                    0,
+                    launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                views.setOnClickPendingIntent(R.id.widget_title, pending)
+            }
+            return views
+        }
+
+        private fun wakeIntent(context: Context): PendingIntent {
+            val intent = Intent(context, WidgetProvider::class.java).setAction(ACTION_WAKE)
+            return PendingIntent.getBroadcast(
+                context,
+                1,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        private fun confirmShutdownIntent(context: Context): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java)
+                .putExtra(EXTRA_CONFIRM_SHUTDOWN, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            return PendingIntent.getActivity(
+                context,
+                2,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
         }
 
         private const val ACTION_WAKE = "com.example.pcsteuerung.action.WIDGET_WAKE"
