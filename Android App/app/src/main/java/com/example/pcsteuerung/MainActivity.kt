@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -70,6 +71,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -298,18 +301,82 @@ fun AppRoot(
 
 @Composable
 fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Unit)?) {
+    var method by remember { mutableStateOf<String?>(null) }
+    var step by remember { mutableIntStateOf(1) }
     var name by remember { mutableStateOf(profile.name) }
     var host by remember { mutableStateOf(profile.host) }
     var port by remember { mutableStateOf(profile.port) }
     var user by remember { mutableStateOf(profile.user) }
     var pass by remember { mutableStateOf(profile.pass) }
+    var pass2 by remember { mutableStateOf(profile.pass) }
     var mac by remember { mutableStateOf(profile.mac) }
     var broadcast by remember { mutableStateOf(profile.broadcast) }
-    var defaultDelay by remember { mutableStateOf(profile.defaultDelay) }
     var showPass by remember { mutableStateOf(false) }
-    var pass2 by remember { mutableStateOf(profile.pass) }
     var formError by remember { mutableStateOf<String?>(null) }
-    val valid = host.isNotBlank() && isValidPort(port)
+    var scanMessage by remember { mutableStateOf<String?>(null) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var testing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val connectionReady = host.isNotBlank() && isValidPort(port)
+
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        if (contents != null) {
+            val pairing = parsePcSetupQr(contents)
+            if (pairing == null) {
+                scanMessage = "Das ist kein gültiger PC-Steuerung-QR-Code."
+            } else {
+                name = pairing.name
+                host = pairing.host
+                port = pairing.port.toString()
+                scanMessage = "${pairing.name} übernommen. WoL-MAC und Zugangsdaten noch eintragen."
+                formError = null
+            }
+        }
+    }
+
+    fun testConnection() {
+        if (!connectionReady) {
+            testResult = "Erst IP und Port eintragen."
+            return
+        }
+        scope.launch {
+            testing = true
+            testResult = null
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val body = httpCall("http://${host.trim()}:${port.trim()}", "/status", null)
+                    if (body.startsWith("HTTP ")) body else "Erreichbar: der PC antwortet."
+                } catch (e: Exception) {
+                    "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                }
+            }
+            testResult = result
+            testing = false
+        }
+    }
+
+    fun save() {
+        when {
+            pass.isNotEmpty() && pass != pass2 -> formError = "Passwörter stimmen nicht überein"
+            !isValidMac(mac) -> formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
+            else -> {
+                formError = null
+                onSave(
+                    profile.copy(
+                        name = name.trim().ifBlank { "PC" },
+                        host = host.trim(),
+                        port = port.trim(),
+                        user = user.trim(),
+                        pass = pass,
+                        mac = mac.trim(),
+                        broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
+                        defaultDelay = profile.defaultDelay,
+                    )
+                )
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -325,162 +392,317 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = if (profile.isComplete) "Profil bearbeiten" else "Einrichten",
+                text = "Einrichten",
                 fontSize = 34.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
             )
             Text(
-                text = "Einmal eingeben, danach startet die App direkt.",
+                text = "Einmal einrichten, danach startet die App direkt.",
                 fontSize = 16.sp,
                 color = MaterialTheme.colorScheme.outline
             )
 
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                )
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+            if (method == null) {
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
                 ) {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Name (z. B. Wohnzimmer-PC)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Wie möchtest du den PC verbinden?",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Button(
+                            onClick = { method = "qr"; step = 1; scanMessage = null },
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("Mit QR-Code einrichten", fontSize = 16.sp)
+                        }
+                        Text(
+                            text = "QR-Code aus der PC-Weboberfläche scannen. Am schnellsten.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        OutlinedButton(
+                            onClick = { method = "manual"; step = 1; testResult = null },
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("Manuell einrichten", fontSize = 16.sp)
+                        }
+                        Text(
+                            text = "IP, Port und Zugangsdaten selbst eingeben.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    repeat(4) { i ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(
+                                    if (i < step) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                        )
+                    }
+                }
+                Text(
+                    text = when (step) {
+                        1 -> if (method == "qr") "Schritt 1 · QR-Code scannen" else "Schritt 1 · Verbindung"
+                        2 -> "Schritt 2 · Wake-on-LAN (optional)"
+                        3 -> "Schritt 3 · Anmeldung"
+                        else -> "Schritt 4 · Fertig"
+                    },
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                     )
-                    OutlinedTextField(
-                        value = host,
-                        onValueChange = { host = it },
-                        label = { Text("IP des PCs") },
-                        placeholder = { Text("192.168.1.100") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = port,
-                        onValueChange = { port = it },
-                        label = { Text("Port") },
-                        singleLine = true,
-                        isError = !isValidPort(port),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = user,
-                        onValueChange = { user = it },
-                        label = { Text("Benutzername") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = pass,
-                        onValueChange = { pass = it; formError = null },
-                        label = { Text("Passwort") },
-                        singleLine = true,
-                        visualTransformation = if (showPass) {
-                            VisualTransformation.None
-                        } else {
-                            PasswordVisualTransformation()
-                        },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        trailingIcon = {
-                            TextButton(onClick = { showPass = !showPass }) {
-                                Text(if (showPass) "Verbergen" else "Anzeigen", fontSize = 12.sp)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        when (step) {
+                            1 -> {
+                                if (method == "qr") {
+                                    OutlinedButton(
+                                        onClick = {
+                                            val options = ScanOptions().apply {
+                                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                                setPrompt("QR-Code aus der PC-Weboberfläche scannen")
+                                                setBeepEnabled(false)
+                                                setOrientationLocked(false)
+                                            }
+                                            scanLauncher.launch(options)
+                                        },
+                                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                                        shape = RoundedCornerShape(16.dp)
+                                    ) {
+                                        Text("QR-Code vom PC scannen")
+                                    }
+                                    scanMessage?.let {
+                                        Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = name,
+                                    onValueChange = { name = it },
+                                    label = { Text("Name (z. B. Wohnzimmer-PC)") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = host,
+                                    onValueChange = { host = it; testResult = null },
+                                    label = { Text("IP des PCs") },
+                                    placeholder = { Text("192.168.1.100") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = port,
+                                    onValueChange = { port = it; testResult = null },
+                                    label = { Text("Port") },
+                                    singleLine = true,
+                                    isError = port.isNotBlank() && !isValidPort(port),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                if (method == "manual") {
+                                    Button(
+                                        onClick = ::testConnection,
+                                        enabled = connectionReady && !testing,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(16.dp)
+                                    ) {
+                                        if (testing) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        } else {
+                                            Text("Verbindung testen")
+                                        }
+                                    }
+                                    testResult?.let {
+                                        Text(
+                                            text = it,
+                                            fontSize = 12.sp,
+                                            color = if (it.startsWith("Erreichbar")) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.error
+                                            }
+                                        )
+                                    }
+                                }
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = pass2,
-                        onValueChange = { pass2 = it; formError = null },
-                        label = { Text("Passwort wiederholen") },
-                        singleLine = true,
-                        isError = pass2.isNotEmpty() && pass != pass2,
-                        visualTransformation = if (showPass) {
-                            VisualTransformation.None
-                        } else {
-                            PasswordVisualTransformation()
-                        },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                    OutlinedTextField(
-                        value = mac,
-                        onValueChange = { mac = it; formError = null },
-                        label = { Text("MAC-Adresse (für WoL)") },
-                        placeholder = { Text("AA:BB:CC:DD:EE:FF") },
-                        singleLine = true,
-                        isError = formError?.startsWith("MAC") == true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = broadcast,
-                        onValueChange = { broadcast = it },
-                        label = { Text("Broadcast-Adresse (WoL)") },
-                        placeholder = { Text("255.255.255.255") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = "Standard-Timer beim Herunterfahren",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                    DelayChips(selected = defaultDelay, onSelect = { defaultDelay = it })
-                    formError?.let {
-                        Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            2 -> {
+                                Text(
+                                    text = "Wake-on-LAN (WoL) einschalten?",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Nur zuverlässig mit Ethernet-Kabel. Leer lassen, wenn du den PC nicht per Handy einschalten willst.",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                                OutlinedTextField(
+                                    value = mac,
+                                    onValueChange = { mac = it; formError = null },
+                                    label = { Text("MAC-Adresse (für WoL)") },
+                                    placeholder = { Text("AA:BB:CC:DD:EE:FF") },
+                                    singleLine = true,
+                                    isError = !isValidMac(mac),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = broadcast,
+                                    onValueChange = { broadcast = it },
+                                    label = { Text("Broadcast-Adresse (WoL)") },
+                                    placeholder = { Text("255.255.255.255") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            3 -> {
+                                OutlinedTextField(
+                                    value = user,
+                                    onValueChange = { user = it },
+                                    label = { Text("Benutzername") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = pass,
+                                    onValueChange = { pass = it; formError = null },
+                                    label = { Text("Passwort") },
+                                    singleLine = true,
+                                    visualTransformation = if (showPass) {
+                                        VisualTransformation.None
+                                    } else {
+                                        PasswordVisualTransformation()
+                                    },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    trailingIcon = {
+                                        TextButton(onClick = { showPass = !showPass }) {
+                                            Text(if (showPass) "Verbergen" else "Anzeigen", fontSize = 12.sp)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = pass2,
+                                    onValueChange = { pass2 = it; formError = null },
+                                    label = { Text("Passwort wiederholen") },
+                                    singleLine = true,
+                                    isError = pass2.isNotEmpty() && pass != pass2,
+                                    visualTransformation = if (showPass) {
+                                        VisualTransformation.None
+                                    } else {
+                                        PasswordVisualTransformation()
+                                    },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            else -> {
+                                Text(
+                                    text = "Alles bereit. Gespeichert wird:",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Name: ${name.trim().ifBlank { "PC" }}\n" +
+                                        "Verbindung: ${host.trim()}:${port.trim()}\n" +
+                                        "WoL: ${mac.trim().ifBlank { "aus" }}\n" +
+                                        "Anmeldung: ${user.trim().ifBlank { "ohne (nur lokal)" }}",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    lineHeight = 20.sp
+                                )
+                            }
+                        }
+                        formError?.let {
+                            Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (step > 1) {
+                        OutlinedButton(
+                            onClick = { step--; formError = null },
+                            modifier = Modifier.weight(1f).height(52.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("Zurück")
+                        }
                     }
                     Button(
                         onClick = {
                             when {
-                                pass.isNotEmpty() && pass != pass2 -> {
-                                    formError = "Passwörter stimmen nicht überein"
+                                step == 1 && !connectionReady -> {
+                                    formError = "Bitte gültige IP und Port angeben"
                                 }
-                                !isValidMac(mac) -> {
+                                step == 2 && !isValidMac(mac) -> {
                                     formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
                                 }
-                                else -> {
-                                    formError = null
-                                    onSave(
-                                        profile.copy(
-                                            name = name.trim().ifBlank { "PC" },
-                                            host = host.trim(),
-                                            port = port.trim(),
-                                            user = user.trim(),
-                                            pass = pass,
-                                            mac = mac.trim(),
-                                            broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
-                                            defaultDelay = defaultDelay,
-                                        )
-                                    )
+                                step == 3 && pass.isNotEmpty() && pass != pass2 -> {
+                                    formError = "Passwörter stimmen nicht überein"
                                 }
+                                step < 4 -> { formError = null; step++ }
+                                else -> save()
                             }
                         },
-                        enabled = valid,
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                        enabled = step != 1 || connectionReady,
+                        modifier = Modifier.weight(1f).height(52.dp),
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        Text("Speichern", fontSize = 16.sp)
+                        Text(if (step == 4) "Speichern" else "Weiter", fontSize = 16.sp)
                     }
-                    if (onCancel != null) {
-                        TextButton(
-                            onClick = onCancel,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Abbrechen")
-                        }
+                }
+                if (onCancel != null) {
+                    TextButton(
+                        onClick = onCancel,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Abbrechen")
                     }
                 }
             }

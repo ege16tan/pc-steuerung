@@ -2,6 +2,30 @@ package com.example.pcsteuerung
 
 import org.json.JSONObject
 
+data class PcSetupQr(
+    val name: String,
+    val host: String,
+    val port: Int,
+)
+
+/** Liest nur die Verbindungsdaten eines PC-Steuerung-QR-Codes ein. */
+fun parsePcSetupQr(raw: String): PcSetupQr? {
+    val json = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+    if (json.optString("app") != "pc-steuerung" || json.optInt("version") != 1) return null
+
+    val host = json.optString("host").trim()
+    val octets = host.split('.')
+    if (octets.size != 4 || octets.any { part ->
+            part.isEmpty() || part.length > 3 || part.toIntOrNull()?.let { it in 0..255 } != true
+        }
+    ) return null
+
+    val port = json.optInt("port", -1)
+    if (port !in 1..65535) return null
+    val name = json.optString("name").trim().ifBlank { "PC" }
+    return PcSetupQr(name = name, host = host, port = port)
+}
+
 /**
  * Reine Hilfsfunktionen ohne Android-Abhaengigkeiten. Dadurch lassen sie
  * sich mit einfachen JVM-Unit-Tests pruefen.

@@ -22,8 +22,8 @@ android {
         applicationId = "com.example.pcsteuerung"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.9.2"
+        versionCode = 14
+        versionName = "0.9.3"
     }
 
     signingConfigs {
@@ -74,6 +74,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.core:core-ktx:1.16.0")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
