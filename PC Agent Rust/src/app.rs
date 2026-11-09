@@ -1,8 +1,8 @@
 //! Zentraler Zustand des Agenten.
 //!
-//! Gleich wie der Python-Agent: Die Zugangsdaten liegen neben der EXE in
-//! `credentials.json`, das Ereignis-Log ist ein Ringpuffer (neueste zuerst)
-//! und ein geplantes Herunterfahren wird als Zeitpunkt (Unix-Epoche) gespeichert.
+//! Gleich wie der Python-Agent: Zugangsdaten und Log liegen im gemeinsamen
+//! Datenordner, das Ereignis-Log ist ein Ringpuffer (neueste zuerst) und ein
+//! geplantes Herunterfahren wird als Zeitpunkt (Unix-Epoche) gespeichert.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -52,9 +52,9 @@ pub struct App {
     pub inner: Mutex<InnerApp>,
     /// Env `PC_AGENT_TOKEN` beim Start (feste Quelle, wie im Python-Agent).
     pub token: String,
-    /// Logdatei neben der EXE (wie `Path(__file__).with_name(...)`).
+    /// Logdatei im gemeinsamen Datenordner.
     pub log_file: PathBuf,
-    /// Zugangsdatei neben der EXE.
+    /// Zugangsdaten im gemeinsamen Datenordner.
     pub creds_file: PathBuf,
 }
 
@@ -91,11 +91,23 @@ pub fn load_credentials(path: &Path) -> Option<Credentials> {
 }
 
 /// Restsekunden eines geplanten Herunterfahrens (reine Funktion fuer Tests).
-/// Python: max(0, round(at - time.time()).
+/// Python: max(0, round(at - time.time())) mit ties-to-even.
 pub fn remaining_seconds(pending_at: Option<f64>, now: f64) -> i64 {
     match pending_at {
         None => 0,
-        Some(at) => ((at - now).max(0.0)).round() as i64,
+        Some(at) => {
+            let remaining = (at - now).max(0.0);
+            let whole = remaining.floor();
+            let fraction = remaining - whole;
+            let rounded = if fraction < 0.5 {
+                whole
+            } else if fraction > 0.5 || (whole as i64) % 2 != 0 {
+                whole + 1.0
+            } else {
+                whole
+            };
+            rounded as i64
+        }
     }
 }
 

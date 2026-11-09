@@ -79,7 +79,11 @@ fn rotated_path(file: &Path) -> std::path::PathBuf {
 pub fn tail_lines(file: &Path, lines: usize) -> Result<String, String> {
     let bytes = std::fs::read(file).map_err(|error| format!("{error}"))?;
     // Paritaet: Python liest mit errors="replace"; wir wandeln vermeidlich.
-    let content = String::from_utf8_lossy(&bytes).into_owned();
+    // Python oeffnet Textdateien mit universal-newline: CRLF und einzelnes CR
+    // werden beim Lesen in LF umgewandelt.
+    let content = String::from_utf8_lossy(&bytes)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     let tail: Vec<&str> = content.split_inclusive('\n').rev().take(lines).collect();
     Ok(tail.into_iter().rev().collect())
 }

@@ -11,14 +11,14 @@ Android-App und zur Web-Oberflaeche.
 | Start | `python -m uvicorn main:app` | `pc-agent.exe` |
 | Abhaengigkeiten | Python + pip (requirements.txt) | keine (alles im Binary) |
 | Bindung | 0.0.0.0:8000 | 0.0.0.0:8000 (`PC_AGENT_PORT` optional) |
-| Zugangsdaten | `PC App/credentials.json` | `credentials.json` neben der EXE |
-| Log | `PC App/agent.log` (+Rotation .log.1) | `agent.log` neben der EXE (+Rotation) |
+| Zugangsdaten | `PC App/credentials.json` | gemeinsamer Pfad `PC App/credentials.json` |
+| Log | `PC App/agent.log` (+Rotation .log.1) | gemeinsamer Pfad `PC App/agent.log` (+Rotation) |
 | PBKDF2 | sha256, 200000 Iterationen | identisch -> **bestehendes `credentials.json` bleibt gueltig** |
 | Web-Oberflaeche | `PAGE` in `main.py` | `src/page.html` (1:1 identisch) |
 | Tray | gemeinsame Tray-Steuerung im Projektstamm | gemeinsame Tray-Steuerung im Projektstamm |
 | Autostart | `install-autostart.ps1` | `install-autostart.ps1` |
 
-## Endpunkte (identisch wie bisher)
+## API-Endpunkte
 
 `GET /`, `GET /setup-status`, `POST /setup`, `POST /mode?simulate=`,
 `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
@@ -27,6 +27,10 @@ Android-App und zur Web-Oberflaeche.
 Zusätzlich bieten beide Varianten `GET /agent-version` und
 `POST /agent-version?version=rust|python` zum Anzeigen und Wechseln der aktiven
 Agent-Version.
+
+Die Routen, Erfolgsantworten und fachlichen Aktionen entsprechen dem Python-
+Agenten. Bei ungueltigen Eingaben unterscheidet sich das genaue 422-Fehlerformat
+noch, weil FastAPI/Pydantic und Axum ihre Validierungsfehler anders darstellen.
 
 Anmeldung wie beim Python-Agent: Basic Auth fuer LAN-Zugriffe, localhost
 ohne Login, `X-Token`/`PC_AGENT_TOKEN` als Fallback, Ersteinrichtung nur
@@ -60,11 +64,11 @@ Build-Ordner an. Das ist nur fuer `x86_64-pc-windows-gnu` aktiv.
   Cargo nutzt er eine vorhandene `pc-agent.exe`. Der Standardstart aus dem
   Projektstamm ist `start-agent.bat`;
   in der Web-UI oder im Tray kann zwischen Rust und Python gewechselt werden.
-- Bestehende Zugangsdaten werden beim ersten Start automatisch aus
-  `PC App\credentials.json` uebernommen. Sonst einmalig Ersteinrichtung unter
-  <http://localhost:8000/>.
-- Wer die EXE direkt startet (z. B. aus `target\release\`), bekommt die
-  Datendateien neben genau dieser EXE.
+- Rust und Python lesen und schreiben im gemeinsamen Projekt dieselben Dateien
+  unter `PC App\`. Aeltere Rust-Dateien neben der EXE werden beim Start
+  uebernommen, wenn dort noch keine gemeinsamen Daten liegen.
+- Ohne `PC App\`-Ordner (z. B. in einem eigenstaendigen Rust-Checkout) liegen
+  die Datendateien neben der EXE.
 
 ## Tray-Steuerung (Taskleiste)
 

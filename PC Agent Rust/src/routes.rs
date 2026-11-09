@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
@@ -50,8 +50,10 @@ pub async fn method_not_allowed() -> Response {
 }
 
 fn first_query<'a>(query: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    // Starlette QueryParams.get liefert bei mehrfachen Schluesseln den letzten Wert.
     query
         .iter()
+        .rev()
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.as_str())
 }
@@ -234,6 +236,7 @@ pub async fn switch_agent_version(
         ])
         .arg(&manager)
         .args(["-Action", "switch", "-Version", version, "-Port", "8000"]);
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -245,11 +248,7 @@ pub async fn switch_agent_version(
             format!("Versionswechsel fehlgeschlagen: {error}"),
         );
     }
-    (
-        StatusCode::ACCEPTED,
-        Json(json!({ "ok": true, "selected": version, "switching": true })),
-    )
-        .into_response()
+    Json(json!({ "ok": true, "selected": version, "switching": true })).into_response()
 }
 
 // ---------------- Endpunkte mit Anmeldung (Auth) ----------------

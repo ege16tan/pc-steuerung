@@ -20,7 +20,7 @@ mod routes;
 mod wol;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use routes::SharedApp;
 
@@ -37,12 +37,16 @@ fn main() {
         .filter(|value| *value > 0)
         .unwrap_or(8000);
 
-    // Wie der Python-Agent: Dateien neben der Ausfuehrungs-EXE.
-    let base_dir = std::env::current_exe()
+    // Im gemeinsamen Projekt verwenden beide Implementierungen dieselben
+    // Zugangsdaten und dieselbe Logdatei unter `PC App/`. Ein eigenstaendig
+    // verteiltes Rust-Repo ohne diesen Ordner bleibt portabel neben der EXE.
+    let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
-    let shared: SharedApp = std::sync::Arc::new(app::App::new(token.clone(), simulate, &base_dir));
+    let data_dir = app_data_dir(&exe_dir);
+    migrate_legacy_data(&exe_dir, &data_dir);
+    let shared: SharedApp = std::sync::Arc::new(app::App::new(token.clone(), simulate, &data_dir));
 
     let credentials_missing = {
         let guard = shared.inner.lock().expect("Zustands-Sperre");
@@ -50,7 +54,7 @@ fn main() {
     };
     if credentials_missing && token.is_empty() {
         println!("Hinweis: Noch keine Zugangsdaten eingerichtet.");
-        println!("Beim ersten Start die Web-Oberflaeche oeffnen: http://localhost:8000/");
+        println!("Beim ersten Start die Web-Oberflaeche oeffnen: http://localhost:{port}/");
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -58,6 +62,44 @@ fn main() {
         .build()
         .expect("Tokio-Laufzeitumgebung");
     runtime.block_on(run_server(shared, simulate, port));
+}
+
+/// Findet den gemeinsamen Python-Datenordner beim Start aus Projekt- und
+/// Build-Ordnern. Bei einem spaeter eigenstaendigen Rust-Repo greift der
+/// portable Fallback auf den Ordner der EXE.
+fn app_data_dir(exe_dir: &Path) -> PathBuf {
+    exe_dir
+        .ancestors()
+        .map(|parent| parent.join("PC App"))
+        .find(|candidate| candidate.is_dir())
+        .unwrap_or_else(|| exe_dir.to_path_buf())
+}
+
+/// Uebernimmt aeltere Rust-Dateien neben der EXE, ohne vorhandene gemeinsame
+/// Zugangsdaten oder Logs zu ueberschreiben.
+fn migrate_legacy_data(exe_dir: &Path, data_dir: &Path) {
+    if exe_dir == data_dir {
+        return;
+    }
+    for name in ["credentials.json", "agent.log"] {
+        let source = exe_dir.join(name);
+        let destination = data_dir.join(name);
+        if !source.is_file() {
+            continue;
+        }
+        let should_copy = if name == "credentials.json" && destination.is_file() {
+            let source_time = std::fs::metadata(&source).and_then(|m| m.modified()).ok();
+            let destination_time = std::fs::metadata(&destination)
+                .and_then(|m| m.modified())
+                .ok();
+            matches!((source_time, destination_time), (Some(source), Some(target)) if source > target)
+        } else {
+            !destination.exists()
+        };
+        if should_copy {
+            let _ = std::fs::copy(source, destination);
+        }
+    }
 }
 
 async fn run_server(shared: SharedApp, simulate: bool, port: u16) {

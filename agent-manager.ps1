@@ -92,6 +92,9 @@ function Stop-Agent {
 }
 
 function Sync-Credentials([string]$targetDir) {
+    # In einem eigenstaendigen Rust-Repo gibt es keinen Python-Datenordner;
+    # dort bleiben Rust-Zugangsdaten bei der EXE.
+    if (-not (Test-Path -LiteralPath $targetDir -PathType Container)) { return }
     $pythonCredentials = Join-Path $pythonDir 'credentials.json'
     $rustCredentials = Join-Path $rustDir 'credentials.json'
     $sources = @($pythonCredentials, $rustCredentials) |
@@ -138,7 +141,9 @@ function Prepare-Agent([string]$targetVersion) {
     } elseif (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
         throw 'Rust-Agent ist noch nicht gebaut und Cargo wurde nicht gefunden.'
     }
-    Sync-Credentials $rustDir
+    # Python und Rust verwenden im gemeinsamen Repo PC App/credentials.json.
+    # Dies uebernimmt auch eine vorhandene, neuere Rust-Datei vor dem Wechsel.
+    Sync-Credentials $pythonDir
 }
 
 function Start-Agent([string]$targetVersion) {
