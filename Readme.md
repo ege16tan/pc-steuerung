@@ -29,6 +29,8 @@
 | 🐞 **Debug-Modus** | Simulation ↔ Echtzeit umschalten (für Tests) |
 | 🪟 **Tray-Steuerung** | Agent starten/stoppen, Quick-Action-Popup unter Windows |
 | 🔐 **Login** | Benutzername/Passwort (Basic Auth) für LAN-Zugriffe |
+| 📦 **Windows-Installer** | Rust-Agent pro Benutzer installieren, Autostart/Tray auswählen |
+| 📷 **QR-Einrichtung** | PC-Adresse auf dem Bildschirm zeigen und in Android scannen |
 
 ## Architektur
 
@@ -66,6 +68,12 @@ Der gemeinsame Manager startet standardmäßig den Rust-Agenten. Danach
 festlegen. In der Web-UI kann zwischen Rust und Python gewechselt werden.
 Die Auswahl bleibt für den nächsten Start gespeichert. Für den Python-Agenten
 zuerst `python -m pip install -r "PC App/requirements.txt"` ausführen.
+
+Der Installer wird mit Inno Setup 6/7 und `installer\build-installer.ps1`
+gebaut. Er installiert pro Benutzer, kann Agent und Tray bei der Anmeldung
+starten und öffnet danach die PC-Einrichtung. In Android „QR-Code vom PC
+scannen“ wählen. Der QR-Code enthält nur PC-Name, IP und Port; Zugangsdaten und
+WoL-MAC werden anschließend im Handy-Formular eingetragen.
 
 Optional:
 
@@ -125,6 +133,8 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 | GET | `/events` | letzte 50 Kommandos (mit Datum/Uhrzeit) |
 | GET | `/log?lines=200` | letzte Zeilen der Logdatei (Klartext) |
 | GET | `/setup-status` | ob Zugangsdaten noch fehlen |
+| GET | `/pairing-info` | PC-Name, LAN-IP und Port für die Einrichtung |
+| GET | `/pairing-qr.svg` | QR-Code ohne Zugangsdaten |
 | POST | `/setup` | Zugangsdaten anlegen (nur localhost) |
 | POST | `/mode?simulate=true\|false` | Simulation/Echtzeit umschalten |
 | GET | `/agent-version` | aktive und bevorzugte Agent-Version |
@@ -145,6 +155,7 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 ```
 Android App/   Kotlin-/Jetpack-Compose-App inkl. Homescreen-Widget
 PC App/        FastAPI-Agent, Tray-Steuerung, Autostart-Skripte
+installer/     Inno-Setup-Skript und Build-/Setup-Helfer
 docs/          Planung und Hintergründe
 ```
 

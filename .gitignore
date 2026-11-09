@@ -10,6 +10,8 @@ PC App/credentials.json
 # Lokale OpenCode/Codex-Konfiguration
 opencode.json
 Android App/.codex/
+Android App/.kotlin/
+.codex-remote-attachments/
 
 # Lokale Logs
 PC App/agent.log
@@ -20,3 +22,4 @@ Thumbs.db
 .DS_Store
 .vscode/
 *.log
+dist/

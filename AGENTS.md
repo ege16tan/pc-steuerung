@@ -33,7 +33,8 @@ Status).
 
 - Endpunkte: `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
-  `GET /ping`, `GET /setup-status`, `POST /setup`, `POST /mode?simulate=`, `GET /`.
+  `GET /ping`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
+  `POST /setup`, `POST /mode?simulate=`, `GET /`.
 - Agent-Auswahl: `GET /agent-version`, `POST /agent-version?version=python|rust`;
   Rust ist der Standard. Die gemeinsame Auswahl liegt unter `%LOCALAPPDATA%`.
 - Logdatei: `PC App/agent.log` (Datum/Uhrzeit, Rotation nach `agent.log.1`,
@@ -65,6 +66,10 @@ Status).
   Manifest-Receiver) nutzt RemoteViews und `goAsync()` – kein Compose im Widget.
 - Android-Build: `cd "Android App"` → `gradlew.bat assembleDebug`
   (APK: `app/build/outputs/apk/debug/app-debug.apk`).
+- Windows-Installer: Rust-Build + Inno Setup mit `installer/build-installer.ps1`;
+  Installation pro Benutzer, ohne Admin-Rechte.
+- Android-Ersteinrichtung: PC-Web-UI zeigt einen QR-Code mit PC-Name/IP/Port;
+  Android scannt ihn. Zugangsdaten und WoL-MAC werden nie im QR-Code abgelegt.
 - WoL: nur zuverlässig mit Ethernet; BIOS/UEFI WoL-Einstellungen nötig.
 
 ## Testen

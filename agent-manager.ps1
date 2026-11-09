@@ -112,6 +112,9 @@ function Sync-Credentials([string]$targetDir) {
 
 function Prepare-Agent([string]$targetVersion) {
     if ($targetVersion -eq 'python') {
+        if (-not (Test-Path -LiteralPath (Join-Path $pythonDir 'main.py') -PathType Leaf)) {
+            throw 'Python-Agentdateien wurden nicht installiert. Installiere die optionale Python-Komponente oder waehle Rust.'
+        }
         if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
             throw 'Python wurde nicht gefunden. Installiere Python oder waehle Rust.'
         }
@@ -125,7 +128,8 @@ function Prepare-Agent([string]$targetVersion) {
         $cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
         if ($cargoCommand) { $cargo = $cargoCommand.Source }
     }
-    if (Test-Path -LiteralPath $cargo) {
+    $cargoManifest = Join-Path $rustDir 'Cargo.toml'
+    if ((Test-Path -LiteralPath $cargo) -and (Test-Path -LiteralPath $cargoManifest -PathType Leaf)) {
         Write-ManagerLog 'Building Rust agent.'
         Push-Location $rustDir
         try {
@@ -170,7 +174,14 @@ function Start-Agent([string]$targetVersion) {
 
     if ($targetVersion -eq 'python') {
         $arguments = "-m uvicorn main:app --host 0.0.0.0 --port $Port --app-dir `"$pythonDir`""
-        Start-Process -FilePath 'python' -ArgumentList $arguments -WorkingDirectory $pythonDir -WindowStyle Hidden | Out-Null
+        $oldPort = $env:PC_AGENT_PORT
+        try {
+            $env:PC_AGENT_PORT = "$Port"
+            Start-Process -FilePath 'python' -ArgumentList $arguments -WorkingDirectory $pythonDir -WindowStyle Hidden | Out-Null
+        } finally {
+            if ($null -eq $oldPort) { Remove-Item Env:PC_AGENT_PORT -ErrorAction SilentlyContinue }
+            else { $env:PC_AGENT_PORT = $oldPort }
+        }
     } else {
         if ($script:stagedRustExe -and $replaceRust) {
             Copy-Item -LiteralPath $script:stagedRustExe -Destination $exe -Force
