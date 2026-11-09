@@ -20,7 +20,8 @@ Android-App und zur Web-Oberflaeche.
 
 ## API-Endpunkte
 
-`GET /`, `GET /setup-status`, `POST /setup`, `POST /mode?simulate=`,
+`GET /`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
+`POST /setup`, `POST /mode?simulate=`,
 `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
 `POST /power-plan?name=`, `POST /wake?mac=&port=`, `POST /ping`,
 `GET /events`, `GET /log?lines=`.
@@ -69,6 +70,25 @@ Build-Ordner an. Das ist nur fuer `x86_64-pc-windows-gnu` aktiv.
   uebernommen, wenn dort noch keine gemeinsamen Daten liegen.
 - Ohne `PC App\`-Ordner (z. B. in einem eigenstaendigen Rust-Checkout) liegen
   die Datendateien neben der EXE.
+
+## Installer und Handy-Setup
+
+Der Inno-Setup-Installer wird pro Benutzer installiert und braucht keine
+Administratorrechte. Er kann Agent und Tray bei der Windows-Anmeldung starten;
+die Python-Alternative ist optional und benoetigt eine separat installierte
+Python-Laufzeit.
+
+Mit Inno Setup 6/7:
+
+```
+powershell -ExecutionPolicy Bypass -File .\installer\build-installer.ps1
+```
+
+Der Build erstellt `dist\PC-Steuerung-Setup-0.9.3.exe`. Nach der Installation
+oeffnet der Assistent die Web-Einrichtung. Der QR-Code uebertraegt ausschliesslich
+PC-Name, LAN-IP und Port; Zugangsdaten und WoL-MAC bleiben ausserhalb des Codes.
+In der Android-App `QR-Code vom PC scannen` waehlen und danach Login und MAC
+eintragen.
 
 ## Tray-Steuerung (Taskleiste)
 

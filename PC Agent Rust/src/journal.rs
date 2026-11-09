@@ -118,7 +118,7 @@ mod tests {
     fn events_ringpuffer_neueste_zuerst() {
         let dir = std::env::temp_dir().join(format!("pcagent-puffer-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let app = App::new(String::new(), true, &dir);
+        let app = App::new(String::new(), true, &dir, 8000);
         let mut inner = InnerApp {
             simulate: true,
             sim_plan: None,
@@ -126,6 +126,7 @@ mod tests {
             pending_seconds: 0,
             events: VecDeque::new(),
             credentials: None,
+            token_credentials: None,
         };
         for index in 0..60 {
             log_event(&app, &mut inner, "aktion", &index.to_string(), true);

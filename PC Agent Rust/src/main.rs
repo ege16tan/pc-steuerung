@@ -16,6 +16,7 @@ mod auth;
 mod commands;
 mod journal;
 mod page;
+mod pairing;
 mod routes;
 mod wol;
 
@@ -46,7 +47,8 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("."));
     let data_dir = app_data_dir(&exe_dir);
     migrate_legacy_data(&exe_dir, &data_dir);
-    let shared: SharedApp = std::sync::Arc::new(app::App::new(token.clone(), simulate, &data_dir));
+    let shared: SharedApp =
+        std::sync::Arc::new(app::App::new(token.clone(), simulate, &data_dir, port));
 
     let credentials_missing = {
         let guard = shared.inner.lock().expect("Zustands-Sperre");
@@ -106,6 +108,10 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
     let router = axum::Router::new()
         .route("/", axum::routing::get(routes::index))
         .route("/setup-status", axum::routing::get(routes::setup_status))
+        .route("/network-adapters", axum::routing::get(routes::network_adapters_ep))
+        .route("/device-setup", axum::routing::post(routes::device_setup))
+        .route("/pairing-info", axum::routing::get(routes::pairing_info))
+        .route("/pairing-qr.svg", axum::routing::get(routes::pairing_qr))
         .route("/setup", axum::routing::post(routes::setup))
         .route(
             "/agent-version",

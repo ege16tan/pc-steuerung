@@ -21,6 +21,27 @@ pub struct Credentials {
     pub hash: String,
 }
 
+/// Token-Zugangsdaten: nur Salt und PBKDF2-Hash werden gespeichert.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TokenCredentials {
+    pub salt: String,
+    pub hash: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeviceSettings {
+    pub name: String,
+    pub wol_enabled: bool,
+    pub mac: String,
+}
+
+impl Default for DeviceSettings {
+    fn default() -> Self {
+        Self { name: String::new(), wol_enabled: false, mac: String::new() }
+    }
+}
+
 impl Credentials {
     /// Wie der Python-Agent: user, salt und hash muessen vorhanden sein.
     pub fn is_usable(&self) -> bool {
@@ -45,24 +66,34 @@ pub struct InnerApp {
     pub pending_seconds: i64,
     pub events: VecDeque<Event>,
     pub credentials: Option<Credentials>,
+    pub token_credentials: Option<TokenCredentials>,
 }
 
 /// Gesamter Agenten-Zustand (wird per Arc geteilt).
 pub struct App {
     pub inner: Mutex<InnerApp>,
+    /// HTTP-Port fuer die Verbindungs-QR-Anzeige.
+    pub port: u16,
     /// Env `PC_AGENT_TOKEN` beim Start (feste Quelle, wie im Python-Agent).
     pub token: String,
     /// Logdatei im gemeinsamen Datenordner.
     pub log_file: PathBuf,
     /// Zugangsdaten im gemeinsamen Datenordner.
     pub creds_file: PathBuf,
+    pub token_file: PathBuf,
+    pub device_file: PathBuf,
+    pub device_settings: Mutex<DeviceSettings>,
 }
 
 impl App {
-    pub fn new(token: String, simulate: bool, base_dir: &Path) -> App {
+    pub fn new(token: String, simulate: bool, base_dir: &Path, port: u16) -> App {
         let creds_file = base_dir.join("credentials.json");
         let log_file = base_dir.join("agent.log");
         let credentials = load_credentials(&creds_file);
+        let token_file = base_dir.join("token.json");
+        let token_credentials = load_token_credentials(&token_file);
+        let device_file = base_dir.join("device.json");
+        let device_settings = load_device_settings(&device_file);
         App {
             inner: Mutex::new(InnerApp {
                 simulate,
@@ -71,12 +102,30 @@ impl App {
                 pending_seconds: 0,
                 events: VecDeque::new(),
                 credentials,
+                token_credentials,
             }),
+            port,
             token,
             log_file,
             creds_file,
+            token_file,
+            device_file,
+            device_settings: Mutex::new(device_settings),
         }
     }
+}
+
+fn load_token_credentials(path: &Path) -> Option<TokenCredentials> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let credentials: TokenCredentials = serde_json::from_str(&text).ok()?;
+    if credentials.salt.is_empty() || credentials.hash.is_empty() { None } else { Some(credentials) }
+}
+
+fn load_device_settings(path: &Path) -> DeviceSettings {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 /// Laedt `credentials.json`; None bei Lesefehler/leeren Feldern (Paritaet).

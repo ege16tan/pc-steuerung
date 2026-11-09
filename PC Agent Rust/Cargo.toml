@@ -17,6 +17,7 @@ hmac = "0.12"
 subtle = "2"
 getrandom = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [patch.crates-io]
 windows-link = { path = "patches/windows-link" }

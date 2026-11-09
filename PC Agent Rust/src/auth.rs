@@ -15,7 +15,7 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use crate::app::{Credentials, App};
+use crate::app::{Credentials, TokenCredentials, App};
 
 /// Iterationen wie der Python-Agent (200000); SHA-256 mit 32-Byte-Ausgabe.
 pub const PBKDF2_ROUNDS: u32 = 200_000;
@@ -83,6 +83,17 @@ pub fn check_basic(credentials: &Credentials, authorization: &str) -> bool {
     difference == 0
 }
 
+fn check_token(credentials: &TokenCredentials, token: &str) -> bool {
+    let Some(salt) = hex_decode(&credentials.salt) else { return false; };
+    let Some(expected) = hex_decode(&credentials.hash) else { return false; };
+    if expected.len() != HASH_LEN { return false; }
+    let mut actual = [0u8; HASH_LEN];
+    pbkdf2_hmac::<Sha256>(token.as_bytes(), &salt, PBKDF2_ROUNDS, &mut actual);
+    let mut difference = 0u8;
+    for index in 0..HASH_LEN { difference |= actual[index] ^ expected[index]; }
+    difference == 0
+}
+
 /// Konstanter Zeitvergleich fuer den Token-Fallback (wie compare_digest).
 fn tokens_match(actual: &str, expected: &str) -> bool {
     actual.as_bytes().ct_eq(expected.as_bytes()).into()
@@ -147,9 +158,9 @@ impl FromRequestParts<Arc<App>> for Auth {
             return Ok(Auth);
         }
         // 2) Anmeldung per Benutzername/Passwort (Basic Auth).
-        let credentials = {
+        let (credentials, token_credentials) = {
             let guard = app.inner.lock().expect("Zustands-Sperre");
-            guard.credentials.clone()
+            (guard.credentials.clone(), guard.token_credentials.clone())
         };
         if let Some(cursor) = credentials {
             let authorization = header_str(parts, AUTHORIZATION);
@@ -157,6 +168,10 @@ impl FromRequestParts<Arc<App>> for Auth {
                 return Err(AuthDenied::missing_login());
             }
             return Ok(Auth);
+        }
+        if let Some(credentials) = token_credentials {
+            let token = header_str(parts, "x-token");
+            return if check_token(&credentials, &token) { Ok(Auth) } else { Err(AuthDenied::wrong_token()) };
         }
         // 3) Fallback: alter Token-Schutz.
         if app.token.is_empty() {

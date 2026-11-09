@@ -11,15 +11,17 @@ use std::process::{Command, Stdio};
 
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::StatusCode;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::response::{Html, IntoResponse, Json, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::{remaining_seconds, App};
+use crate::app::{remaining_seconds, App, DeviceSettings, TokenCredentials};
 use crate::auth::{create_credentials, Auth};
 use crate::commands::{detect_active_plan, run, PLANS};
 use crate::journal::{log_event, tail_lines};
 use crate::page::PAGE;
+use crate::pairing::{lan_ipv4, network_adapters, payload_json};
 use crate::wol::{configured_broadcast, parse_mac, send_wol};
 
 pub type SharedApp = Arc<App>;
@@ -79,8 +81,23 @@ fn snapshot(app: &App) -> Snapshot {
 /// Requestbody fuer /setup (wie BaseModel SetupRequest im Python-Agent).
 #[derive(Debug, Deserialize)]
 pub struct SetupRequest {
+    #[serde(default = "default_auth_mode")]
+    pub auth_mode: String,
+    #[serde(default)]
     pub user: String,
+    #[serde(default)]
     pub password: String,
+}
+
+fn default_auth_mode() -> String { "basic".to_string() }
+
+#[derive(Debug, Deserialize)]
+pub struct DeviceSetupRequest {
+    pub name: String,
+    #[serde(default)]
+    pub wol_enabled: bool,
+    #[serde(default)]
+    pub mac: String,
 }
 
 /// Pydantic akzeptiert true/false/1/0/yes/no/on/off (Gross-/Kleinschreibung egal).
@@ -101,9 +118,112 @@ pub async fn index() -> Response {
 pub async fn setup_status(State(app): State<SharedApp>) -> Response {
     let required = {
         let guard = app.inner.lock().expect("Zustands-Sperre");
-        guard.credentials.is_none()
+        guard.credentials.is_none() && guard.token_credentials.is_none() && app.token.is_empty()
     };
     Json(json!({ "required": required })).into_response()
+}
+
+/// GET /pairing-info — QR-Inhalt ohne Geheimnisse fuer das Handy.
+pub async fn pairing_info(State(app): State<SharedApp>) -> Response {
+    let Some(host) = lan_ipv4() else {
+        return Json(json!({
+            "ready": false,
+            "message": "Keine LAN-IPv4-Adresse erkannt."
+        }))
+        .into_response();
+    };
+    let settings = app.device_settings.lock().expect("Setup-Sperre").clone();
+    let name = if settings.name.trim().is_empty() {
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".to_string())
+    } else { settings.name.clone() };
+    let mac = if settings.wol_enabled { Some(settings.mac.as_str()) } else { None };
+    let payload = payload_json(&host, app.port, &name, mac);
+    Json(json!({
+        "ready": true,
+        "host": host,
+        "port": app.port,
+        "name": name,
+        "wol_enabled": settings.wol_enabled,
+        "mac": mac,
+        "payload": payload,
+    }))
+    .into_response()
+}
+
+/// GET /pairing-qr.svg — QR-Code als SVG; enthaelt nur Name, IP und Port.
+pub async fn pairing_qr(State(app): State<SharedApp>) -> Response {
+    let Some(host) = lan_ipv4() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Keine LAN-IPv4-Adresse erkannt".to_string(),
+        );
+    };
+    let settings = app.device_settings.lock().expect("Setup-Sperre").clone();
+    let name = if settings.name.trim().is_empty() {
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".to_string())
+    } else { settings.name.clone() };
+    let mac = if settings.wol_enabled { Some(settings.mac.as_str()) } else { None };
+    let payload = payload_json(&host, app.port, &name, mac);
+    let Ok(code) = qrcode::QrCode::new(payload.as_bytes()) else {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "QR-Code konnte nicht erstellt werden".to_string(),
+        );
+    };
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(256, 256)
+        .build();
+    let mut response = svg.into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("image/svg+xml; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// GET /network-adapters — Suche ist nur lokal im PC-Websetup verfügbar.
+pub async fn network_adapters_ep(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+) -> Response {
+    if !addr.ip().is_loopback() {
+        return error_response(StatusCode::FORBIDDEN, "Nur lokal verfuegbar".to_string());
+    }
+    Json(network_adapters()).into_response()
+}
+
+/// POST /device-setup — speichert Name und optionale WoL-MAC, nur localhost.
+pub async fn device_setup(
+    State(app): State<SharedApp>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    body: Json<DeviceSetupRequest>,
+) -> Response {
+    if !addr.ip().is_loopback() {
+        return error_response(StatusCode::FORBIDDEN, "Einrichtung nur lokal moeglich".to_string());
+    }
+    let name = body.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return error_response(StatusCode::BAD_REQUEST, "PC-Name muss 1 bis 64 Zeichen haben".to_string());
+    }
+    let mac = if body.wol_enabled {
+        let Some(bytes) = parse_mac(&body.mac) else {
+            return error_response(StatusCode::BAD_REQUEST, "MAC-Adresse ungueltig".to_string());
+        };
+        Some(bytes.iter().map(|byte| format!("{byte:02X}")).collect::<Vec<_>>().join(":"))
+    } else { None };
+    let settings = DeviceSettings { name: name.to_string(), wol_enabled: mac.is_some(), mac: mac.unwrap_or_default() };
+    let Ok(serial) = serde_json::to_string_pretty(&settings) else {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Setup konnte nicht serialisiert werden".to_string());
+    };
+    if let Err(error) = std::fs::write(&app.device_file, serial) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Setup konnte nicht gespeichert werden: {error}"));
+    }
+    *app.device_settings.lock().expect("Setup-Sperre") = settings.clone();
+    Json(json!({"ok": true, "name": settings.name, "wol_enabled": settings.wol_enabled, "mac": settings.mac})).into_response()
 }
 
 /// POST /setup — Einrichtung nur am PC (localhost), wie im Python-Agent.
@@ -125,12 +245,36 @@ pub async fn setup(
     // Schon eingerichtet? (wie Python: 409)
     {
         let guard = app.inner.lock().expect("Zustands-Sperre");
-        if guard.credentials.is_some() {
+        if guard.credentials.is_some() || guard.token_credentials.is_some() || !app.token.is_empty() {
             return error_response(
                 StatusCode::CONFLICT,
                 "Zugangsdaten sind bereits eingerichtet".to_string(),
             );
         }
+    }
+    if body.auth_mode == "token" {
+        let mut bytes = [0u8; 32];
+        if let Err(error) = getrandom::getrandom(&mut bytes) {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Token konnte nicht erzeugt werden: {error}"));
+        }
+        let token = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let hashed = match create_credentials("token", &token) {
+            Ok(credentials) => TokenCredentials { salt: credentials.salt, hash: credentials.hash },
+            Err(detail) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
+        };
+        let Ok(serial) = serde_json::to_string_pretty(&hashed) else {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Token konnte nicht gespeichert werden".to_string());
+        };
+        if let Err(error) = std::fs::write(&app.token_file, serial) {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Token konnte nicht gespeichert werden: {error}"));
+        }
+        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        guard.token_credentials = Some(hashed);
+        log_event(&app, &mut guard, "setup", "Token-Zugang eingerichtet", true);
+        return Json(json!({"ok": true, "auth_mode": "token", "token": token})).into_response();
+    }
+    if body.auth_mode != "basic" {
+        return error_response(StatusCode::BAD_REQUEST, "Anmeldeart muss basic oder token sein".to_string());
     }
     let user = body.user.trim().to_string();
     let password = body.password.clone(); // wie Python: nicht getrimmt
