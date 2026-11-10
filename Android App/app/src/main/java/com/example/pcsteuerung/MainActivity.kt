@@ -526,7 +526,11 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                         mac = pairing.mac
                         wolEnabled = true
                     }
-                    scanMessage = "${pairing.name} übernommen. WoL-MAC und Zugangsdaten noch eintragen."
+                    scanMessage = if (pairing.mac != null) {
+                        "${pairing.name} übernommen. Zugangsdaten noch eintragen."
+                    } else {
+                        "${pairing.name} übernommen. WoL-MAC und Zugangsdaten noch eintragen."
+                    }
                     formError = null
                 }
             },
