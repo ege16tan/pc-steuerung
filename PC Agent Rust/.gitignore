@@ -2,9 +2,9 @@
 target/
 pc-agent.exe
 
-# Agent schreibt neben der EXE (wie der Python-Agent neben main.py)
+# Lokale Daten (normalerweise in %LOCALAPPDATA%\PC Steuerung)
 agent.log
 agent.log.1
 credentials.json
-
-__pycache__/
+token.json
+device.json
