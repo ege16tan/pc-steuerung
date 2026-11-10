@@ -1,9 +1,11 @@
 package com.example.pcsteuerung
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -12,6 +14,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -68,17 +77,22 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 
 const val EXTRA_CONFIRM_SHUTDOWN = "confirm_shutdown"
 const val ACTION_SHORTCUT_SHUTDOWN = "com.example.pcsteuerung.action.SHORTCUT_SHUTDOWN"
@@ -299,6 +313,179 @@ fun AppRoot(
     }
 }
 
+/**
+ * Vollbild-QR-Scanner mit CameraX und ML Kit.
+ *
+ * Die fruehere zxing-CaptureActivity nutzt die Camera1-API, die auf Android 17
+ * nicht mehr zuverlaessig funktioniert. CameraX nutzt Camera2; das ML-Kit-Modell
+ * ist eingebettet und braucht weder Play Services noch Internet.
+ */
+@Composable
+private fun QrScannerScreen(
+    title: String,
+    onResult: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    var granted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var permissionAsked by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { result ->
+        granted = result
+        permissionAsked = true
+    }
+
+    LaunchedEffect(Unit) {
+        if (!granted) permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+    BackHandler { onClose() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        if (granted) {
+            CameraQrPreview(onResult = onResult)
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = title,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = onClose) {
+                    Text("Schließen", color = Color.White)
+                }
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            if (granted) {
+                Text(
+                    text = "QR-Code in den Rahmen halten",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.85f),
+                )
+            } else {
+                Text(
+                    text = if (permissionAsked) {
+                        "Kamera-Zugriff wurde nicht erlaubt."
+                    } else {
+                        "Für den Scanner wird die Kamera benötigt."
+                    },
+                    fontSize = 15.sp,
+                    color = Color.White,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                    Text("Kamera erlauben")
+                }
+                TextButton(onClick = onClose) {
+                    Text("Abbrechen", color = Color.White)
+                }
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun CameraQrPreview(onResult: (String) -> Unit) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+    val resultDelivered = remember { AtomicBoolean(false) }
+    val scanner = remember {
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
+        )
+    }
+    val executor = remember(context) { ContextCompat.getMainExecutor(context) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching { scanner.close() }
+            runCatching {
+                ProcessCameraProvider.getInstance(context).get().unbindAll()
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val provider = runCatching {
+            ProcessCameraProvider.getInstance(context).get()
+        }.getOrNull() ?: return@LaunchedEffect
+
+        val preview = Preview.Builder().build().also {
+            it.setSurfaceProvider(previewView.surfaceProvider)
+        }
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+
+        analysis.setAnalyzer(executor) { imageProxy: ImageProxy ->
+            val mediaImage = imageProxy.image
+            if (mediaImage == null || resultDelivered.get()) {
+                imageProxy.close()
+                return@setAnalyzer
+            }
+            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            scanner.process(image)
+                .addOnSuccessListener { barcodes ->
+                    val raw = barcodes.firstOrNull()?.rawValue
+                    if (raw != null && resultDelivered.compareAndSet(false, true)) {
+                        onResult(raw)
+                    }
+                }
+                .addOnCompleteListener { imageProxy.close() }
+        }
+
+        runCatching {
+            provider.unbindAll()
+            provider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                analysis,
+            )
+        }
+    }
+
+    AndroidView(
+        factory = { previewView },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
 @Composable
 fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Unit)?) {
     var method by remember { mutableStateOf<String?>(null) }
@@ -310,29 +497,42 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
     var pass by remember { mutableStateOf(profile.pass) }
     var pass2 by remember { mutableStateOf(profile.pass) }
     var mac by remember { mutableStateOf(profile.mac) }
+    var wolEnabled by remember { mutableStateOf(profile.mac.isNotBlank()) }
     var broadcast by remember { mutableStateOf(profile.broadcast) }
     var showPass by remember { mutableStateOf(false) }
     var formError by remember { mutableStateOf<String?>(null) }
     var scanMessage by remember { mutableStateOf<String?>(null) }
+    var showScanner by remember { mutableStateOf(false) }
+    var macMessage by remember { mutableStateOf<String?>(null) }
+    var lookingUpMac by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val connectionReady = host.isNotBlank() && isValidPort(port)
 
-    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val contents = result.contents
-        if (contents != null) {
-            val pairing = parsePcSetupQr(contents)
-            if (pairing == null) {
-                scanMessage = "Das ist kein gültiger PC-Steuerung-QR-Code."
-            } else {
-                name = pairing.name
-                host = pairing.host
-                port = pairing.port.toString()
-                scanMessage = "${pairing.name} übernommen. WoL-MAC und Zugangsdaten noch eintragen."
-                formError = null
-            }
-        }
+    if (showScanner) {
+        QrScannerScreen(
+            title = "QR-Code vom PC scannen",
+            onResult = { raw ->
+                showScanner = false
+                val pairing = parsePcSetupQr(raw)
+                if (pairing == null) {
+                    scanMessage = "Das ist kein gültiger PC-Steuerung-QR-Code."
+                } else {
+                    name = pairing.name
+                    host = pairing.host
+                    port = pairing.port.toString()
+                    if (pairing.mac != null) {
+                        mac = pairing.mac
+                        wolEnabled = true
+                    }
+                    scanMessage = "${pairing.name} übernommen. WoL-MAC und Zugangsdaten noch eintragen."
+                    formError = null
+                }
+            },
+            onClose = { showScanner = false },
+        )
+        return
     }
 
     fun testConnection() {
@@ -356,10 +556,34 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
         }
     }
 
+    fun lookupMac() {
+        if (!connectionReady) {
+            macMessage = "Erst IP und Port eintragen."
+            return
+        }
+        scope.launch {
+            lookingUpMac = true
+            macMessage = null
+            val body = withContext(Dispatchers.IO) {
+                runCatching {
+                    httpCall("http://${host.trim()}:${port.trim()}", "/pairing-info", null)
+                }.getOrNull()
+            }
+            lookingUpMac = false
+            val found = body?.let { parsePairingMac(it) }
+            if (found != null) {
+                mac = found
+                macMessage = "MAC vom PC übernommen: $found"
+            } else {
+                macMessage = "Am PC ist Wake-on-LAN noch nicht eingerichtet. MAC manuell eingeben oder im Web-Setup aktivieren."
+            }
+        }
+    }
+
     fun save() {
         when {
             pass.isNotEmpty() && pass != pass2 -> formError = "Passwörter stimmen nicht überein"
-            !isValidMac(mac) -> formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
+            wolEnabled && (mac.isBlank() || !isValidMac(mac)) -> formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
             else -> {
                 formError = null
                 onSave(
@@ -369,7 +593,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                         port = port.trim(),
                         user = user.trim(),
                         pass = pass,
-                        mac = mac.trim(),
+                        mac = if (wolEnabled) mac.trim() else "",
                         broadcast = broadcast.trim().ifBlank { "255.255.255.255" },
                         defaultDelay = profile.defaultDelay,
                     )
@@ -490,15 +714,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                             1 -> {
                                 if (method == "qr") {
                                     OutlinedButton(
-                                        onClick = {
-                                            val options = ScanOptions().apply {
-                                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                                setPrompt("QR-Code aus der PC-Weboberfläche scannen")
-                                                setBeepEnabled(false)
-                                                setOrientationLocked(false)
-                                            }
-                                            scanLauncher.launch(options)
-                                        },
+                                        onClick = { showScanner = true },
                                         modifier = Modifier.fillMaxWidth().height(52.dp),
                                         shape = RoundedCornerShape(16.dp)
                                     ) {
@@ -564,33 +780,76 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                 }
                             }
                             2 -> {
-                                Text(
-                                    text = "Wake-on-LAN (WoL) einschalten?",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = "Nur zuverlässig mit Ethernet-Kabel. Leer lassen, wenn du den PC nicht per Handy einschalten willst.",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                                OutlinedTextField(
-                                    value = mac,
-                                    onValueChange = { mac = it; formError = null },
-                                    label = { Text("MAC-Adresse (für WoL)") },
-                                    placeholder = { Text("AA:BB:CC:DD:EE:FF") },
-                                    singleLine = true,
-                                    isError = !isValidMac(mac),
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                OutlinedTextField(
-                                    value = broadcast,
-                                    onValueChange = { broadcast = it },
-                                    label = { Text("Broadcast-Adresse (WoL)") },
-                                    placeholder = { Text("255.255.255.255") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Wake-on-LAN aktivieren",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "Optional. Nur zuverlässig mit Ethernet-Kabel.",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                    Switch(
+                                        checked = wolEnabled,
+                                        onCheckedChange = {
+                                            wolEnabled = it
+                                            formError = null
+                                            macMessage = null
+                                        }
+                                    )
+                                }
+                                if (wolEnabled) {
+                                    OutlinedTextField(
+                                        value = mac,
+                                        onValueChange = { mac = it; formError = null; macMessage = null },
+                                        label = { Text("MAC-Adresse (für WoL)") },
+                                        placeholder = { Text("AA:BB:CC:DD:EE:FF") },
+                                        singleLine = true,
+                                        isError = !isValidMac(mac),
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    OutlinedButton(
+                                        onClick = ::lookupMac,
+                                        enabled = connectionReady && !lookingUpMac,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(16.dp)
+                                    ) {
+                                        if (lookingUpMac) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text("MAC automatisch vom PC holen")
+                                    }
+                                    macMessage?.let {
+                                        Text(
+                                            text = it,
+                                            fontSize = 12.sp,
+                                            color = if (it.startsWith("MAC vom PC")) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.outline
+                                            }
+                                        )
+                                    }
+                                    OutlinedTextField(
+                                        value = broadcast,
+                                        onValueChange = { broadcast = it },
+                                        label = { Text("Broadcast-Adresse (WoL)") },
+                                        placeholder = { Text("255.255.255.255") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
                             }
                             3 -> {
                                 OutlinedTextField(
@@ -647,7 +906,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                 Text(
                                     text = "Name: ${name.trim().ifBlank { "PC" }}\n" +
                                         "Verbindung: ${host.trim()}:${port.trim()}\n" +
-                                        "WoL: ${mac.trim().ifBlank { "aus" }}\n" +
+                                        "WoL: " + (if (wolEnabled) mac.trim() else "aus") + "\n" +
                                         "Anmeldung: ${user.trim().ifBlank { "ohne (nur lokal)" }}",
                                     fontSize = 13.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -680,7 +939,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                 step == 1 && !connectionReady -> {
                                     formError = "Bitte gültige IP und Port angeben"
                                 }
-                                step == 2 && !isValidMac(mac) -> {
+                                step == 2 && wolEnabled && (mac.isBlank() || !isValidMac(mac)) -> {
                                     formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
                                 }
                                 step == 3 && pass.isNotEmpty() && pass != pass2 -> {
@@ -1966,10 +2225,34 @@ private fun SettingsTab(
     var defaultDelay by remember(active) { mutableStateOf(active.defaultDelay) }
     var showPass by remember { mutableStateOf(false) }
     var macError by remember(active) { mutableStateOf<String?>(null) }
+    var scanError by remember { mutableStateOf<String?>(null) }
+    var showScanner by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
     val valid = host.isNotBlank() && isValidPort(port)
 
     BackHandler(enabled = destination != null) { destination = null }
+    BackHandler(enabled = showScanner) { showScanner = false }
+
+    if (showScanner) {
+        QrScannerScreen(
+            title = "QR-Code vom PC scannen",
+            onResult = { raw ->
+                showScanner = false
+                val pairing = parsePcSetupQr(raw)
+                if (pairing == null) {
+                    scanError = "Das ist kein gültiger PC-Steuerung-QR-Code."
+                } else {
+                    name = pairing.name
+                    host = pairing.host
+                    port = pairing.port.toString()
+                    scanError = null
+                    saved = false
+                }
+            },
+            onClose = { showScanner = false },
+        )
+        return
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         val page = destination
@@ -2035,6 +2318,21 @@ private fun SettingsTab(
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedButton(
+                                onClick = { scanError = null; showScanner = true },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(16.dp),
+                            ) {
+                                Text("QR-Code vom PC scannen")
+                            }
+                            Text(
+                                text = "Übernimmt Name, IP und Port. Zugangsdaten bleiben erhalten.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                            scanError?.let {
+                                Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            }
                             OutlinedTextField(
                                 value = name,
                                 onValueChange = { name = it; saved = false },

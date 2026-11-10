@@ -124,4 +124,43 @@ class CoreTest {
         assertEquals(PcStatus.ERROR, state.status)
         assertEquals("Antwort unlesbar", state.text)
     }
+
+    @Test
+    fun setupQr_parsesNameHostPort() {
+        val qr = parsePcSetupQr(
+            """{"app":"pc-steuerung","version":1,"host":"192.168.178.20","port":8000,"name":"EVGA"}"""
+        )
+        assertEquals("EVGA", qr?.name)
+        assertEquals("192.168.178.20", qr?.host)
+        assertEquals(8000, qr?.port)
+        assertEquals(null, qr?.mac)
+    }
+
+    @Test
+    fun setupQr_readsOptionalMac() {
+        val qr = parsePcSetupQr(
+            """{"app":"pc-steuerung","version":1,"host":"192.168.178.20","port":8000,"name":"EVGA","mac":"aa:bb:cc:dd:ee:ff"}"""
+        )
+        assertEquals("AA:BB:CC:DD:EE:FF", qr?.mac)
+    }
+
+    @Test
+    fun setupQr_rejectsWrongAppOrHost() {
+        assertEquals(null, parsePcSetupQr("""{"app":"other","version":1,"host":"192.168.1.2","port":8000}"""))
+        assertEquals(null, parsePcSetupQr("""{"app":"pc-steuerung","version":1,"host":"192.168.1","port":8000}"""))
+        assertEquals(null, parsePcSetupQr("""{"app":"pc-steuerung","version":1,"host":"192.168.1.2","port":0}"""))
+    }
+
+    @Test
+    fun pairingInfo_readsMacOnlyWhenWolEnabled() {
+        val enabled = parsePairingMac(
+            """{"ready":true,"wol_enabled":true,"mac":"AA:BB:CC:DD:EE:FF"}"""
+        )
+        assertEquals("AA:BB:CC:DD:EE:FF", enabled)
+        assertEquals(
+            null,
+            parsePairingMac("""{"ready":true,"wol_enabled":false,"mac":"AA:BB:CC:DD:EE:FF"}""")
+        )
+        assertEquals(null, parsePairingMac("""{"ready":false}"""))
+    }
 }

@@ -6,6 +6,7 @@ data class PcSetupQr(
     val name: String,
     val host: String,
     val port: Int,
+    val mac: String? = null,
 )
 
 /** Liest nur die Verbindungsdaten eines PC-Steuerung-QR-Codes ein. */
@@ -23,7 +24,18 @@ fun parsePcSetupQr(raw: String): PcSetupQr? {
     val port = json.optInt("port", -1)
     if (port !in 1..65535) return null
     val name = json.optString("name").trim().ifBlank { "PC" }
-    return PcSetupQr(name = name, host = host, port = port)
+    val mac = json.optString("mac").trim()
+        .takeIf { it.isNotBlank() && isValidMac(it) }
+        ?.uppercase()
+    return PcSetupQr(name = name, host = host, port = port, mac = mac)
+}
+
+/** Liest die im PC-Setup hinterlegte WoL-MAC aus der Antwort von /pairing-info. */
+fun parsePairingMac(raw: String): String? {
+    val json = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+    if (!json.optBoolean("wol_enabled")) return null
+    val mac = json.optString("mac").trim()
+    return mac.takeIf { it.isNotBlank() && isValidMac(it) }?.uppercase()
 }
 
 /**
