@@ -167,7 +167,7 @@ Vor einer Veröffentlichung oder dem Echtbetrieb bitte die Checkliste in
 Ein **Pre-Push-Hook** und eine **GitHub Action** prüfen bei jedem Push:
 
 - keine Zugangsdaten (`credentials.json`, `.env`, Keys/Zertifikate)
-- keine Build-Artefakte (`build/`, `.gradle/`, `__pycache__/`, APKs)
+- keine Build-Artefakte (`build/`, `.gradle/`, `target/`, APKs)
 - keine offensichtlichen Secrets (GitHub-Tokens, AWS-Keys, Private Keys)
 - keine Dateien über 10 MB
 
