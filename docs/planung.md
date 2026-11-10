@@ -12,11 +12,11 @@
 | Funktion | Umsetzung |
 |---|---|
 | Einschalten | Wake on LAN: Magic Packet per UDP-Broadcast, direkt vom Handy |
-| Herunterfahren | FastAPI-Endpunkt `POST /shutdown` (mit Verzögerung) |
-| Abbrechen | FastAPI-Endpunkt `POST /abort` (`shutdown /a`) |
-| Ruhezustand | FastAPI-Endpunkt `POST /hibernate` |
-| Energieplan wechseln | FastAPI-Endpunkt `POST /power-plan` (`powercfg /setactive`) |
-| Status | FastAPI-Endpunkt `GET /status`: Online-Zustand und aktiver Plan |
+| Herunterfahren | Agent-Endpunkt `POST /shutdown` (mit Verzögerung) |
+| Abbrechen | Agent-Endpunkt `POST /abort` (`shutdown /a`) |
+| Ruhezustand | Agent-Endpunkt `POST /hibernate` |
+| Energieplan wechseln | Agent-Endpunkt `POST /power-plan` (`powercfg /setactive`) |
+| Status | Agent-Endpunkt `GET /status`: Online-Zustand und aktiver Plan |
 
 ### Energiepläne (GUIDs, sprachunabhängig)
 - Höchstleistung: `8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c`
@@ -31,18 +31,18 @@
 - **Router:** Feste IP per DHCP-Reservierung für den PC.
 
 ### Agent auf dem PC
-- **Python 3 + FastAPI + Uvicorn**, der Code liegt in `main.py`.
-- Token-Schutz über Header `X-Token`, Vergleich mit `secrets.compare_digest`.
-- Token als Umgebungsvariable `PC_AGENT_TOKEN` (mindestens 24 Zeichen), gesetzt mit `setx`.
-- Der Dienst startet nur, wenn das Token gesetzt und lang genug ist.
+- **Rust**, eine einzelne EXE in `PC Agent Rust/` (keine Python-Installation).
+- Basic Auth mit Benutzername/Passwort (PBKDF2-Hash in `credentials.json`);
+  localhost ohne Login. Alter Token-Schutz über `X-Token` bleibt als Fallback.
+- Datenordner: `%LOCALAPPDATA%\PC Steuerung`.
 - **Firewall:** Port 8000 nur für `LocalSubnet` erlaubt.
-- **Autostart:** Aufgabenplanung, Auslöser "Bei Anmeldung", Start von `python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000` im Projektordner.
+- **Autostart:** Aufgabenplanung, Auslöser "Bei Anmeldung", Start von `pc-agent.exe`.
 - Eingebaute Tools, die aufgerufen werden: `shutdown`, `powercfg`.
 
 ### Android-App
 - **Kotlin + Jetpack Compose + Material 3**
-- **Netzwerk:** Retrofit oder Ktor Client für die Aufrufe an FastAPI
-- **Speicher:** DataStore für IP, MAC-Adresse und Token
+- **Netzwerk:** HTTP-Aufrufe an den Agenten (Basic Auth)
+- **Speicher:** SharedPreferences für Profile (IP, Port, Login, MAC)
 - **WoL:** `DatagramSocket` aus der Java-Standardbibliothek, keine extra Bibliothek
 - **Berechtigungen:** `INTERNET`, `ACCESS_WIFI_STATE`
 - **Entwicklung:** Android Studio (VS Code geht, ist aber aufwendiger)
@@ -87,8 +87,7 @@ Kein Ping, da Windows Ping oft blockiert. Stattdessen Verbindungsversuch auf Por
 
 - [ ] Windows-Version des PCs
 - [ ] PC per Ethernet verbunden?
-- [ ] Python auf dem PC installiert?
-- [ ] Token erzeugt und mit `setx` gesetzt
+- [ ] Rust-Agent gebaut bzw. Installer installiert
 - [ ] Feste IP im Router vergeben
 - [ ] MAC-Adresse der Netzwerkkarte ermittelt
 - [ ] Broadcast-Adresse des Heimnetzes festgelegt (z. B. `192.168.1.255`)

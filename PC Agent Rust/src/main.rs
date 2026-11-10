@@ -1,7 +1,7 @@
 //! PC-Agent in Rust: schaltet einen Windows-PC im Heimnetz.
 //!
 //! Start:   pc-agent.exe   (oder `cargo run --release`)
-//! Zusage:  Verhaelt sich wie der FastAPI-Agent:
+//! Zusage:
 //!          - Zugangsdaten in der Web-Oberflaeche (http://localhost:8000/)
 //!            beim ersten Start einrichten (nur am PC moeglich).
 //!          - Lokale Zugriffe (PC selbst) brauchen keinen Login.
@@ -30,22 +30,24 @@ fn main() {
     let simulate = std::env::var("PC_AGENT_SIMULATE")
         .map(|value| value != "0")
         .unwrap_or(true);
-    // Optionaler Port (Standard 8000 wie im Python-Agent). Praktisch, wenn der
-    // Python-Agent parallel laeuft oder fuer einen Test auf einem anderen Port.
+    // Optionaler Port (Standard 8000). Praktisch fuer Tests auf einem
+    // anderen Port oder wenn Port 8000 belegt ist.
     let port = std::env::var("PC_AGENT_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(8000);
 
-    // Im gemeinsamen Projekt verwenden beide Implementierungen dieselben
-    // Zugangsdaten und dieselbe Logdatei unter `PC App/`. Ein eigenstaendig
-    // verteiltes Rust-Repo ohne diesen Ordner bleibt portabel neben der EXE.
+    // Zugangsdaten, Token, Geraeteeinstellungen und Log liegen zentral unter
+    // %LOCALAPPDATA%\PC Steuerung. `PC_AGENT_DATA` erlaubt einen eigenen Ordner.
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
     let data_dir = app_data_dir(&exe_dir);
+    if let Err(error) = std::fs::create_dir_all(&data_dir) {
+        eprintln!("Warnung: Datenordner konnte nicht erstellt werden: {error}");
+    }
     migrate_legacy_data(&exe_dir, &data_dir);
     let shared: SharedApp =
         std::sync::Arc::new(app::App::new(token.clone(), simulate, &data_dir, port));
@@ -66,40 +68,60 @@ fn main() {
     runtime.block_on(run_server(shared, simulate, port));
 }
 
-/// Findet den gemeinsamen Python-Datenordner beim Start aus Projekt- und
-/// Build-Ordnern. Bei einem spaeter eigenstaendigen Rust-Repo greift der
-/// portable Fallback auf den Ordner der EXE.
+/// Zentraler Datenordner: `%LOCALAPPDATA%\PC Steuerung`.
+/// `PC_AGENT_DATA` (absolut oder relativ zur EXE) hat Vorrang.
 fn app_data_dir(exe_dir: &Path) -> PathBuf {
-    exe_dir
-        .ancestors()
-        .map(|parent| parent.join("PC App"))
-        .find(|candidate| candidate.is_dir())
+    if let Some(custom) = std::env::var_os("PC_AGENT_DATA") {
+        let path = PathBuf::from(custom);
+        return if path.is_absolute() {
+            path
+        } else {
+            exe_dir.join(path)
+        };
+    }
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|local| local.join("PC Steuerung"))
         .unwrap_or_else(|| exe_dir.to_path_buf())
 }
 
-/// Uebernimmt aeltere Rust-Dateien neben der EXE, ohne vorhandene gemeinsame
-/// Zugangsdaten oder Logs zu ueberschreiben.
+/// Uebernimmt Daten aus alten Ablageorten (`PC App/`, neben der EXE) einmalig.
+/// Vorhandene Ziele werden nur ersetzt, wenn die Quelle neuer ist; das Log
+/// bleibt erhalten, sobald es am neuen Ort existiert.
 fn migrate_legacy_data(exe_dir: &Path, data_dir: &Path) {
-    if exe_dir == data_dir {
-        return;
-    }
-    for name in ["credentials.json", "agent.log"] {
-        let source = exe_dir.join(name);
+    let mut sources: Vec<PathBuf> = exe_dir
+        .ancestors()
+        .map(|base| base.join("PC App"))
+        .collect();
+    sources.push(exe_dir.to_path_buf());
+
+    for name in ["credentials.json", "token.json", "device.json", "agent.log"] {
         let destination = data_dir.join(name);
-        if !source.is_file() {
+        if name == "agent.log" && destination.is_file() {
             continue;
         }
-        let should_copy = if name == "credentials.json" && destination.is_file() {
-            let source_time = std::fs::metadata(&source).and_then(|m| m.modified()).ok();
-            let destination_time = std::fs::metadata(&destination)
+        let newest = sources
+            .iter()
+            .map(|dir| dir.join(name))
+            .filter(|path| path.is_file() && path != &destination)
+            .filter_map(|path| {
+                let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+                Some((modified, path))
+            })
+            .max_by_key(|(modified, _)| *modified);
+        let Some((source_time, source)) = newest else {
+            continue;
+        };
+        let should_copy = if destination.is_file() {
+            let target_time = std::fs::metadata(&destination)
                 .and_then(|m| m.modified())
                 .ok();
-            matches!((source_time, destination_time), (Some(source), Some(target)) if source > target)
+            matches!(target_time, Some(target) if source_time > target)
         } else {
-            !destination.exists()
+            true
         };
         if should_copy {
-            let _ = std::fs::copy(source, destination);
+            let _ = std::fs::copy(source, &destination);
         }
     }
 }
@@ -113,10 +135,6 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/pairing-info", axum::routing::get(routes::pairing_info))
         .route("/pairing-qr.svg", axum::routing::get(routes::pairing_qr))
         .route("/setup", axum::routing::post(routes::setup))
-        .route(
-            "/agent-version",
-            axum::routing::get(routes::agent_version).post(routes::switch_agent_version),
-        )
         .route("/mode", axum::routing::post(routes::set_mode))
         .route("/status", axum::routing::get(routes::status_ep))
         .route("/shutdown", axum::routing::post(routes::shutdown_ep))
@@ -131,7 +149,7 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .method_not_allowed_fallback(routes::method_not_allowed)
         .with_state(shared);
 
-    // Gleiche Bindung wie der Python-Agent (uvicorn auf 0.0.0.0:8000);
+    // Bindung an 0.0.0.0:8000, damit das Handy im LAN zugreifen kann;
     // die Windows-Firewall fragt beim ersten Start einmalig nach.
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await

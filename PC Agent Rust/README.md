@@ -1,22 +1,25 @@
 # PC-Agent (Rust)
 
-Bevorzugte Rust-Version des PC-Agenten. Python bleibt als Alternative in
-`PC App/` erhalten. Ziel: **eine einzelne .exe** ohne Python-Installation, kompatibel zur
-Android-App und zur Web-Oberflaeche.
+Windows-Agent des Projekts **PC Steuerung** – eine einzelne EXE ohne
+Python-Installation, kompatibel zur Android-App und zur Web-Oberfläche.
+Die frühere Python-Version ist archiviert und wird nicht mehr gepflegt.
 
-## Verhaeltnis zum Python-Agent
+## Daten und Ablage
 
-| | Python (`PC App/`) | Rust (dieser Ordner) |
-|---|---|---|
-| Start | `python -m uvicorn main:app` | `pc-agent.exe` |
-| Abhaengigkeiten | Python + pip (requirements.txt) | keine (alles im Binary) |
-| Bindung | 0.0.0.0:8000 | 0.0.0.0:8000 (`PC_AGENT_PORT` optional) |
-| Zugangsdaten | `PC App/credentials.json` | gemeinsamer Pfad `PC App/credentials.json` |
-| Log | `PC App/agent.log` (+Rotation .log.1) | gemeinsamer Pfad `PC App/agent.log` (+Rotation) |
-| PBKDF2 | sha256, 200000 Iterationen | identisch -> **bestehendes `credentials.json` bleibt gueltig** |
-| Web-Oberflaeche | `PAGE` in `main.py` | `src/page.html` (1:1 identisch) |
-| Tray | gemeinsame Tray-Steuerung im Projektstamm | gemeinsame Tray-Steuerung im Projektstamm |
-| Autostart | `install-autostart.ps1` | `install-autostart.ps1` |
+| | Rust-Agent |
+|---|---|
+| Start | `pc-agent.exe` |
+| Abhängigkeiten | keine (alles im Binary) |
+| Bindung | 0.0.0.0:8000 (`PC_AGENT_PORT` optional) |
+| Datenordner | `%LOCALAPPDATA%\PC Steuerung` (`PC_AGENT_DATA` optional) |
+| Zugangsdaten | `credentials.json` im Datenordner |
+| Log | `agent.log` (+Rotation `.log.1`) im Datenordner |
+| PBKDF2 | sha256, 200000 Iterationen |
+| Web-Oberfläche | `src/page.html` |
+| Tray | gemeinsame Tray-Steuerung im Projektstamm |
+
+Alte Daten aus `PC App/` oder neben der EXE werden beim Start einmalig
+übernommen; vorhandene Zieldateien werden nur ersetzt, wenn die Quelle neuer ist.
 
 ## API-Endpunkte
 
@@ -25,17 +28,11 @@ Android-App und zur Web-Oberflaeche.
 `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
 `POST /power-plan?name=`, `POST /wake?mac=&port=`, `POST /ping`,
 `GET /events`, `GET /log?lines=`.
-Zusätzlich bieten beide Varianten `GET /agent-version` und
-`POST /agent-version?version=rust|python` zum Anzeigen und Wechseln der aktiven
-Agent-Version.
 
-Die Routen, Erfolgsantworten und fachlichen Aktionen entsprechen dem Python-
-Agenten. Bei ungueltigen Eingaben unterscheidet sich das genaue 422-Fehlerformat
-noch, weil FastAPI/Pydantic und Axum ihre Validierungsfehler anders darstellen.
-
-Anmeldung wie beim Python-Agent: Basic Auth fuer LAN-Zugriffe, localhost
-ohne Login, `X-Token`/`PC_AGENT_TOKEN` als Fallback, Ersteinrichtung nur
-am PC (`POST /setup`, nur localhost).
+Die Routen und Erfolgsantworten entsprechen der Android-App. Anmeldung wie
+bisher: Basic Auth für LAN-Zugriffe, localhost ohne Login,
+`X-Token`/`PC_AGENT_TOKEN` als Fallback, Ersteinrichtung nur am PC
+(`POST /setup`, nur localhost).
 
 ## Bauen
 
@@ -59,24 +56,18 @@ Build-Ordner an. Das ist nur fuer `x86_64-pc-windows-gnu` aktiv.
 
 ## Starten
 
-- `start.bat` wählt Rust als bevorzugte Version. Wenn Cargo verfügbar ist,
-  baut der gemeinsame Manager den aktuellen Quellstand (Cargo überspringt
-  unveränderte Builds), ersetzt danach sicher die EXE und startet sie. Ohne
-  Cargo nutzt er eine vorhandene `pc-agent.exe`. Der Standardstart aus dem
-  Projektstamm ist `start-agent.bat`;
-  in der Web-UI oder im Tray kann zwischen Rust und Python gewechselt werden.
-- Rust und Python lesen und schreiben im gemeinsamen Projekt dieselben Dateien
-  unter `PC App\`. Aeltere Rust-Dateien neben der EXE werden beim Start
-  uebernommen, wenn dort noch keine gemeinsamen Daten liegen.
-- Ohne `PC App\`-Ordner (z. B. in einem eigenstaendigen Rust-Checkout) liegen
-  die Datendateien neben der EXE.
+- `start.bat` baut mit Cargo den aktuellen Quellstand (Cargo ueberspringt
+  unveraenderte Builds), ersetzt danach sicher die EXE und startet sie.
+  Ohne Cargo wird eine vorhandene `pc-agent.exe` verwendet.
+- Standardstart aus dem Projektstamm: `start-agent.bat` oder der Launcher
+  `PC Steuerung.exe` (Agent, Tray und Web-UI ohne Konsole).
+- Der Agent schreibt Zugangsdaten, Token, Geraeteeinstellungen und Log nach
+  `%LOCALAPPDATA%\PC Steuerung`.
 
 ## Installer und Handy-Setup
 
 Der Inno-Setup-Installer wird pro Benutzer installiert und braucht keine
-Administratorrechte. Er kann Agent und Tray bei der Windows-Anmeldung starten;
-die Python-Alternative ist optional und benoetigt eine separat installierte
-Python-Laufzeit.
+Administratorrechte. Er kann Agent und Tray bei der Windows-Anmeldung starten.
 
 Mit Inno Setup 6/7:
 
@@ -84,18 +75,17 @@ Mit Inno Setup 6/7:
 powershell -ExecutionPolicy Bypass -File .\installer\build-installer.ps1
 ```
 
-Der Build erstellt `dist\PC-Steuerung-Setup-0.9.3.exe`. Nach der Installation
-oeffnet der Assistent die Web-Einrichtung. Der QR-Code uebertraegt ausschliesslich
-PC-Name, LAN-IP und Port; Zugangsdaten und WoL-MAC bleiben ausserhalb des Codes.
-In der Android-App `QR-Code vom PC scannen` waehlen und danach Login und MAC
-eintragen.
+Der Build erstellt `dist\PC-Steuerung-Setup-0.9.4.exe`. Nach der Installation
+oeffnet der Assistent die Web-Einrichtung. Der QR-Code uebertraegt PC-Name,
+LAN-IP, Port und – falls im PC-Setup hinterlegt – die WoL-MAC; Zugangsdaten
+bleiben ausserhalb des Codes. In der Android-App `QR-Code vom PC scannen`
+waehlen und danach das Login eintragen.
 
 ## Tray-Steuerung (Taskleiste)
 
-`start-tray.bat` öffnet das gemeinsame Tray-Symbol. Doppelklick öffnet die
-Web-UI; das Kontextmenü kann den bevorzugten Agenten starten oder stoppen,
-zwischen Rust und Python wechseln und den Browser öffnen. Rust ist grün,
-Python blau, gestoppt grau.
+`start-tray.bat` oeffnet das Tray-Symbol. Doppelklick oeffnet die Web-UI;
+das Kontextmenue kann den Agenten starten oder stoppen und den Browser
+oeffnen. Gruen = laeuft, grau = gestoppt, orange = Port belegt.
 
 ## Autostart
 
@@ -104,22 +94,20 @@ powershell -ExecutionPolicy Bypass -File .\install-autostart.ps1
 powershell -ExecutionPolicy Bypass -File .\install-autostart.ps1 -WithTray
 ```
 
-Die gemeinsame Aufgabe heisst `PC Steuerung Agent` und (mit `-WithTray`)
-`PC Steuerung Tray`. Eine vorhandene getrennte Python-/Rust-Aufgabe wird bei
-der Installation entfernt, damit nicht zwei Agenten Port 8000 beanspruchen.
-Entfernen:
+Die Aufgabe heisst `PC Steuerung Agent` und (mit `-WithTray`)
+`PC Steuerung Tray`. Entfernen:
 
 ```
 powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 -WithTray
 ```
 
-## Umgebungsvariablen (wie bisher)
+## Umgebungsvariablen
 
 - `PC_AGENT_TOKEN`           Fallback-Schutz, wenn keine Zugangsdaten existieren.
 - `PC_AGENT_SIMULATE=1`      Standard: Simulation (nur Log). `0` = echt.
 - `PC_WOL_BROADCAST`         Broadcast-Ziel fuer `/wake` (Standard 192.168.1.255).
-- `PC_AGENT_PORT`            Optionaler Port (Standard 8000), z. B. fuer einen
-                             Parallellauf mit dem Python-Agenten.
+- `PC_AGENT_PORT`            Optionaler Port (Standard 8000), z. B. fuer Tests.
+- `PC_AGENT_DATA`            Optionaler Datenordner (absolut oder relativ zur EXE).
 
 ## Hinweise
 
@@ -127,13 +115,13 @@ powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 -WithTray
   (private Netzwerke), damit das Handy den Agent erreicht.
 - Sicherheitsschalter: `PC_AGENT_SIMULATE` bleibt standardmaessig `1`.
   Erst mit `0` bzw. `POST /mode?simulate=false` werden Befehle ausgefuehrt.
-- `target/`, `agent.log*` und `credentials.json` sind ignoriert und duerfen
-  nicht committet werden.
+- `target/`, `agent.log*`, `token.json`, `device.json` und `credentials.json`
+  sind ignoriert und duerfen nicht committet werden.
 
 ## Status
 
-- Einheitstests: 20 Tests (PBKDF2/Python-Kompatibilitaetsvektor, Basic Auth,
-  MAC-Parsing, WoL-Paket, Log-Format/Rotation, Query-Validierung, Ringpuffer).
+- Einheitstests: PBKDF2-Kompatibilitaetsvektor, Basic Auth, MAC-Parsing,
+  WoL-Paket, Log-Format/Rotation, Query-Validierung, Ringpuffer.
 - Live-Test im Simulationsmodus: Setup, Auth (401/403/200), Status,
   Shutdown/Abort/Hibernate, Energieplan, Wake (auch ungueltige MAC),
   Ping, Events und Log wurden gegen die laufende EXE geprueft.

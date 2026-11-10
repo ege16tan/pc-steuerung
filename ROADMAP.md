@@ -35,15 +35,18 @@
 - [x] v0.8.0-preview: Live-Countdown, Pull-to-Refresh, Hell/Dunkel/System, einstellbares Status-Intervall, Wake-Fortschritt, Verlauf kopieren
 - [x] In-App-Updater über GitHub Releases mit Android-Systemdialog oder optionaler Shizuku-Installation
 - [x] PC-Agent in Rust (1:1 zum Python-Agent, einzelne EXE)
-- [x] Python und Rust bleiben verfügbar; Rust ist Standard, Versionswechsel über gemeinsame Web-UI und Tray-Verwaltung
+- [x] Rust-only: Python-Agent ins Archiv-Repo ausgelagert, Web-UI/Tray/Installer ohne Versionswechsel
 - [x] Android-Einstellungen als gruppierte Kartenübersicht mit Detailseiten für PC-Profile, Darstellung, Updates und App-Info
+- [x] QR-Scanner auf CameraX + ML Kit umgestellt (Android 17), Scan auch im Profil-Editor
+- [x] Optionaler WoL-Schritt im Android-Assistenten inkl. MAC aus QR und automatischer Suche
+- [x] Manueller Launcher `PC Steuerung.exe` für Agent, Tray und Web-UI
 
 ## Geplant
 
 - [ ] Module: Katalog künftig per Release erweitern (z. B. Screenshots, Dateien)
 
 - [ ] Finales Design (Restpolitur)
-- [ ] Automatisierte Tests für den FastAPI-Agent
+- [ ] Automatisierte Tests für den Rust-Agenten (HTTP-Endpunkte)
 - [ ] CI über GitHub Actions
 - [ ] Screenshots fürs README
 - [ ] Zeitplan (z. B. täglich 23:00 herunterfahren)

@@ -20,7 +20,7 @@ echo "🔍 Repository-Sicherheitscheck ..."
 git ls-files > "$tmp_files"
 while IFS= read -r file; do
   [ -z "$file" ] && continue
-  if printf '%s\n' "$file" | grep -Eq '^(PC App/credentials\.json|local\.properties|Android App/local\.properties|\.env|opencode\.json|Android App/\.codex/)|(^|/)(__pycache__|\.gradle|build|\.idea|\.kotlin)/|\.(jks|keystore|p12|pem|key|apk|aab)$'; then
+  if printf '%s\n' "$file" | grep -Eq '(^|/)(credentials\.json|token\.json|device\.json|local\.properties|\.env|opencode\.json)$|(^|/)Android App/\.codex/|(^|/)(\.gradle|build|\.idea|\.kotlin)/|\.(jks|keystore|p12|pem|key|apk|aab)$'; then
     fail "Nicht erlaubte Datei ist getrackt: $file"
   fi
 done < "$tmp_files"

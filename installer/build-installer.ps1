@@ -16,6 +16,10 @@ try {
     Pop-Location
 }
 
+# Manuellen Launcher (PC Steuerung.exe) mitbauen.
+& (Join-Path $projectRoot 'launcher\build-launcher.ps1')
+if ($LASTEXITCODE -ne 0) { throw "Launcher-Build fehlgeschlagen (Exit-Code $LASTEXITCODE)." }
+
 $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 if (-not $compiler) {
     $candidates = @(
@@ -38,4 +42,4 @@ $outputDir = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 & $compilerPath $issFile
 if ($LASTEXITCODE -ne 0) { throw "Inno-Setup-Build fehlgeschlagen (Exit-Code $LASTEXITCODE)." }
-Write-Host "Installer erstellt: $(Join-Path $projectRoot 'dist\PC-Steuerung-Setup-0.9.3.exe')"
+Write-Host "Installer erstellt: $(Join-Path $projectRoot 'dist\PC-Steuerung-Setup-0.9.4.exe')"

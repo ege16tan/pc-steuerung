@@ -12,5 +12,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Sensible Daten prüfen
         run: bash scripts/check-sensitive.sh
-      - name: Python-Syntax prüfen
-        run: python3 -m py_compile "PC App/main.py"

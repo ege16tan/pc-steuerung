@@ -1,11 +1,7 @@
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-
 # Lokale Zugangsdaten (nicht committen!)
-PC App/credentials.json
+credentials.json
+token.json
+device.json
 
 # Lokale OpenCode/Codex-Konfiguration
 opencode.json
@@ -14,8 +10,8 @@ Android App/.kotlin/
 .codex-remote-attachments/
 
 # Lokale Logs
-PC App/agent.log
-PC App/agent.log.1
+agent.log
+agent.log.1
 
 # Windows / Editor
 Thumbs.db
@@ -23,3 +19,6 @@ Thumbs.db
 .vscode/
 *.log
 dist/
+
+# Lokal gebauter Launcher (Quelle liegt in launcher/)
+PC Steuerung.exe

@@ -8,22 +8,22 @@ Kompakte Agenten-Anleitung für dieses Repository.
 einen Windows-PC (Wake-on-LAN, Herunterfahren, Abbrechen, Ruhezustand, Energieplan,
 Status).
 
-- `PC Agent Rust/` – bevorzugter Windows-Agent, einzelne Rust-EXE.
-- `PC App/` – alternative FastAPI-Version in Python.
+- `PC Agent Rust/` – Windows-Agent als einzelne Rust-EXE (einzige PC-Version).
 - `Android App/` – Kotlin/Jetpack Compose-Client, läuft auf dem Handy.
+- `launcher/` – Quelle des manuellen Launchers `PC Steuerung.exe`.
+- Die frühere Python-Version liegt archiviert unter
+  https://github.com/ege16tan/pc-steuerung-python und wird nicht mehr gepflegt.
 
 ## Befehle
 
-- Standardstart: `start-agent.bat` (Rust bevorzugt, Auswahl bleibt gespeichert).
-- Python-Alternative: `PC App/start.bat` (setzt Python als bevorzugte Version).
-- Python-Abhängigkeiten: `python -m pip install -r "PC App/requirements.txt"`
+- Standardstart: `start-agent.bat` oder `PC Steuerung.exe` (Launcher mit Agent,
+  Tray und Web-UI).
 - Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
 - `PC_AGENT_SIMULATE` (Default `1`) = Simulation (nur Loggen); `0` = echte Aktion.
   Sicherheitsschalter: nicht ohne explizite Anweisung auf `0` setzen.
 - `PC_WOL_BROADCAST` (Default `192.168.1.255`) = Broadcast-Ziel für `/wake`.
-- Gemeinsame Tray-Steuerung: `start-tray.bat` (Web-UI öffnen, Agent starten/
-  stoppen, Python/Rust auswählen). Beide versionsspezifischen Start-Tray-Dateien
-  verweisen auf dieses Symbol.
+- Tray-Steuerung: `start-tray.bat` (Web-UI öffnen, Agent starten/stoppen).
+  Nur eine Tray-Instanz gleichzeitig (Mutex `Local\PCSteuerungTray`).
 - Push-Schutz: `scripts/check-sensitive.sh` (Pre-Push-Hook in `.githooks/`,
   aktivieren mit `scripts/install-hooks.ps1`); GitHub Actions prüft dasselbe.
 - **Entwicklungsversion:** privat, Simulationsmodus als Default. Vor einer
@@ -35,16 +35,19 @@ Status).
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
   `GET /ping`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
   `POST /setup`, `POST /mode?simulate=`, `GET /`.
-- Agent-Auswahl: `GET /agent-version`, `POST /agent-version?version=python|rust`;
-  Rust ist der Standard. Die gemeinsame Auswahl liegt unter `%LOCALAPPDATA%`.
-- Logdatei: `PC App/agent.log` (Datum/Uhrzeit, Rotation nach `agent.log.1`,
+- Datenordner: `%LOCALAPPDATA%\PC Steuerung` (per `PC_AGENT_DATA` überschreibbar).
+  Dort liegen `credentials.json`, `token.json`, `device.json`, `agent.log`,
+  `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE werden beim
+  Start einmalig übernommen.
+- Logdatei: `agent.log` im Datenordner (Datum/Uhrzeit, Rotation nach `agent.log.1`,
   gitignored).
-- Auth: Basic Auth (Benutzername/Passwort, PBKDF2-Hash in `PC App/credentials.json`)
+- Auth: Basic Auth (Benutzername/Passwort, PBKDF2-Hash in `credentials.json`)
   für LAN-Zugriffe; localhost ohne Login. Ersteinrichtung über die Web-UI
   (`POST /setup`, nur localhost). Alter `PC_AGENT_TOKEN`/`X-Token` bleibt als Fallback.
   `credentials.json` ist gitignored – nie committen.
 - Status: TCP-Verbindungsprüfung + `GET /status` (kein Ping).
-- Aktionen via `subprocess` (`shutdown /s /t`, `shutdown /a`, `shutdown /h`, `powercfg /setactive`).
+- Aktionen via `std::process::Command` (`shutdown /s /t`, `shutdown /a`,
+  `shutdown /h`, `powercfg /setactive`).
 - WoL: Die Android-App sendet das Magic Packet direkt per `DatagramSocket`
   (Broadcast-Adresse in den Einstellungen, Default `255.255.255.255`); der Agent
   bietet zusätzlich `/wake` für Web-UI/Tests (`PC_WOL_BROADCAST`). Im
@@ -66,10 +69,10 @@ Status).
   Manifest-Receiver) nutzt RemoteViews und `goAsync()` – kein Compose im Widget.
 - Android-Build: `cd "Android App"` → `gradlew.bat assembleDebug`
   (APK: `app/build/outputs/apk/debug/app-debug.apk`).
-- Windows-Installer: Rust-Build + Inno Setup mit `installer/build-installer.ps1`;
-  Installation pro Benutzer, ohne Admin-Rechte.
-- Android-Ersteinrichtung: PC-Web-UI zeigt einen QR-Code mit PC-Name/IP/Port;
-  Android scannt ihn. Zugangsdaten und WoL-MAC werden nie im QR-Code abgelegt.
+- Windows-Installer: Rust-Build + Launcher + Inno Setup mit
+  `installer/build-installer.ps1`; Installation pro Benutzer, ohne Admin-Rechte.
+- Android-Ersteinrichtung: PC-Web-UI zeigt einen QR-Code mit PC-Name/IP/Port und
+  optional der WoL-MAC; Android scannt ihn. Zugangsdaten werden nie im QR-Code abgelegt.
 - WoL: nur zuverlässig mit Ethernet; BIOS/UEFI WoL-Einstellungen nötig.
 
 ## Testen

@@ -6,18 +6,21 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $manager = Join-Path $root 'agent-manager.ps1'
 $port = 8000
 
+# Nur eine Tray-Instanz gleichzeitig (verhindert doppelte Symbole).
+$trayMutex = New-Object System.Threading.Mutex($false, 'Local\PCSteuerungTray')
+if (-not $trayMutex.WaitOne(0)) { exit }
+
 function Get-ManagerStatus {
     try {
         $json = & $manager -Action status -Port $port
         return ($json | ConvertFrom-Json)
     } catch {
-        return [PSCustomObject]@{ selected = 'rust'; active = $null; port = $port }
+        return [PSCustomObject]@{ active = $null; port = $port }
     }
 }
 
-function Invoke-Manager([string]$action, [string]$version) {
-    $versionArgument = if ($version) { " -Version $version" } else { '' }
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$manager`" -Action $action -Port $port$versionArgument"
+function Invoke-Manager([string]$action) {
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$manager`" -Action $action -Port $port"
     Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden | Out-Null
 }
 
@@ -47,12 +50,10 @@ function New-StateIcon([System.Drawing.Color]$color, [ref]$bitmapRef) {
     return [System.Drawing.Icon]::FromHandle($bitmap.GetHicon())
 }
 
-$bitmapRust = $null
-$bitmapPython = $null
+$bitmapRunning = $null
 $bitmapStopped = $null
 $bitmapConflict = $null
-$iconRust = New-StateIcon ([System.Drawing.Color]::FromArgb(46, 204, 113)) ([ref]$bitmapRust)
-$iconPython = New-StateIcon ([System.Drawing.Color]::FromArgb(59, 130, 246)) ([ref]$bitmapPython)
+$iconRunning = New-StateIcon ([System.Drawing.Color]::FromArgb(46, 204, 113)) ([ref]$bitmapRunning)
 $iconStopped = New-StateIcon ([System.Drawing.Color]::FromArgb(145, 153, 166)) ([ref]$bitmapStopped)
 $iconConflict = New-StateIcon ([System.Drawing.Color]::FromArgb(245, 158, 11)) ([ref]$bitmapConflict)
 
@@ -69,26 +70,14 @@ $statusItem.Enabled = $false
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
 $startItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$startItem.Text = 'Agent starten (bevorzugte Version)'
-$startItem.Add_Click({ Invoke-Manager 'start' ''; Update-Ui })
+$startItem.Text = 'Agent starten'
+$startItem.Add_Click({ Invoke-Manager 'start'; Update-Ui })
 [void]$menu.Items.Add($startItem)
 
 $stopItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $stopItem.Text = 'Agent stoppen'
-$stopItem.Add_Click({ Invoke-Manager 'stop' ''; Update-Ui })
+$stopItem.Add_Click({ Invoke-Manager 'stop'; Update-Ui })
 [void]$menu.Items.Add($stopItem)
-
-$versionMenu = New-Object System.Windows.Forms.ToolStripMenuItem
-$versionMenu.Text = 'Version auswählen'
-$pythonItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$pythonItem.Text = 'Python verwenden'
-$pythonItem.Add_Click({ Invoke-Manager 'switch' 'python'; Update-Ui })
-$rustItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$rustItem.Text = 'Rust verwenden (empfohlen)'
-$rustItem.Add_Click({ Invoke-Manager 'switch' 'rust'; Update-Ui })
-[void]$versionMenu.DropDownItems.Add($rustItem)
-[void]$versionMenu.DropDownItems.Add($pythonItem)
-[void]$menu.Items.Add($versionMenu)
 
 $openItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $openItem.Text = 'Web-UI im Browser öffnen'
@@ -154,10 +143,8 @@ function Add-PanelButton([string]$label, [scriptblock]$onClick) {
     return $button
 }
 
-$panelStart = Add-PanelButton 'Agent starten (bevorzugt)' { Invoke-Manager 'start' ''; Update-Ui }
-$panelStop = Add-PanelButton 'Agent stoppen' { Invoke-Manager 'stop' ''; Update-Ui }
-$panelRust = Add-PanelButton 'Rust verwenden (empfohlen)' { Invoke-Manager 'switch' 'rust'; Update-Ui }
-$panelPython = Add-PanelButton 'Python verwenden' { Invoke-Manager 'switch' 'python'; Update-Ui }
+$panelStart = Add-PanelButton 'Agent starten' { Invoke-Manager 'start'; Update-Ui }
+$panelStop = Add-PanelButton 'Agent stoppen' { Invoke-Manager 'stop'; Update-Ui }
 $panelShutdown = Add-PanelButton 'PC herunterfahren (60 s)' { Invoke-AgentPost '/shutdown?delay=60' 'Herunterfahren in 60 s geplant.' }
 $panelAbort = Add-PanelButton 'Herunterfahren abbrechen' { Invoke-AgentPost '/abort' 'Herunterfahren abgebrochen.' }
 $panelOpen = Add-PanelButton 'Web-UI im Browser öffnen' { Open-WebUi }
@@ -177,75 +164,49 @@ $notify.Add_MouseClick({
 
 function Update-Ui {
     $state = Get-ManagerStatus
-    $versionMenu.Text = if ($state.selected -eq 'python') { 'Version auswählen (Python bevorzugt)' } else { 'Version auswählen (Rust bevorzugt)' }
     if ($state.active -eq 'rust') {
-        $notify.Icon = $iconRust
-        $notify.Text = "PC Steuerung - Rust aktiv (Port $port)"
-        $statusItem.Text = 'Agent: Rust läuft'
+        $notify.Icon = $iconRunning
+        $notify.Text = "PC Steuerung - Agent läuft (Port $port)"
+        $statusItem.Text = 'Agent: läuft'
         $startItem.Enabled = $false
         $stopItem.Enabled = $true
         $shutdownItem.Enabled = $true
         $abortItem.Enabled = $true
-        $panelStatus.Text = 'Agent: Rust läuft'
+        $panelStatus.Text = 'Agent: läuft'
         $panelStart.Enabled = $false
         $panelStop.Enabled = $true
-        $panelRust.Enabled = $false
-        $panelPython.Enabled = $true
         $panelShutdown.Enabled = $true
         $panelAbort.Enabled = $true
-    } elseif ($state.active -eq 'python') {
-        $notify.Icon = $iconPython
-        $notify.Text = "PC Steuerung - Python aktiv (Port $port)"
-        $statusItem.Text = 'Agent: Python läuft'
-        $startItem.Enabled = $false
-        $stopItem.Enabled = $true
-        $shutdownItem.Enabled = $true
-        $abortItem.Enabled = $true
-        $panelStatus.Text = 'Agent: Python läuft'
-        $panelStart.Enabled = $false
-        $panelStop.Enabled = $true
-        $panelRust.Enabled = $true
-        $panelPython.Enabled = $false
-        $panelShutdown.Enabled = $true
-        $panelAbort.Enabled = $true
-    } else {
-        $notify.Icon = $iconStopped
-        $notify.Text = 'PC Steuerung - Agent gestoppt'
-        $statusItem.Text = "Agent: gestoppt (bevorzugt: $($state.selected))"
-        $startItem.Enabled = $true
-        $stopItem.Enabled = $false
-        $shutdownItem.Enabled = $false
-        $abortItem.Enabled = $false
-        $panelStatus.Text = "Agent gestoppt (bevorzugt: $($state.selected))"
-        $panelStart.Enabled = $true
-        $panelStop.Enabled = $false
-        $panelRust.Enabled = $true
-        $panelPython.Enabled = $true
-        $panelShutdown.Enabled = $false
-        $panelAbort.Enabled = $false
-    }
-    $pythonItem.Checked = $state.selected -eq 'python'
-    $rustItem.Checked = $state.selected -eq 'rust'
-    if ($state.active -eq 'unknown') {
+        $openItem.Enabled = $true
+        $panelOpen.Enabled = $true
+    } elseif ($state.active -eq 'unknown') {
         $notify.Icon = $iconConflict
         $notify.Text = "PC Steuerung - Port $port ist belegt"
         $statusItem.Text = "Port $port wird von einem anderen Dienst verwendet"
         $startItem.Enabled = $false
         $stopItem.Enabled = $false
-        $versionMenu.Enabled = $false
         $openItem.Enabled = $false
         $shutdownItem.Enabled = $false
         $abortItem.Enabled = $false
         $panelStatus.Text = "Port $port wird von einem anderen Dienst verwendet"
         $panelStart.Enabled = $false
         $panelStop.Enabled = $false
-        $panelRust.Enabled = $false
-        $panelPython.Enabled = $false
         $panelShutdown.Enabled = $false
         $panelAbort.Enabled = $false
         $panelOpen.Enabled = $false
     } else {
-        $versionMenu.Enabled = $true
+        $notify.Icon = $iconStopped
+        $notify.Text = 'PC Steuerung - Agent gestoppt'
+        $statusItem.Text = 'Agent: gestoppt'
+        $startItem.Enabled = $true
+        $stopItem.Enabled = $false
+        $shutdownItem.Enabled = $false
+        $abortItem.Enabled = $false
+        $panelStatus.Text = 'Agent gestoppt'
+        $panelStart.Enabled = $true
+        $panelStop.Enabled = $false
+        $panelShutdown.Enabled = $false
+        $panelAbort.Enabled = $false
         $openItem.Enabled = $true
         $panelOpen.Enabled = $true
     }

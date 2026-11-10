@@ -7,7 +7,7 @@
 # Es sind keine Admin-Rechte noetig: Die Aufgabe laeuft nur bei der Anmeldung
 # des aktuellen Benutzers ("Nur interaktiv").
 #
-# Beide Agent-Versionen verwenden denselben Manager und dieselben Aufgaben.
+# Der Manager startet den Rust-Agenten und prueft Port 8000.
 
 param(
     [string]$TaskName = 'PC Steuerung Agent',
@@ -65,7 +65,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Principal $principal `
     -Settings $settings `
-    -Description 'Startet die bevorzugte PC-Agent-Version auf Port 8000' `
+    -Description 'Startet den PC-Agenten auf Port 8000' `
     -Force | Out-Null
 
 Write-Host "Aufgabe registriert: $TaskName"

@@ -1,5 +1,5 @@
 #define AppName "PC Steuerung"
-#define AppVersion "0.9.3"
+#define AppVersion "0.9.4"
 #define AppPublisher "PC Steuerung"
 #define AppExeName "PC Agent Rust\pc-agent.exe"
 
@@ -27,10 +27,10 @@ RestartApplications=no
 [Tasks]
 Name: "autostart"; Description: "Agent bei der Windows-Anmeldung starten"; GroupDescription: "Startverhalten:"
 Name: "tray"; Description: "Tray-Symbol bei der Windows-Anmeldung starten"; Flags: unchecked; Check: WizardIsTaskSelected('autostart')
-Name: "python"; Description: "Python-Alternative mit installieren (Python muss separat installiert sein)"; GroupDescription: "Optionale Komponenten:"; Flags: unchecked
 
 [Files]
 Source: "..\agent-manager.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\PC Steuerung.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\start-agent.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\start-tray.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -39,11 +39,9 @@ Source: "..\PC Agent Rust\target\release\pc-agent.exe"; DestDir: "{app}\PC Agent
 Source: "..\PC Agent Rust\install-autostart.ps1"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
 Source: "..\PC Agent Rust\uninstall-autostart.ps1"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
 Source: "..\PC Agent Rust\README.md"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
-Source: "..\PC App\main.py"; DestDir: "{app}\PC App"; Flags: ignoreversion; Tasks: python
-Source: "..\PC App\requirements.txt"; DestDir: "{app}\PC App"; Flags: ignoreversion; Tasks: python
-Source: "..\PC App\README.md"; DestDir: "{app}\PC App"; Flags: ignoreversion; Tasks: python
 
 [Icons]
+Name: "{group}\PC Steuerung"; Filename: "{app}\PC Steuerung.exe"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
 Name: "{group}\PC Steuerung öffnen"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\open-setup.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
 Name: "{group}\Tray-Symbol starten"; Filename: "{app}\start-tray.bat"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
 Name: "{group}\Agent stoppen"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\agent-manager.ps1"" -Action stop"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"

@@ -11,7 +11,8 @@
 - [ ] `PC_AGENT_SIMULATE=0` nur bewusst und nach Tests setzen
 - [ ] **Firewall** auf `LocalSubnet` beschränken, **kein** Port-Forwarding
 - [ ] **Persönliche Daten entfernen** (LAN-IPs, Hostnamen, Pfade, Namen)
-- [ ] `PC App/credentials.json` und `PC App/agent.log` sind **nicht** im Repo
+- [ ] `credentials.json`, `token.json`, `device.json` und `agent.log` aus
+      `%LOCALAPPDATA%\PC Steuerung` sind **nicht** im Repo
 - [ ] **Git-Historie prüfen** (keine Secrets in alten Commits)
 - [ ] Pre-Push-Check aktiv (`scripts/install-hooks.ps1`)
 - [ ] `AGENTS.md`/Doku auf sensible Angaben prüfen

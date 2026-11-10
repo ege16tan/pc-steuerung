@@ -4,7 +4,7 @@
 > Herunterfahren, Ruhezustand, Energieplan und Status.
 
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6)
-![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
+![Rust](https://img.shields.io/badge/rust-1.75%2B-000000)
 ![Kotlin](https://img.shields.io/badge/kotlin-2.3-7F52FF)
 ![Android](https://img.shields.io/badge/android-8.0%2B-3DDC84)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -37,7 +37,7 @@
 ```
 ┌──────────────────┐        HTTP + Basic Auth        ┌──────────────────────┐
 │   Android-App    │ ──────────────────────────────► │   PC-Agent           │
-│  (Kotlin/Compose)│                                 │  Python oder Rust    │
+│  (Kotlin/Compose)│                                 │  Rust (einzelne EXE) │
 └────────┬─────────┘                                 └──────────┬───────────┘
          │                                                      │
          │ Wake-on-LAN Magic Packet (UDP-Broadcast)             │ localhost
@@ -48,8 +48,6 @@
 ## Voraussetzungen
 
 - **Windows 10/11** (PC)
-- **Python 3.10+** auf dem PC (nur für die Python-Variante; die Rust-Variante
-  ist eine einzelne EXE ohne Python)
 - **Android 8.0+** (minSdk 26)
 - PC und Handy im **selben Heimnetz**
 - Für Wake-on-LAN: **Ethernet** empfohlen, WoL im BIOS/UEFI und in der
@@ -63,17 +61,15 @@
 start-agent.bat
 ```
 
-Der gemeinsame Manager startet standardmäßig den Rust-Agenten. Danach
-**`http://localhost:8000/`** öffnen und einmalig **Benutzername + Passwort**
-festlegen. In der Web-UI kann zwischen Rust und Python gewechselt werden.
-Die Auswahl bleibt für den nächsten Start gespeichert. Für den Python-Agenten
-zuerst `python -m pip install -r "PC App/requirements.txt"` ausführen.
+Oder `PC Steuerung.exe` starten: Der Launcher bietet Agent, Tray und Web-UI
+ohne Konsole an. Danach **`http://localhost:8000/`** öffnen und einmalig
+**Benutzername + Passwort** festlegen.
 
 Der Installer wird mit Inno Setup 6/7 und `installer\build-installer.ps1`
 gebaut. Er installiert pro Benutzer, kann Agent und Tray bei der Anmeldung
 starten und öffnet danach die PC-Einrichtung. In Android „QR-Code vom PC
-scannen“ wählen. Der QR-Code enthält nur PC-Name, IP und Port; Zugangsdaten und
-WoL-MAC werden anschließend im Handy-Formular eingetragen.
+scannen“ wählen. Der QR-Code enthält PC-Name, IP, Port und – falls im
+PC-Setup hinterlegt – die WoL-MAC; Zugangsdaten werden nie übertragen.
 
 Optional:
 
@@ -88,13 +84,10 @@ start-tray.bat
 powershell -ExecutionPolicy Bypass -File ".\PC Agent Rust\install-autostart.ps1" -WithTray
 ```
 
-Mehr Details: [`PC App/README.md`](PC%20App/README.md)
+Mehr Details: [`PC Agent Rust/README.md`](PC%20Agent%20Rust/README.md)
 
-Python und Rust bleiben im Projekt. Die Rust-Version wird bevorzugt; die
-Web-UI und das Tray-Symbol können jederzeit zur Python-Version wechseln.
-Beide nutzen Port 8000 und dieselben Endpunkte. Details stehen in
-[`PC App/README.md`](PC%20App/README.md) und
-[`PC Agent Rust/README.md`](PC%20Agent%20Rust/README.md).
+Die Python-Version wurde eingestellt und liegt nur noch im
+[Archiv-Repo](https://github.com/ege16tan/pc-steuerung-python).
 
 ### 2. Android-App installieren
 
@@ -110,7 +103,8 @@ In der App eintragen:
 - IP des PCs (z. B. `192.168.1.100`)
 - Port (`8000`)
 - Benutzername + Passwort (wie in der Web-Oberfläche angelegt)
-- MAC-Adresse (für Wake-on-LAN)
+- Wake-on-LAN ist optional: Die MAC-Adresse kann aus dem QR-Code übernommen,
+  automatisch vom PC geholt oder manuell eingetragen werden.
 - Broadcast-Adresse (optional, Standard `255.255.255.255`)
 
 ### App aktualisieren
@@ -137,13 +131,11 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 | GET | `/pairing-qr.svg` | QR-Code ohne Zugangsdaten |
 | POST | `/setup` | Zugangsdaten anlegen (nur localhost) |
 | POST | `/mode?simulate=true\|false` | Simulation/Echtzeit umschalten |
-| GET | `/agent-version` | aktive und bevorzugte Agent-Version |
-| POST | `/agent-version?version=rust\|python` | bevorzugte Version wechseln |
 
 ## Sicherheit
 
 - **Basic Auth** für alle LAN-Zugriffe; Passwort nur als **PBKDF2-Hash**
-  (`PC App/credentials.json`, wird nicht committet)
+  (`%LOCALAPPDATA%\PC Steuerung\credentials.json`, wird nicht committet)
 - **Localhost** (PC selbst) ist ohne Login erreichbar – für Tray und Web-UI
 - Firewall-Regel auf `LocalSubnet` beschränken
 - **Nicht ins Internet freigeben** (HTTP, nur fürs Heimnetz gedacht)
@@ -153,10 +145,11 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 ## Projektstruktur
 
 ```
-Android App/   Kotlin-/Jetpack-Compose-App inkl. Homescreen-Widget
-PC App/        FastAPI-Agent, Tray-Steuerung, Autostart-Skripte
-installer/     Inno-Setup-Skript und Build-/Setup-Helfer
-docs/          Planung und Hintergründe
+Android App/     Kotlin-/Jetpack-Compose-App inkl. Homescreen-Widget
+PC Agent Rust/   Rust-Agent (einzelne EXE), Web-UI und Autostart-Skripte
+launcher/        Quelle und Build des manuellen Launchers
+installer/       Inno-Setup-Skript und Build-/Setup-Helfer
+docs/            Planung und Hintergründe
 ```
 
 ## Roadmap

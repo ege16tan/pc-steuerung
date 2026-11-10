@@ -1,6 +1,6 @@
 //! Zentraler Zustand des Agenten.
 //!
-//! Gleich wie der Python-Agent: Zugangsdaten und Log liegen im gemeinsamen
+//! Zugangsdaten und Log liegen im gemeinsamen
 //! Datenordner, das Ereignis-Log ist ein Ringpuffer (neueste zuerst) und ein
 //! geplantes Herunterfahren wird als Zeitpunkt (Unix-Epoche) gespeichert.
 
