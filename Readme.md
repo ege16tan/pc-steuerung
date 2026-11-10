@@ -158,7 +158,7 @@ Geplante Erweiterungen stehen in [ROADMAP.md](ROADMAP.md).
 
 ## Entwicklungsstand & Sicherheit
 
-Dies ist eine **Entwicklungsversion** (privat, Simulationsmodus als Default).
+Dies ist eine **Entwicklungsversion** (öffentlich, Simulationsmodus als Default).
 Vor einer Veröffentlichung oder dem Echtbetrieb bitte die Checkliste in
 [SECURITY.md](SECURITY.md) beachten.
 

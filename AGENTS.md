@@ -26,7 +26,7 @@ Status).
   Nur eine Tray-Instanz gleichzeitig (Mutex `Local\PCSteuerungTray`).
 - Push-Schutz: `scripts/check-sensitive.sh` (Pre-Push-Hook in `.githooks/`,
   aktivieren mit `scripts/install-hooks.ps1`); GitHub Actions prüft dasselbe.
-- **Entwicklungsversion:** privat, Simulationsmodus als Default. Vor einer
+- **Entwicklungsversion:** öffentlich, Simulationsmodus als Default. Vor einer
   Veröffentlichung die Checkliste in `SECURITY.md` beachten.
 
 ## Architektur / Wichtige Fakten

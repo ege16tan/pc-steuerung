@@ -1,7 +1,7 @@
 # Sicherheit
 
 > **Entwicklungsversion:** Dieses Projekt befindet sich in Entwicklung. Das
-> Repository ist privat, der Agent läuft standardmäßig im **Simulationsmodus**.
+> Repository ist öffentlich, der Agent läuft standardmäßig im **Simulationsmodus**.
 > Es ist **nicht** für eine öffentliche Bereitstellung oder den Zugriff aus dem
 > Internet ausgelegt.
 
