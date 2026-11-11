@@ -1,6 +1,6 @@
 # PC-Steuerung per Handy: Übersicht
 
-**Ziel:** Eine Android-App, mit der man den PC im Heimnetz einschalten, herunterfahren, in den Ruhezustand versetzen und den Energieplan ändern kann. Dazu eine Statusanzeige, ein Bestätigungsdialog vor dem Herunterfahren, ein Timer und ein Widget für Ein/Aus.
+**Ziel:** Eine Android-App, mit der man den PC im Heimnetz einschalten, herunterfahren, in den Ruhezustand versetzen und den Energieplan ändern kann. Dazu eine Statusanzeige, ein Bestätigungsdialog vor dem Herunterfahren und ein Timer.
 
 **Geltungsbereich:** Nur lokal im Heimnetz. Kein Zugriff von unterwegs, kein Port im Router, kein VPN.
 
@@ -63,7 +63,7 @@ Kein Ping, da Windows Ping oft blockiert. Stattdessen Verbindungsversuch auf Por
 | Feature | Status |
 |---|---|
 | Statusanzeige mit drei Zuständen | Gewünscht, Konzept steht |
-| Android-Widget für Ein/Aus | Gewünscht, später |
+| Android-Widget für Ein/Aus | **Verworfen** (v0.9.5 entfernt, war nie gewollt) |
 | Bestätigungsdialog vor Herunterfahren | Gewünscht, in der App |
 | Timer "in X Stunden herunterfahren" | Gewünscht, Endpunkt `/shutdown?delay=` ist vorbereitet, Timer-Logik offen |
 | Abbrechen (`/abort`) | Umgesetzt im Agenten |
@@ -96,7 +96,7 @@ Kein Ping, da Windows Ping oft blockiert. Stattdessen Verbindungsversuch auf Por
 - [ ] Energiepläne auf dem PC geprüft (`powercfg /list`), falls ein Plan fehlt
 - [ ] Android-App: Ein/Aus, Status, Energieplan, Bestätigungsdialog
 - [ ] Timer serverseitig umgesetzt
-- [ ] Widget umgesetzt
+- [ ] Routinen statt Zeitplan (Auslöser + Aktionen, PC bleibt wach/entsperrt)
 - [ ] Name und Design der App
 
 ---

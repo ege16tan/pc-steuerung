@@ -16,9 +16,8 @@ try {
     Pop-Location
 }
 
-# Manuellen Launcher (PC Steuerung.exe) mitbauen.
-& (Join-Path $projectRoot 'launcher\build-launcher.ps1')
-if ($LASTEXITCODE -ne 0) { throw "Launcher-Build fehlgeschlagen (Exit-Code $LASTEXITCODE)." }
+# Kein GUI-Launcher mehr: Der Agent laeuft vollstaendig im Hintergrund,
+# bedient wird er ueber Tray-Symbol und Web-UI (http://127.0.0.1:8000/).
 
 $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 if (-not $compiler) {
@@ -42,4 +41,4 @@ $outputDir = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 & $compilerPath $issFile
 if ($LASTEXITCODE -ne 0) { throw "Inno-Setup-Build fehlgeschlagen (Exit-Code $LASTEXITCODE)." }
-Write-Host "Installer erstellt: $(Join-Path $projectRoot 'dist\PC-Steuerung-Setup-0.9.4.exe')"
+Write-Host "Installer erstellt: $(Join-Path $projectRoot 'dist\PC-Steuerung-Setup-0.9.5.exe')"

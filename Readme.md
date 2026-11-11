@@ -18,9 +18,8 @@
 | ❌ **Abbrechen** | Ein geplantes Herunterfahren stoppen |
 | 🌙 **Ruhezustand** | PC in den Hibernate-Modus schicken |
 | ⚡ **Energieplan** | Höchstleistung, Ausbalanciert oder Energiesparen |
-| 📊 **Status** | PC an/aus, aktiver Plan und Live-Countdown (grün/gelb/grau) |
+| 📊 **Status** | PC an/aus, aktiver Plan und Live-Countdown (grün/gelb/rot) |
 | ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden – oder eigene Zeit |
-| 🧩 **Homescreen-Widget** | Einschalten direkt, Herunterfahren mit Bestätigung in der App |
 | 🚀 **App-Shortcuts** | Einschalten/Herunterfahren per Long-Press aufs App-Symbol |
 | 🎨 **Darstellung** | Hell, Dunkel oder System – plus einstellbares Status-Intervall |
 | ⬆️ **App-Update** | Neue Version in den Einstellungen über GitHub Releases laden und per Android oder Shizuku installieren |
@@ -61,9 +60,11 @@
 start-agent.bat
 ```
 
-Oder `PC Steuerung.exe` starten: Der Launcher bietet Agent, Tray und Web-UI
-ohne Konsole an. Danach **`http://localhost:8000/`** öffnen und einmalig
-**Benutzername + Passwort** festlegen.
+Oder `start-agent.bat` doppelklicken: Der Agent läuft komplett im Hintergrund,
+das **Tray-Symbol** erscheint automatisch im Infobereich. Danach
+**`http://localhost:8000/`** öffnen und einmalig **Benutzername + Passwort**
+festlegen. Für Zwischeninfos beim Testen gibt es `start-agent-debug.bat`
+(sichtbare Konsole + `agent.log` live).
 
 Der Installer wird mit Inno Setup 6/7 und `installer\build-installer.ps1`
 gebaut. Er installiert pro Benutzer, kann Agent und Tray bei der Anmeldung
@@ -145,12 +146,16 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 ## Projektstruktur
 
 ```
-Android App/     Kotlin-/Jetpack-Compose-App inkl. Homescreen-Widget
+Android App/     Kotlin-/Jetpack-Compose-App (ohne Homescreen-Widget)
 PC Agent Rust/   Rust-Agent (einzelne EXE), Web-UI und Autostart-Skripte
-launcher/        Quelle und Build des manuellen Launchers
 installer/       Inno-Setup-Skript und Build-/Setup-Helfer
 docs/            Planung und Hintergründe
 ```
+
+## Credits
+
+Genutzte Bibliotheken, Tools und Agent-Skills sind in [CREDITS.md](CREDITS.md)
+mit Quelle und Zweck aufgeführt. Danke an die jeweiligen Autorinnen und Autoren.
 
 ## Roadmap
 

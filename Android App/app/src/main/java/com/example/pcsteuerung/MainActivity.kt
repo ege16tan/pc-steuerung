@@ -28,6 +28,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -36,6 +37,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -65,9 +67,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -125,9 +129,25 @@ class MainActivity : ComponentActivity() {
                 if (darkTheme) darkColorScheme() else lightColorScheme()
             }
 
+            // Weicher Theme-Wechsel: statt hartem Umschalten blendet der Inhalt
+            // kurz ab und wieder ein (kein Zustandsverlust wie bei Crossfade).
+            var themeSwitching by remember { mutableStateOf(false) }
+            LaunchedEffect(darkTheme) {
+                themeSwitching = true
+                kotlinx.coroutines.delay(260)
+                themeSwitching = false
+            }
+            val contentAlpha by animateFloatAsState(
+                targetValue = if (themeSwitching) 0.55f else 1f,
+                animationSpec = tween(160, easing = FastOutSlowInEasing),
+                label = "themeFade"
+            )
+
             MaterialTheme(colorScheme = colorScheme) {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = contentAlpha },
                     color = MaterialTheme.colorScheme.background
                 ) {
                     AppRoot(
@@ -192,7 +212,9 @@ fun httpCall(base: String, path: String, auth: AuthHeader?, method: String = "GE
 private fun statusColor(status: PcStatus): Color = when (status) {
     PcStatus.ONLINE -> Color(0xFF4CAF50)
     PcStatus.ERROR -> Color(0xFFFFC107)
-    PcStatus.OFFLINE, PcStatus.UNKNOWN -> Color(0xFF9E9E9E)
+    // PC aus: rot statt grau, damit "aus" auf einen Blick erkennbar ist.
+    PcStatus.OFFLINE -> Color(0xFFE53935)
+    PcStatus.UNKNOWN -> Color(0xFF9E9E9E)
 }
 
 private fun statusLabel(status: PcStatus): String = when (status) {
@@ -287,6 +309,18 @@ fun AppRoot(
 
     val active = profiles.firstOrNull { it.id == activeId } ?: profiles.firstOrNull()
 
+    // Einrichtung verlassen: bevorzugt zu einem fertigen Profil zurueckwechseln
+    // und ein gerade neu angelegtes, leeres Profil dabei verwerfen.
+    fun cancelSetup() {
+        val fallback = profiles.firstOrNull { it.id != active?.id && it.isComplete } ?: return
+        val remaining = if (active != null && !active.isComplete) {
+            profiles.filter { it.id != active.id }
+        } else {
+            profiles
+        }
+        persist(remaining, fallback.id)
+    }
+
     if (active == null || !active.isComplete) {
         SetupScreen(
             profile = active ?: Profile(id = ProfileStore.newId(), name = "PC"),
@@ -294,9 +328,7 @@ fun AppRoot(
                 val others = profiles.filter { it.id != saved.id }
                 persist(others + saved, saved.id)
             },
-            onCancel = if (active != null && profiles.size > 1) {
-                { persist(profiles, profiles.firstOrNull { it.id != active.id }?.id) }
-            } else null,
+            onCancel = if (profiles.size > 1) ::cancelSetup else null,
         )
     } else {
         MainApp(
@@ -961,11 +993,11 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                     }
                 }
                 if (onCancel != null) {
-                    TextButton(
+                    OutlinedButton(
                         onClick = onCancel,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Abbrechen")
+                        Text(stringResource(R.string.setup_cancel))
                     }
                 }
             }
@@ -1000,7 +1032,6 @@ fun MainApp(
     var logText by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
-    var lastWidgetText by remember { mutableStateOf("") }
     var lastUpdatedAt by remember { mutableLongStateOf(0L) }
     var nowTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var wakePendingUntil by remember { mutableLongStateOf(0L) }
@@ -1249,20 +1280,6 @@ fun MainApp(
                 lastUpdatedAt = System.currentTimeMillis()
                 refreshing = false
                 if (next.status == PcStatus.ONLINE) wakePendingUntil = 0L
-                val widgetText = when (next.status) {
-                    PcStatus.ONLINE -> if (next.pending > 0) {
-                        "${active.name}: aus in ${fmtDuration(next.pending)}"
-                    } else {
-                        "${active.name} an · ${planLabel(next.plan)}"
-                    }
-                    PcStatus.OFFLINE -> "${active.name} aus"
-                    PcStatus.ERROR -> "Login prüfen"
-                    PcStatus.UNKNOWN -> "Bereit"
-                }
-                if (widgetText != lastWidgetText) {
-                    lastWidgetText = widgetText
-                    WidgetProvider.updateAll(context, widgetText)
-                }
                 // Nach dem Wecken schneller nachsehen, ob der PC hochkommt.
                 val fastPoll = wakePendingUntil > System.currentTimeMillis()
                 delay(if (fastPoll) 2000L else settings.refreshSeconds * 1000L)
@@ -1278,25 +1295,25 @@ fun MainApp(
                     selected = tab == 0,
                     onClick = { tab = 0 },
                     icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                    label = { Text("Steuerung") }
+                    label = { Text(stringResource(R.string.tab_control)) }
                 )
                 NavigationBarItem(
                     selected = tab == 1,
                     onClick = { tab = 1 },
                     icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
-                    label = { Text("Markt+") }
+                    label = { Text(stringResource(R.string.tab_market)) }
                 )
                 NavigationBarItem(
                     selected = tab == 2,
                     onClick = { tab = 2 },
                     icon = { Icon(Icons.Default.Star, contentDescription = null) },
-                    label = { Text("Energie") }
+                    label = { Text(stringResource(R.string.tab_energy)) }
                 )
                 NavigationBarItem(
                     selected = tab == 3,
                     onClick = { tab = 3 },
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text("Einstellungen") }
+                    label = { Text(stringResource(R.string.tab_settings)) }
                 )
             }
         }
@@ -1373,12 +1390,12 @@ fun MainApp(
                         onDelete = ::deleteProfile,
                         onSave = ::saveProfile,
                         onTestConnection = ::testConnection,
-                        onModeChange = { real ->
-                            if (real) {
-                                showRealModeConfirm = true
-                            } else {
+                        onModeChange = { simulation ->
+                            if (simulation) {
                                 state = state.copy(simulate = true)
                                 runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
+                            } else {
+                                showRealModeConfirm = true
                             }
                         },
                     )
@@ -1653,7 +1670,7 @@ private fun ControlTab(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Status · ${active.name}",
+                        text = stringResource(R.string.status_header, active.name),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -1697,9 +1714,9 @@ private fun ControlTab(
                         )
                         Text(
                             text = if (sim) {
-                                "Modus: SIMULATION (nur Log)"
+                                stringResource(R.string.mode_simulation)
                             } else {
-                                "Modus: ECHT - Befehle werden ausgeführt!"
+                                stringResource(R.string.mode_real)
                             },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -1710,7 +1727,7 @@ private fun ControlTab(
             }
 
             AnimatedVisibility(
-                visible = state.simulate == false,
+                visible = state.simulate == true,
                 enter = fadeIn(tween(240)) + expandVertically(tween(320)),
                 exit = fadeOut(tween(180)) + shrinkVertically(tween(320))
             ) {
@@ -1718,12 +1735,12 @@ private fun ControlTab(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
                     )
                 ) {
                     Text(
-                        text = "ECHT-MODUS AKTIV - Befehle werden wirklich ausgeführt!",
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        text = stringResource(R.string.banner_simulation),
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(16.dp)
@@ -1733,12 +1750,12 @@ private fun ControlTab(
 
             if (state.status == PcStatus.ERROR) {
                 Text(
-                    text = "Bitte Benutzername/Passwort in den Einstellungen prüfen.",
+                    text = stringResource(R.string.error_credentials),
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.error
                 )
                 TextButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-                    Text("Einstellungen öffnen")
+                    Text(stringResource(R.string.action_open_settings))
                 }
             }
 
@@ -1921,39 +1938,70 @@ private fun MarketplaceTab(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text(
-            text = "Markt+",
-            fontSize = 30.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Text(
-            text = "An/Aus, Status, Ruhezustand und Energieplan sind immer gratis dabei. " +
-                "Wenn du mehr willst, hol dir die Extras hier.",
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "Katalog: $source",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(enabled = !busy, onClick = onRefresh) {
-                Text("Aktualisieren")
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Markt+",
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Erweiterungen für deine PC-Steuerung",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+            IconButton(onClick = onRefresh, enabled = !busy) {
+                Icon(Icons.Default.Refresh, contentDescription = "Katalog aktualisieren")
             }
         }
 
+        // Basis-Funktionen: immer enthalten und nicht abhaengig vom Katalog.
+        Text(
+            text = "IMMER DABEI",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("An/Aus", "Status", "Ruhezustand", "Energieplan").forEach { label ->
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+
+        Text(
+            text = "ERWEITERUNGEN",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Text(
+            text = "Katalog: $source · ${modules.size} Module",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+
         if (modules.isEmpty()) {
             Text(
-                text = "Katalog ist leer - bitte spaeter aktualisieren.",
+                text = "Katalog ist leer – bitte oben aktualisieren oder später erneut versuchen.",
                 fontSize = 14.sp,
                 color = MaterialTheme.colorScheme.outline
             )
@@ -2015,11 +2063,26 @@ private fun ModuleCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = module.name + if (isInstalled) " (installiert)" else "",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = module.name,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (module.version > 1 || isInstalled) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest
+                            ) {
+                                Text(
+                                    text = if (isInstalled) "installiert" else "v${module.version}",
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = module.description.ifBlank { "Zusaetzliches PC-Modul." },
                         fontSize = 12.sp,
@@ -2072,11 +2135,40 @@ private fun PlanTab(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
         )
-        Text(
-            text = "Aktiver Plan: " + planLabel(activePlan),
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
+        // Aktiver Plan als animierte Leiste: der Wechsel gleitet ein, statt
+        // einfach umzuspringen.
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Aktiver Plan",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                    modifier = Modifier.weight(1f)
+                )
+                AnimatedContent(
+                    targetState = planLabel(activePlan),
+                    transitionSpec = {
+                        (fadeIn(tween(220)) + slideInVertically(tween(260)) { -it / 2 }) togetherWith
+                            (fadeOut(tween(160)) + slideOutVertically(tween(220)) { it / 2 })
+                    },
+                    label = "activePlan"
+                ) { label ->
+                    Text(
+                        text = label,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+        }
 
         plans.forEach { (key, label, description) ->
             val active = key == activePlan
@@ -2098,10 +2190,21 @@ private fun PlanTab(
                 animationSpec = tween(320, easing = FastOutSlowInEasing),
                 label = "planContent"
             )
+            val planScale by animateFloatAsState(
+                targetValue = if (active) 1f else 0.97f,
+                animationSpec = tween(260, easing = FastOutSlowInEasing),
+                label = "planScale"
+            )
             Button(
                 onClick = { onSelect(key, label) },
                 enabled = !busy,
-                modifier = Modifier.fillMaxWidth().height(78.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(78.dp)
+                    .graphicsLayer {
+                        scaleX = planScale
+                        scaleY = planScale
+                    },
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = planContainer,
@@ -2575,7 +2678,7 @@ private fun SettingsTab(
                         SettingsDetailCard {
                             SettingsOverviewRow(
                                 icon = Icons.Default.Home,
-                                title = "PC-Weboberfläche",
+                                title = stringResource(R.string.settings_webui),
                                 subtitle = active.base,
                                 onClick = onOpenWeb,
                             )
@@ -2608,35 +2711,35 @@ private fun SettingsOverview(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            text = "Einstellungen",
+            text = stringResource(R.string.settings_title),
             fontSize = 30.sp,
             lineHeight = 36.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-            text = "PC Steuerung anpassen",
+            text = stringResource(R.string.settings_subtitle),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        SettingsSectionLabel("VERBINDUNG")
+        SettingsSectionLabel(stringResource(R.string.settings_section_connection))
         SettingsGroup {
             SettingsOverviewRow(
                 icon = Icons.Default.Settings,
-                title = "PC-Profile",
+                title = stringResource(R.string.settings_profiles),
                 subtitle = if (active.isComplete) {
                     active.name + "  ·  " + active.host + ":" + active.port
                 } else {
-                    active.name + "  ·  Noch nicht eingerichtet"
+                    active.name + "  ·  " + stringResource(R.string.settings_profiles_not_setup)
                 },
                 onClick = { onOpenPage(SettingsDestination.PROFILE) },
             )
             SettingsGroupDivider()
             SettingsOverviewRow(
                 icon = Icons.Default.Refresh,
-                title = "Verbindung testen",
-                subtitle = "Erreichbarkeit des aktiven PCs prüfen",
+                title = stringResource(R.string.settings_test_connection),
+                subtitle = stringResource(R.string.settings_test_connection_sub),
                 enabled = !busy,
                 onClick = onTestConnection,
                 trailing = if (busy) {
@@ -2652,41 +2755,41 @@ private fun SettingsOverview(
             )
         }
 
-        SettingsSectionLabel("APP-OPTIONEN")
+        SettingsSectionLabel(stringResource(R.string.settings_section_app))
         SettingsGroup {
             SettingsOverviewRow(
                 icon = Icons.Default.Star,
-                title = "Darstellung",
+                title = stringResource(R.string.settings_appearance),
                 subtitle = themeModeLabel(settings.themeMode),
                 onClick = { onOpenPage(SettingsDestination.APPEARANCE) },
             )
             SettingsGroupDivider()
             SettingsOverviewRow(
                 icon = Icons.Default.Refresh,
-                title = "Status-Aktualisierung",
-                subtitle = "Alle " + settings.refreshSeconds + " Sekunden",
+                title = stringResource(R.string.settings_refresh),
+                subtitle = stringResource(R.string.settings_refresh_value, settings.refreshSeconds),
                 onClick = { onOpenPage(SettingsDestination.APPEARANCE) },
             )
         }
 
-        SettingsSectionLabel("STEUERUNG")
+        SettingsSectionLabel(stringResource(R.string.settings_section_control))
         SettingsGroup {
             SettingsSwitchRow(
                 icon = Icons.Default.Settings,
-                title = "Echtzeitmodus",
+                title = stringResource(R.string.settings_simulation),
                 subtitle = when (simulate) {
-                    true -> "Simulation aktiv – Befehle werden nur geloggt"
-                    false -> "ECHT – Befehle werden wirklich ausgeführt"
-                    null -> "Modus kann gerade nicht ermittelt werden"
+                    true -> stringResource(R.string.settings_simulation_on)
+                    false -> stringResource(R.string.settings_simulation_off)
+                    null -> stringResource(R.string.settings_simulation_unknown)
                 },
-                checked = simulate == false,
+                checked = simulate == true,
                 enabled = simulate != null,
                 onCheckedChange = onModeChange,
             )
             SettingsGroupDivider()
             SettingsOverviewRow(
                 icon = Icons.Default.Home,
-                title = "PC-Weboberfläche",
+                title = stringResource(R.string.settings_webui),
                 subtitle = active.base,
                 onClick = onOpenWeb,
             )

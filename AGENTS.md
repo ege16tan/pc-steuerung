@@ -10,14 +10,15 @@ Status).
 
 - `PC Agent Rust/` – Windows-Agent als einzelne Rust-EXE (einzige PC-Version).
 - `Android App/` – Kotlin/Jetpack Compose-Client, läuft auf dem Handy.
-- `launcher/` – Quelle des manuellen Launchers `PC Steuerung.exe`.
+- Kein GUI-Launcher mehr: Start über `start-agent.bat` bzw. Tray/Autostart.
 - Die frühere Python-Version liegt archiviert unter
   https://github.com/ege16tan/pc-steuerung-python und wird nicht mehr gepflegt.
 
 ## Befehle
 
-- Standardstart: `start-agent.bat` oder `PC Steuerung.exe` (Launcher mit Agent,
-  Tray und Web-UI).
+- Standardstart: `start-agent.bat` (Agent + Tray, alles im Hintergrund).
+  Debug: `start-agent-debug.bat` (sichtbare Konsole + `agent.log` live).
+  Nur Tray: `start-tray.bat`. Web-UI: `http://127.0.0.1:8000/`.
 - Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
 - `PC_AGENT_SIMULATE` (Default `1`) = Simulation (nur Loggen); `0` = echte Aktion.
   Sicherheitsschalter: nicht ohne explizite Anweisung auf `0` setzen.
@@ -63,10 +64,16 @@ Status).
 ## Gotchas
 
 - Deutsche UI-Strings/Kommentare (teilweise ASCII-Transliteration, z. B. „Pruefung", „fuer").
+- Windows: **kein GUI-Launcher** mehr – der Agent läuft im Hintergrund, bedient wird
+  er über Tray-Symbol und Web-UI (`http://127.0.0.1:8000/`).
+- Tray startet automatisch: `agent-manager.ps1 -Action start` ruft `Start-TrayIfNeeded`
+  auf; der Mutex `Local\PCSteuerungTray` verhindert doppelte Symbole.
+- Debug: `start-agent-debug.bat` startet den Agenten in einer sichtbaren Konsole und
+  zeigt `agent.log` live (Zwischeninfos, kein Hardcore-Debugging).
+- Credits: genutzte Fremdprojekte/Skills in `CREDITS.md` und im Vault (`Credits`) pflegen.
 - Android: minSdk 26, compileSdk/targetSdk 36, Compose BOM `2025.09.00`, Kotlin 2.3.21,
-  AGP 8.13.2, JVM-Target 17.
-- Android: Homescreen-Widget (`WidgetProvider.kt`, `res/layout/widget.xml`,
-  Manifest-Receiver) nutzt RemoteViews und `goAsync()` – kein Compose im Widget.
+  AGP 8.13.2, JVM-Target 17. Kein Homescreen-Widget mehr (bewusst entfernt).
+- Android-Texte liegen in `res/values/strings.xml`; neue UI-Texte dort ergänzen.
 - Android-Build: `cd "Android App"` → `gradlew.bat assembleDebug`
   (APK: `app/build/outputs/apk/debug/app-debug.apk`).
 - Windows-Installer: Rust-Build + Launcher + Inno Setup mit

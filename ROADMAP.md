@@ -40,14 +40,16 @@
 - [x] QR-Scanner auf CameraX + ML Kit umgestellt (Android 17), Scan auch im Profil-Editor
 - [x] Optionaler WoL-Schritt im Android-Assistenten inkl. MAC aus QR und automatischer Suche
 - [x] Manueller Launcher `PC Steuerung.exe` für Agent, Tray und Web-UI
+- [x] **v0.9.5 (11.11.2026):** Homescreen-Widget entfernt (war nie gewollt), GUI-Launcher ersetzt (Agent läuft rein im Hintergrund), Tray startet automatisch mit dem Agenten, Debug-Konsole `start-agent-debug.bat`, Simulationsmodus ist jetzt die Ausnahme (Banner zeigt Simulation, Echt ist Standard), Statuspunkt bei „PC aus" rot, Setup lässt sich verlassen (Zurück-Button), Markt+ mit Basis-Chips und Versions-Badges, Energieplan mit animierter Aktiv-Leiste, weicher Theme-Wechsel, UI-Texte nach `strings.xml`, `CREDITS.md`
 
 ## Geplant
 
+- [ ] Routinen (ersetzt den Zeitplan): Auslöser (Uhrzeit, App-Knopf, Ereignis) + Aktionen
+  (Herunterfahren, Einschalten, Energieplan); PC muss dafür wach/entsperrt bleiben
 - [ ] Module: Katalog künftig per Release erweitern (z. B. Screenshots, Dateien)
 
 - [ ] Finales Design (Restpolitur)
 - [ ] Automatisierte Tests für den Rust-Agenten (HTTP-Endpunkte)
 - [ ] CI über GitHub Actions
 - [ ] Screenshots fürs README
-- [ ] Zeitplan (z. B. täglich 23:00 herunterfahren)
 - [ ] Home-Assistant-/Tasker-Integration

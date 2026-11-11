@@ -2,7 +2,9 @@ param(
     [ValidateSet('start', 'stop', 'status')]
     [string]$Action = 'start',
     [ValidateRange(1, 65535)]
-    [int]$Port = 8000
+    [int]$Port = 8000,
+    # Debug: Agent in einem sichtbaren Konsolenfenster starten.
+    [switch]$ShowConsole
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +19,37 @@ function Write-ManagerLog([string]$message) {
         New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
     }
     Add-Content -LiteralPath $managerLog -Value ('{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $message)
+}
+
+<#
+    Startet das Tray-Symbol, falls noch keins laeuft.
+
+    Grund: Bisher startete nur start-tray.bat das Tray. Wer den Agenten ueber
+    start-agent.bat, den Autostart oder die Aufgabenplanung startete, hatte
+    kein Symbol im Infobereich. Das Tray-Skript selbst sichert sich ueber den
+    Mutex 'Local\PCSteuerungTray' gegen doppelte Symbole - hier wird derselbe
+    Mutex nur kurz getestet, danach wird das Skript gestartet.
+#>
+function Start-TrayIfNeeded {
+    $trayScript = Join-Path $projectRoot 'tray.ps1'
+    if (-not (Test-Path -LiteralPath $trayScript -PathType Leaf)) { return $false }
+
+    $trayMutex = $null
+    try {
+        $trayMutex = New-Object System.Threading.Mutex($false, 'Local\PCSteuerungTray')
+        if (-not $trayMutex.WaitOne(0)) { return $false }
+        $trayMutex.ReleaseMutex()
+    } catch [System.Threading.AbandonedMutexException] {
+        # Ein abgestuerztes Tray hat den Mutex hinterlassen: neu starten.
+    } finally {
+        if ($trayMutex) { $trayMutex.Dispose() }
+    }
+
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden',
+        '-File', ('"' + $trayScript + '"')
+    ) -WindowStyle Hidden | Out-Null
+    return $true
 }
 
 function Get-ListenerIds {
@@ -131,7 +164,15 @@ function Start-Agent {
     try {
         $env:PC_AGENT_PORT = "$Port"
         if (-not $env:PC_AGENT_SIMULATE) { $env:PC_AGENT_SIMULATE = '1' }
-        Start-Process -FilePath $exe -WorkingDirectory $rustDir -WindowStyle Hidden | Out-Null
+        if ($ShowConsole) {
+            Write-Host "Starte Agent: $exe"
+            Write-Host "Datenordner: $stateDir"
+        }
+        if ($ShowConsole) {
+            Start-Process -FilePath $exe -WorkingDirectory $rustDir | Out-Null
+        } else {
+            Start-Process -FilePath $exe -WorkingDirectory $rustDir -WindowStyle Hidden | Out-Null
+        }
     } finally {
         if ($null -eq $oldPort) { Remove-Item Env:PC_AGENT_PORT -ErrorAction SilentlyContinue }
         else { $env:PC_AGENT_PORT = $oldPort }
@@ -162,6 +203,12 @@ switch ($Action) {
     }
     'start' {
         Prepare-Agent
-        Start-Agent
+        $result = Start-Agent
+        # Immer dafuer sorgen, dass ein Tray-Symbol im Infobereich existiert.
+        if (Start-TrayIfNeeded) {
+            Write-ManagerLog 'Tray automatic gestartet.'
+            if ($ShowConsole) { Write-Host 'Tray-Symbol gestartet.' }
+        }
+        $result
     }
 }

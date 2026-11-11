@@ -173,7 +173,8 @@ private object ShizukuApkInstaller {
 
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                val installer = IUpdateInstaller.Stub.asInterface(service)
+                val installer =
+                    IUpdateInstaller.Stub.asInterface(service)
                 Thread {
                     val message = runCatching {
                         installer.install(shellReadableApk.absolutePath)
