@@ -23,6 +23,7 @@ SolidCompression=yes
 Uninstallable=yes
 CloseApplications=yes
 RestartApplications=no
+SetupIconFile=..\PC Steuerung.ico
 
 [Tasks]
 Name: "autostart"; Description: "Agent bei der Windows-Anmeldung starten"; GroupDescription: "Startverhalten:"
@@ -30,6 +31,8 @@ Name: "tray"; Description: "Tray-Symbol bei der Windows-Anmeldung starten"; Flag
 
 [Files]
 Source: "..\agent-manager.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\open-web-ui.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\PC Steuerung.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\start-agent.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\start-agent-debug.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\start-tray.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -41,11 +44,11 @@ Source: "..\PC Agent Rust\uninstall-autostart.ps1"; DestDir: "{app}\PC Agent Rus
 Source: "..\PC Agent Rust\README.md"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\PC Steuerung starten"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\agent-manager.ps1"" -Action start"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
-Name: "{group}\PC Steuerung öffnen"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\open-setup.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
-Name: "{group}\Tray-Symbol starten"; Filename: "{app}\start-tray.bat"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
-Name: "{group}\Debug-Konsole"; Filename: "{app}\start-agent-debug.bat"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
-Name: "{group}\Agent stoppen"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\agent-manager.ps1"" -Action stop"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
+Name: "{group}\PC Steuerung starten"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\agent-manager.ps1"" -Action start"; WorkingDir: "{app}"; IconFilename: "{app}\PC Steuerung.ico"
+Name: "{group}\PC Steuerung öffnen"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\open-web-ui.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\PC Steuerung.ico"
+Name: "{group}\Tray-Symbol starten"; Filename: "{app}\start-tray.bat"; WorkingDir: "{app}"; IconFilename: "{app}\PC Steuerung.ico"
+Name: "{group}\Debug-Konsole"; Filename: "{app}\start-agent-debug.bat"; WorkingDir: "{app}"; IconFilename: "{app}\PC Steuerung.ico"
+Name: "{group}\Agent stoppen"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\agent-manager.ps1"" -Action stop"; WorkingDir: "{app}"; IconFilename: "{app}\PC Steuerung.ico"
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\PC Agent Rust\install-autostart.ps1"" -WithTray"; Flags: runhidden; Tasks: tray

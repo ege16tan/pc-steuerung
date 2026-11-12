@@ -19,6 +19,9 @@ Status).
 - Standardstart: `start-agent.bat` (Agent + Tray, alles im Hintergrund).
   Debug: `start-agent-debug.bat` (sichtbare Konsole + `agent.log` live).
   Nur Tray: `start-tray.bat`. Web-UI: `http://127.0.0.1:8000/`.
+- Desktop-Symbol: `scripts\create-desktop-shortcut.ps1` legt „PC Steuerung" auf dem
+  Desktop an (startet Agent/Tray und öffnet die Web-UI). Icon erzeugen:
+  `scripts\build-icon.ps1` (rendert `PC Steuerung.ico` aus den Android-Vektoren).
 - Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
 - `PC_AGENT_SIMULATE` (Default `0` im Manager) = echte Aktion; `1` = Simulation (nur Loggen).
   Simulation nur bewusst einschalten; destruktive Aufrufe (Shutdown) immer mit Countdown testen.

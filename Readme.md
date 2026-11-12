@@ -66,6 +66,11 @@ das **Tray-Symbol** erscheint automatisch im Infobereich. Danach
 festlegen. Für Zwischeninfos beim Testen gibt es `start-agent-debug.bat`
 (sichtbare Konsole + `agent.log` live).
 
+**Desktop-Symbol:** `scripts\create-desktop-shortcut.ps1` legt die Verknüpfung
+„PC Steuerung" auf dem Desktop an – mit dem App-Icon, startet Agent/Tray und
+öffnet die Web-Oberfläche. Das Icon wird von `scripts\build-icon.ps1` aus den
+Android-Vektoren erzeugt (`PC Steuerung.ico`).
+
 Der Installer wird mit Inno Setup 6/7 und `installer\build-installer.ps1`
 gebaut. Er installiert pro Benutzer, kann Agent und Tray bei der Anmeldung
 starten und öffnet danach die PC-Einrichtung. In Android „QR-Code vom PC
@@ -149,6 +154,7 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 Android App/     Kotlin-/Jetpack-Compose-App (ohne Homescreen-Widget)
 PC Agent Rust/   Rust-Agent (einzelne EXE), Web-UI und Autostart-Skripte
 installer/       Inno-Setup-Skript und Build-/Setup-Helfer
+scripts/         Prüf-, Icon- und Desktop-Helfer
 docs/            Planung und Hintergründe
 ```
 
