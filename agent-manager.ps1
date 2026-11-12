@@ -163,7 +163,9 @@ function Start-Agent {
     $oldSimulation = $env:PC_AGENT_SIMULATE
     try {
         $env:PC_AGENT_PORT = "$Port"
-        if (-not $env:PC_AGENT_SIMULATE) { $env:PC_AGENT_SIMULATE = '1' }
+        # Echtbetrieb ist Standard: Aktionen werden wirklich ausgefuehrt.
+        # Nur wenn PC_AGENT_SIMULATE=1 ausdruecklich gesetzt ist, wird simuliert.
+        if (-not $env:PC_AGENT_SIMULATE) { $env:PC_AGENT_SIMULATE = '0' }
         if ($ShowConsole) {
             Write-Host "Starte Agent: $exe"
             Write-Host "Datenordner: $stateDir"

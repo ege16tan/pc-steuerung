@@ -20,8 +20,8 @@ Status).
   Debug: `start-agent-debug.bat` (sichtbare Konsole + `agent.log` live).
   Nur Tray: `start-tray.bat`. Web-UI: `http://127.0.0.1:8000/`.
 - Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
-- `PC_AGENT_SIMULATE` (Default `1`) = Simulation (nur Loggen); `0` = echte Aktion.
-  Sicherheitsschalter: nicht ohne explizite Anweisung auf `0` setzen.
+- `PC_AGENT_SIMULATE` (Default `0` im Manager) = echte Aktion; `1` = Simulation (nur Loggen).
+  Simulation nur bewusst einschalten; destruktive Aufrufe (Shutdown) immer mit Countdown testen.
 - `PC_WOL_BROADCAST` (Default `192.168.1.255`) = Broadcast-Ziel für `/wake`.
 - Tray-Steuerung: `start-tray.bat` (Web-UI öffnen, Agent starten/stoppen).
   Nur eine Tray-Instanz gleichzeitig (Mutex `Local\PCSteuerungTray`).
@@ -68,6 +68,9 @@ Status).
   er über Tray-Symbol und Web-UI (`http://127.0.0.1:8000/`).
 - Tray startet automatisch: `agent-manager.ps1 -Action start` ruft `Start-TrayIfNeeded`
   auf; der Mutex `Local\PCSteuerungTray` verhindert doppelte Symbole.
+- Agent läuft dauerhaft: Autostart über `PC Agent Rust\install-autostart.ps1 -WithTray`
+  (Aufgabenplanung, „bei Anmeldung") **und** Tray-Watchdog (`tray.ps1` startet den Agenten
+  automatisch, wenn er nicht läuft; abschaltbar im Tray-Menü).
 - Debug: `start-agent-debug.bat` startet den Agenten in einer sichtbaren Konsole und
   zeigt `agent.log` live (Zwischeninfos, kein Hardcore-Debugging).
 - Credits: genutzte Fremdprojekte/Skills in `CREDITS.md` und im Vault (`Credits`) pflegen.

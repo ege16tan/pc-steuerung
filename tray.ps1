@@ -6,6 +6,11 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $manager = Join-Path $root 'agent-manager.ps1'
 $port = 8000
 
+# Watchdog: Laeuft der Agent nicht, startet ihn das Tray automatisch. Damit ist der
+# PC nach dem Einschalten immer erreichbar, auch wenn niemand das Symbol anklickt.
+$script:autoStartEnabled = $true
+$script:lastAutoStart = [DateTime]::MinValue
+
 # Nur eine Tray-Instanz gleichzeitig (verhindert doppelte Symbole).
 $trayMutex = New-Object System.Threading.Mutex($false, 'Local\PCSteuerungTray')
 if (-not $trayMutex.WaitOne(0)) { exit }
@@ -78,6 +83,13 @@ $stopItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $stopItem.Text = 'Agent stoppen'
 $stopItem.Add_Click({ Invoke-Manager 'stop'; Update-Ui })
 [void]$menu.Items.Add($stopItem)
+
+$autoItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$autoItem.Text = 'Agent automatisch starten'
+$autoItem.Checked = $true
+$autoItem.CheckOnClick = $true
+$autoItem.Add_Click({ $script:autoStartEnabled = $autoItem.Checked; Update-Ui })
+[void]$menu.Items.Add($autoItem)
 
 $openItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $openItem.Text = 'Web-UI im Browser öffnen'
@@ -209,6 +221,14 @@ function Update-Ui {
         $panelAbort.Enabled = $false
         $openItem.Enabled = $true
         $panelOpen.Enabled = $true
+
+        # Watchdog: Agent automatisch starten, hoechstens alle 20 Sekunden.
+        if ($script:autoStartEnabled -and
+            ((Get-Date) - $script:lastAutoStart).TotalSeconds -gt 20) {
+            $script:lastAutoStart = Get-Date
+            $notify.Text = 'PC Steuerung - Agent wird gestartet ...'
+            Invoke-Manager 'start'
+        }
     }
 }
 

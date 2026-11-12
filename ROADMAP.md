@@ -41,6 +41,7 @@
 - [x] Optionaler WoL-Schritt im Android-Assistenten inkl. MAC aus QR und automatischer Suche
 - [x] Manueller Launcher `PC Steuerung.exe` für Agent, Tray und Web-UI
 - [x] **v0.9.5 (11.11.2026):** Homescreen-Widget entfernt (war nie gewollt), GUI-Launcher ersetzt (Agent läuft rein im Hintergrund), Tray startet automatisch mit dem Agenten, Debug-Konsole `start-agent-debug.bat`, Simulationsmodus ist jetzt die Ausnahme (Banner zeigt Simulation, Echt ist Standard), Statuspunkt bei „PC aus" rot, Setup lässt sich verlassen (Zurück-Button), Markt+ mit Basis-Chips und Versions-Badges, Energieplan mit animierter Aktiv-Leiste, weicher Theme-Wechsel, UI-Texte nach `strings.xml`, `CREDITS.md`
+- [x] **v0.9.6 (12.11.2026):** Setup ohne Schritt 0 (Einstieg direkt bei „Verbindung" inkl. QR-Scan, Felder werden automatisch gefüllt), echter Theme-Crossfade (alle Farben animiert) statt Abblend-Hack, Markt+ ist ehrlich (kein Fake-Download: Module sind enthalten, Katalog steuert nur das Angebot), Agent läuft dauerhaft (Autostart-Aufgaben + Tray-Watchdog), Echtbetrieb ist Default (`PC_AGENT_SIMULATE=0`)
 
 ## Geplant
 

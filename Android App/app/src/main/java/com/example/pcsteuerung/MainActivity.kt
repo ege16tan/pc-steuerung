@@ -123,31 +123,18 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
             }
-            val colorScheme = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val targetScheme = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
             } else {
                 if (darkTheme) darkColorScheme() else lightColorScheme()
             }
-
-            // Weicher Theme-Wechsel: statt hartem Umschalten blendet der Inhalt
-            // kurz ab und wieder ein (kein Zustandsverlust wie bei Crossfade).
-            var themeSwitching by remember { mutableStateOf(false) }
-            LaunchedEffect(darkTheme) {
-                themeSwitching = true
-                kotlinx.coroutines.delay(260)
-                themeSwitching = false
-            }
-            val contentAlpha by animateFloatAsState(
-                targetValue = if (themeSwitching) 0.55f else 1f,
-                animationSpec = tween(160, easing = FastOutSlowInEasing),
-                label = "themeFade"
-            )
+            // Sanfter Theme-Wechsel: die Farben des Schemas werden einzeln animiert
+            // (echter Crossfade) statt den Inhalt abzublenden oder hart umzuschalten.
+            val colorScheme = animatedColorScheme(targetScheme)
 
             MaterialTheme(colorScheme = colorScheme) {
                 Surface(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { alpha = contentAlpha },
+                    modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     AppRoot(
@@ -215,6 +202,66 @@ private fun statusColor(status: PcStatus): Color = when (status) {
     // PC aus: rot statt grau, damit "aus" auf einen Blick erkennbar ist.
     PcStatus.OFFLINE -> Color(0xFFE53935)
     PcStatus.UNKNOWN -> Color(0xFF9E9E9E)
+}
+
+/**
+ * Animiert einen Theme-Wechsel: jede Farbe des Zielschemas blendet einzeln ueber
+ * [durationMs] ueber. Dadurch geht Hell/Dunkel weich ineinander ueber, ohne dass
+ * der Bildschirminhalt abgeblendet wird oder der UI-Zustand verloren geht.
+ * Reine Compose-Loesung, keine zusaetzliche Bibliothek.
+ */
+@Composable
+private fun animatedColorScheme(
+    target: ColorScheme,
+    durationMs: Int = 480,
+): ColorScheme {
+    @Composable
+    fun fade(color: Color): Color {
+        val animated by animateColorAsState(
+            targetValue = color,
+            animationSpec = tween(durationMs, easing = FastOutSlowInEasing),
+            label = "schemeColor"
+        )
+        return animated
+    }
+    return target.copy(
+        primary = fade(target.primary),
+        onPrimary = fade(target.onPrimary),
+        primaryContainer = fade(target.primaryContainer),
+        onPrimaryContainer = fade(target.onPrimaryContainer),
+        inversePrimary = fade(target.inversePrimary),
+        secondary = fade(target.secondary),
+        onSecondary = fade(target.onSecondary),
+        secondaryContainer = fade(target.secondaryContainer),
+        onSecondaryContainer = fade(target.onSecondaryContainer),
+        tertiary = fade(target.tertiary),
+        onTertiary = fade(target.onTertiary),
+        tertiaryContainer = fade(target.tertiaryContainer),
+        onTertiaryContainer = fade(target.onTertiaryContainer),
+        background = fade(target.background),
+        onBackground = fade(target.onBackground),
+        surface = fade(target.surface),
+        onSurface = fade(target.onSurface),
+        surfaceVariant = fade(target.surfaceVariant),
+        onSurfaceVariant = fade(target.onSurfaceVariant),
+        surfaceTint = fade(target.surfaceTint),
+        inverseSurface = fade(target.inverseSurface),
+        inverseOnSurface = fade(target.inverseOnSurface),
+        error = fade(target.error),
+        onError = fade(target.onError),
+        errorContainer = fade(target.errorContainer),
+        onErrorContainer = fade(target.onErrorContainer),
+        outline = fade(target.outline),
+        outlineVariant = fade(target.outlineVariant),
+        scrim = fade(target.scrim),
+        surfaceBright = fade(target.surfaceBright),
+        surfaceDim = fade(target.surfaceDim),
+        surfaceContainer = fade(target.surfaceContainer),
+        surfaceContainerHigh = fade(target.surfaceContainerHigh),
+        surfaceContainerHighest = fade(target.surfaceContainerHighest),
+        surfaceContainerLow = fade(target.surfaceContainerLow),
+        surfaceContainerLowest = fade(target.surfaceContainerLowest),
+    )
 }
 
 private fun statusLabel(status: PcStatus): String = when (status) {
@@ -520,7 +567,6 @@ private fun CameraQrPreview(onResult: (String) -> Unit) {
 
 @Composable
 fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Unit)?) {
-    var method by remember { mutableStateOf<String?>(null) }
     var step by remember { mutableIntStateOf(1) }
     var name by remember { mutableStateOf(profile.name) }
     var host by remember { mutableStateOf(profile.host) }
@@ -663,51 +709,10 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                 color = MaterialTheme.colorScheme.outline
             )
 
-            if (method == null) {
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(28.dp),
-                    colors = CardDefaults.elevatedCardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = "Wie möchtest du den PC verbinden?",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Button(
-                            onClick = { method = "qr"; step = 1; scanMessage = null },
-                            modifier = Modifier.fillMaxWidth().height(56.dp),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Text("Mit QR-Code einrichten", fontSize = 16.sp)
-                        }
-                        Text(
-                            text = "QR-Code aus der PC-Weboberfläche scannen. Am schnellsten.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                        OutlinedButton(
-                            onClick = { method = "manual"; step = 1; testResult = null },
-                            modifier = Modifier.fillMaxWidth().height(56.dp),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Text("Manuell einrichten", fontSize = 16.sp)
-                        }
-                        Text(
-                            text = "IP, Port und Zugangsdaten selbst eingeben.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-            } else {
-                Row(
+            // Schritt 0 (Auswahl "QR oder manuell") ist entfernt: Der Assistent startet
+            // direkt bei Schritt 1, links/rechts gilt derselbe Ablauf. QR-Scan ist ein
+            // optionaler Abkuerzungs-Button, der die Felder automatisch fuellt.
+            Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -726,7 +731,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                 }
                 Text(
                     text = when (step) {
-                        1 -> if (method == "qr") "Schritt 1 · QR-Code scannen" else "Schritt 1 · Verbindung"
+                        1 -> "Schritt 1 · Verbindung"
                         2 -> "Schritt 2 · Wake-on-LAN (optional)"
                         3 -> "Schritt 3 · Anmeldung"
                         else -> "Schritt 4 · Fertig"
@@ -748,18 +753,21 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                     ) {
                         when (step) {
                             1 -> {
-                                if (method == "qr") {
-                                    OutlinedButton(
-                                        onClick = { showScanner = true },
-                                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                                        shape = RoundedCornerShape(16.dp)
-                                    ) {
-                                        Text("QR-Code vom PC scannen")
-                                    }
-                                    scanMessage?.let {
-                                        Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                                    }
+                                OutlinedButton(
+                                    onClick = { showScanner = true },
+                                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                                    shape = RoundedCornerShape(16.dp)
+                                ) {
+                                    Text("QR-Code vom PC scannen (schnellster Weg)")
                                 }
+                                scanMessage?.let {
+                                    Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Text(
+                                    text = "Oder die Felder darunter selbst ausfüllen.",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
                                 OutlinedTextField(
                                     value = name,
                                     onValueChange = { name = it },
@@ -785,34 +793,32 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     modifier = Modifier.fillMaxWidth()
                                 )
-                                if (method == "manual") {
-                                    Button(
-                                        onClick = ::testConnection,
-                                        enabled = connectionReady && !testing,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(16.dp)
-                                    ) {
-                                        if (testing) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp),
-                                                strokeWidth = 2.dp,
-                                                color = MaterialTheme.colorScheme.onPrimary
-                                            )
-                                        } else {
-                                            Text("Verbindung testen")
-                                        }
-                                    }
-                                    testResult?.let {
-                                        Text(
-                                            text = it,
-                                            fontSize = 12.sp,
-                                            color = if (it.startsWith("Erreichbar")) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.error
-                                            }
+                                Button(
+                                    onClick = ::testConnection,
+                                    enabled = connectionReady && !testing,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp)
+                                ) {
+                                    if (testing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.onPrimary
                                         )
+                                    } else {
+                                        Text("Verbindung testen")
                                     }
+                                }
+                                testResult?.let {
+                                    Text(
+                                        text = it,
+                                        fontSize = 12.sp,
+                                        color = if (it.startsWith("Erreichbar")) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        }
+                                    )
                                 }
                             }
                             2 -> {
@@ -1000,7 +1006,6 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                         Text(stringResource(R.string.setup_cancel))
                     }
                 }
-            }
         }
     }
 }
@@ -1960,6 +1965,22 @@ private fun MarketplaceTab(
             IconButton(onClick = onRefresh, enabled = !busy) {
                 Icon(Icons.Default.Refresh, contentDescription = "Katalog aktualisieren")
             }
+        }
+
+        // Ehrlich statt Fake-Markt: Die Module stecken bereits in der App.
+        // Der GitHub-Katalog bestimmt nur, welche Erweiterungen hier angeboten werden.
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Kein Download nötig: Diese Erweiterungen sind bereits in der App " +
+                    "enthalten. Der Katalog auf GitHub legt nur fest, was hier angeboten wird.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(14.dp)
+            )
         }
 
         // Basis-Funktionen: immer enthalten und nicht abhaengig vom Katalog.

@@ -21,7 +21,7 @@
 | 📊 **Status** | PC an/aus, aktiver Plan und Live-Countdown (grün/gelb/rot) |
 | ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden – oder eigene Zeit |
 | 🚀 **App-Shortcuts** | Einschalten/Herunterfahren per Long-Press aufs App-Symbol |
-| 🎨 **Darstellung** | Hell, Dunkel oder System – plus einstellbares Status-Intervall |
+| Darstellung | Hell, Dunkel oder System – Farben blenden weich über (Crossfade) |
 | ⬆️ **App-Update** | Neue Version in den Einstellungen über GitHub Releases laden und per Android oder Shizuku installieren |
 | 🖥️ **Web-Oberfläche** | Status, Steuerung und Ereignis-Log im Browser |
 | 📝 **Verlauf** | Dauerhafte Logdatei mit Datum/Uhrzeit – einsehbar in App und Web |
