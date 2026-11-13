@@ -51,6 +51,19 @@ Diese Skills liegen global unter `~/.agents/skills` und werden über die
 | [Rust](https://www.rust-lang.org/) (stable, x86_64-pc-windows-gnu) | Agent-Build |
 | PowerShell / WinForms (`System.Windows.Forms.NotifyIcon`) | Tray-Symbol |
 
+## Vorbilder (Ideen, kein uebernommener Code)
+
+| Projekt | Lizenz | Was wir daraus gelernt haben |
+|---|---|---|
+| [Mem Reduct](https://github.com/henrypp/memreduct) von [Henry++](https://github.com/henrypp) | GPL-3.0 | Wie man Arbeitsspeicher unter Windows freigibt: Working Sets per `EmptyWorkingSet` trimmen und die Standby-Liste per `NtSetSystemInformation(SystemMemoryListInformation, MemoryPurgeStandbyList)` leeren. |
+
+> Wichtig: Aus Mem Reduct wurde **kein Quellcode uebernommen** – GPL-3.0 waere mit
+> unserer MIT-Lizenz unvereinbar. Das Plugin `game-optimizer` ruft dieselben
+> Windows-APIs selbst auf. Die Credits stehen hier, weil die Idee von dort stammt.
+>
+> `memreduct.org` ist eine **Fan-Seite** (nicht die offizielle Quelle); massgeblich
+> ist das GitHub-Repository von Henry++.
+
 ## Frühere Version
 
 Die archivierte Python-Version (FastAPI + Tkinter-Tray) liegt unter

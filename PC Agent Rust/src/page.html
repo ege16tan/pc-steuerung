@@ -57,6 +57,22 @@
  #log .action{color:#93c5fd;font-weight:600}
  #log .err{color:#fca5a5}
  .filelog{font:12px/1.6 ui-monospace,"Cascadia Mono",Consolas,monospace;max-height:300px;overflow:auto;white-space:pre-wrap;color:#cfd6e4}
+ .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+ .tabbtn{padding:9px 14px;border-radius:10px;border:1px solid var(--line);background:transparent;
+  color:var(--muted);font-size:13.5px}
+ .tabbtn.active{background:#12233f;border-color:var(--accent);color:#bfdbfe}
+ .gamelist{display:flex;flex-direction:column;gap:8px;max-height:380px;overflow:auto;margin-top:12px}
+ .game{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #1f2530;
+  border-radius:10px;background:#11151d}
+ .game .meta{flex:1;min-width:0}
+ .game .gname{font-size:14px}
+ .game .gpath{font-size:11.5px;color:var(--muted);word-break:break-all}
+ .chip{font-size:11px;padding:3px 8px;border-radius:999px;background:#12331f;border:1px solid #1f6f3f;
+  color:#7ee2a8;white-space:nowrap}
+ .plog{font:12px/1.6 ui-monospace,"Cascadia Mono",Consolas,monospace;max-height:220px;overflow:auto;
+  white-space:pre-wrap;color:#cfd6e4;margin-top:12px}
+ .checkline{display:flex;align-items:center;gap:8px}
+ .checkline input{width:auto}
  .pairing{display:flex;align-items:center;justify-content:space-between;gap:18px;max-width:700px;margin:0 auto 16px}
  .pairing h2{margin-bottom:8px}
  .pairing img{display:block;width:184px;height:184px;flex:0 0 184px;padding:8px;border-radius:12px;background:#fff}
@@ -141,6 +157,11 @@
  </div>
 
  <div id="main">
+ <div class="tabs">
+  <button class="tabbtn active" data-tab="control" onclick="showTab('control')">Steuerung</button>
+  <button class="tabbtn" data-tab="games" onclick="showTab('games')">Game Optimization</button>
+ </div>
+ <div id="tab-control">
  <div class="grid">
   <div class="card">
    <h2>Status</h2>
@@ -188,6 +209,38 @@
   <div id="filelog" class="filelog">Wird geladen ...</div>
  </div>
  </div>
+
+ <div id="tab-games" style="display:none">
+  <div class="card">
+   <h2>Game Optimization</h2>
+   <p class="hint">Das Plugin startet nur auf Knopfdruck und laeuft nicht dauerhaft im Hintergrund.</p>
+   <div class="actions" style="margin-top:12px">
+    <button class="primary" onclick="scanGames()">Spiele scannen</button>
+    <button class="ghost" onclick="autoOptimize()">Automatisch optimieren</button>
+    <button class="ghost" onclick="stopOptimize()">Optimierung beenden</button>
+   </div>
+   <div id="pluginState" class="hint" style="margin-top:12px">Plugin-Status wird geladen ...</div>
+
+   <div class="sep"></div>
+   <h2>Profil</h2>
+   <div class="row"><input id="killList" placeholder="Discord.exe, Spotify.exe"></div>
+   <div class="hint">Apps, die beim Optimieren geschlossen werden (Komma-getrennt).</div>
+   <div class="row"><input id="scanPaths" placeholder="D:\\Spiele\\Eigener Ordner"></div>
+   <div class="hint">Zusaetzliche Ordner fuer den Scan (Komma-getrennt).</div>
+   <div class="row checkline">
+    <input id="autoMode" type="checkbox" onchange="saveGameConfig()">
+    <span class="hint">Automatisch das laufende Spiel optimieren</span>
+   </div>
+   <div class="row"><button class="ghost" onclick="saveGameConfig()">Einstellungen speichern</button></div>
+
+   <div class="sep"></div>
+   <h2>Gefundene Spiele</h2>
+   <div class="hint" id="scanInfo">Noch nicht gescannt.</div>
+   <div id="games" class="gamelist"><div class="hint">Spiele scannen, um sie hier zu sehen.</div></div>
+   <div id="pluginLog" class="plog"></div>
+  </div>
+ </div>
+ </div>
 </div>
 <script>
 document.getElementById('delay').value = localStorage.getItem('pcDelay') || '60';
@@ -206,6 +259,9 @@ async function checkSetup(){
     loadFileLog();
     setInterval(refresh, 2000);
     setInterval(loadFileLog, 10000);
+    setInterval(() => {
+      if(document.getElementById('tab-games').style.display !== 'none') loadGamePanel();
+    }, 4000);
   };
   try{
     const r = await fetch('/setup-status');
@@ -443,6 +499,145 @@ async function setMode(simulate){
   }
   refresh();
 }
+// ---------------- Game Optimization ----------------
+
+let gamesCache = [];
+let configLoaded = false;
+
+function showTab(name){
+  document.getElementById('tab-control').style.display = name === 'control' ? 'block' : 'none';
+  document.getElementById('tab-games').style.display = name === 'games' ? 'block' : 'none';
+  document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  if(name === 'games') loadGamePanel();
+}
+
+function splitList(value){
+  return String(value).split(',').map(s => s.trim()).filter(s => s.length > 0);
+}
+
+async function loadGamePanel(){
+  if(!configLoaded){
+    try{
+      const cfg = await (await call('/game-config')).json();
+      document.getElementById('killList').value = (cfg.kill_list || []).join(', ');
+      document.getElementById('scanPaths').value = (cfg.scan_paths || []).join(', ');
+      document.getElementById('autoMode').checked = !!cfg.auto;
+      configLoaded = true;
+    }catch(e){}
+  }
+  try{
+    const d = await (await call('/games')).json();
+    gamesCache = d.games || [];
+    document.getElementById('scanInfo').textContent = d.scanned_at
+      ? ('Zuletzt gescannt: ' + d.scanned_at + ' - ' + gamesCache.length + ' Spiele')
+      : 'Noch nicht gescannt.';
+    renderGames();
+  }catch(e){}
+  try{
+    const p = await (await call('/plugins')).json();
+    renderPlugin((p.plugins || []).find(x => x.id === 'game-optimizer'));
+  }catch(e){}
+}
+
+function renderGames(){
+  const list = document.getElementById('games');
+  if(!gamesCache.length){
+    list.innerHTML = '<div class="hint">Keine Spiele gefunden. Scannen oder eigene Ordner eintragen.</div>';
+    return;
+  }
+  list.innerHTML = gamesCache.map((g, i) =>
+    '<div class="game"><div class="meta"><div class="gname">' + esc(g.name) + '</div>' +
+    '<div class="gpath">' + esc(g.exe) + ' - ' + esc(g.source) + '</div></div>' +
+    (g.running ? '<span class="chip">laeuft</span>' : '') +
+    '<button class="ghost" data-index="' + i + '">Optimieren</button></div>'
+  ).join('');
+  list.querySelectorAll('button[data-index]').forEach(btn => {
+    btn.onclick = () => optimizeGame(gamesCache[Number(btn.dataset.index)].exe);
+  });
+}
+
+function renderPlugin(p){
+  const state = document.getElementById('pluginState');
+  const log = document.getElementById('pluginLog');
+  if(!p){
+    state.textContent = 'Plugin game-optimizer nicht gefunden.';
+    log.textContent = '';
+    return;
+  }
+  const parts = [];
+  parts.push(p.available ? 'Plugin bereit' : 'Plugin-Datei fehlt (game-optimizer.exe neben dem Agenten)');
+  if(p.running){
+    parts.push('<b style="color:#7ee2a8">aktiv</b> - pid ' + p.pid + ' - ' + fmt(p.uptime) +
+      (p.game ? ' - ' + esc(p.game) : ''));
+  } else {
+    parts.push('nicht aktiv');
+  }
+  state.innerHTML = parts.join(' - ');
+  log.textContent = (p.tail || []).join('\n');
+}
+
+async function scanGames(){
+  document.getElementById('scanInfo').textContent = 'Scanne Steam, Epic, GOG und eigene Ordner ...';
+  try{
+    const r = await call('/games/scan', 'POST');
+    if(!r.ok) alert('Scan fehlgeschlagen: ' + (await r.text()));
+  }catch(e){
+    alert('Nicht erreichbar: ' + e.message);
+  }
+  await loadGamePanel();
+}
+
+async function saveGameConfig(){
+  const body = {
+    kill_list: splitList(document.getElementById('killList').value),
+    scan_paths: splitList(document.getElementById('scanPaths').value),
+    auto: document.getElementById('autoMode').checked
+  };
+  try{
+    const r = await fetch('/game-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    if(!r.ok) alert('Speichern fehlgeschlagen: ' + (await r.text()));
+  }catch(e){
+    alert('Nicht erreichbar: ' + e.message);
+  }
+  await loadGamePanel();
+}
+
+async function optimizeGame(exe){
+  if(!confirm('PC fuer dieses Spiel optimieren?\n' + exe +
+    '\n\nApps aus der Kill-Liste werden geschlossen.')) return;
+  try{
+    const r = await call('/plugins/game-optimizer/start?game=' + encodeURIComponent(exe), 'POST');
+    if(!r.ok) alert('Start fehlgeschlagen: ' + (await r.text()));
+  }catch(e){
+    alert('Nicht erreichbar: ' + e.message);
+  }
+  await loadGamePanel();
+}
+
+async function autoOptimize(){
+  try{
+    const r = await call('/plugins/game-optimizer/start?auto=1', 'POST');
+    if(!r.ok) alert('Nicht gestartet: ' + (await r.text()));
+  }catch(e){
+    alert('Nicht erreichbar: ' + e.message);
+  }
+  await loadGamePanel();
+}
+
+async function stopOptimize(){
+  try{
+    const r = await call('/plugins/game-optimizer/stop', 'POST');
+    if(!r.ok) alert('Beenden fehlgeschlagen: ' + (await r.text()));
+  }catch(e){
+    alert('Nicht erreichbar: ' + e.message);
+  }
+  await loadGamePanel();
+}
+
 showWiz(1);
 toggleAuth();
 toggleWol();

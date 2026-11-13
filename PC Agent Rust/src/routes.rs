@@ -2,12 +2,15 @@
 //! GET /, GET /setup-status, POST /setup,
 //! POST /mode, GET /status,
 //! POST /shutdown, POST /abort, POST /hibernate, POST /power-plan,
-//! POST /wake, POST /ping, GET /events, GET /log.
+//! POST /wake, POST /ping, GET /events, GET /log,
+//! GET /plugins, POST /plugins/{id}/start, POST /plugins/{id}/stop,
+//! GET /plugins/{id}/output,
+//! GET /games, POST /games/scan, GET/POST /game-config.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{ConnectInfo, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::response::{Html, IntoResponse, Json, Response};
@@ -666,6 +669,173 @@ pub async fn log_ep(
         Err(error) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Log konnte nicht gelesen werden: {error}"),
+        ),
+    }
+}
+
+// ---------------- Plugins und Spiel-Optimierung ----------------
+
+/// GET /plugins — alle bekannten Plugins mit Laufzeitstatus.
+pub async fn plugins_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    Json(json!({ "plugins": crate::plugins::describe(&app) })).into_response()
+}
+
+/// POST /plugins/{id}/start?game=&auto= — Plugin starten (nur auf Knopfdruck).
+///
+/// `auto=1` bedeutet: der Agent erkennt selbst das laufende Spiel aus der
+/// gescannten Liste. Es gibt bewusst **keinen** Hintergrund-Waechter, der
+/// 24/7 lauscht – gestartet wird nur, was angefordert wird.
+pub async fn plugin_start(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    Query(query): Query<Vec<(String, String)>>,
+    _auth: Auth,
+) -> Response {
+    let simulate = snapshot(&app).simulate;
+    let auto = first_query(&query, "auto")
+        .and_then(parse_query_bool)
+        .unwrap_or(false);
+    let mut game = first_query(&query, "game").map(|value| value.to_string());
+
+    if game.is_none() && auto {
+        let (games, _) = crate::games::cached(&app);
+        match crate::games::find_running(&games) {
+            Some(found) => game = Some(found.exe),
+            None => {
+                let mut guard = app.inner.lock().expect("Zustands-Sperre");
+                log_event(
+                    &app,
+                    &mut guard,
+                    "game-mode",
+                    "kein laufendes Spiel erkannt",
+                    false,
+                );
+                return error_response(
+                    StatusCode::CONFLICT,
+                    "Kein laufendes Spiel erkannt. Erst Spiele scannen oder eines aus der Liste waehlen."
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    match crate::plugins::start(&app, &id, game, auto, simulate) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(&app, &mut guard, "plugin", &message, false);
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+    }
+}
+
+/// POST /plugins/{id}/stop — Plugin sauber beenden (Energieplan wird zurueckgesetzt).
+pub async fn plugin_stop(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: Auth,
+) -> Response {
+    let run = match crate::plugins::take_run(&app, &id) {
+        Ok(run) => run,
+        Err(message) => return error_response(StatusCode::CONFLICT, message),
+    };
+    let detail = tokio::task::spawn_blocking(move || crate::plugins::stop_run(run))
+        .await
+        .unwrap_or_else(|_| "Abbruch fehlgeschlagen".to_string());
+    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    log_event(&app, &mut guard, "plugin", &format!("{id} {detail}"), true);
+    Json(json!({ "ok": true, "id": id, "detail": detail })).into_response()
+}
+
+/// GET /plugins/{id}/output?lines= — Ausgabe des Plugins als reiner Text.
+pub async fn plugin_output(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    Query(query): Query<Vec<(String, String)>>,
+    _auth: Auth,
+) -> Response {
+    let lines = match parse_lines(&query) {
+        Ok(lines) => lines,
+        Err(message) => return error_response(StatusCode::UNPROCESSABLE_ENTITY, message),
+    };
+    crate::plugins::output(&app, &id, lines).into_response()
+}
+
+/// GET /games — zuletzt gescannte Spiele (aus `games.json`), inkl. "laeuft".
+pub async fn games_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let (games, scanned_at) = crate::games::cached(&app);
+    let running = crate::games::running_exes();
+    let list: Vec<serde_json::Value> = games
+        .iter()
+        .map(|game| {
+            let is_running = crate::games::file_name(&game.exe)
+                .map(|name| running.contains(&name.to_ascii_lowercase()))
+                .unwrap_or(false);
+            json!({
+                "name": game.name,
+                "exe": game.exe,
+                "source": game.source,
+                "running": is_running,
+            })
+        })
+        .collect();
+    Json(json!({ "scanned_at": scanned_at, "games": list })).into_response()
+}
+
+/// POST /games/scan — Spiele suchen (Steam, Epic, GOG, eigene Ordner).
+pub async fn games_scan_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let worker = Arc::clone(&app);
+    let result = tokio::task::spawn_blocking(move || crate::games::scan_and_store(&worker)).await;
+    match result {
+        Ok(games) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(
+                &app,
+                &mut guard,
+                "games-scan",
+                &format!("{} Spiele gefunden", games.len()),
+                true,
+            );
+            Json(json!({ "ok": true, "count": games.len(), "games": games })).into_response()
+        }
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Scan fehlgeschlagen: {error}"),
+        ),
+    }
+}
+
+/// GET /game-config — Einstellungen der Spiel-Optimierung.
+pub async fn game_config_get(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    Json(crate::games::load_config(&app)).into_response()
+}
+
+/// POST /game-config — Kill-Liste, eigene Suchordner und Automatik speichern.
+pub async fn game_config_set(
+    State(app): State<SharedApp>,
+    _auth: Auth,
+    Json(config): Json<crate::games::GameConfig>,
+) -> Response {
+    match crate::games::save_config(&app, &config) {
+        Ok(()) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(
+                &app,
+                &mut guard,
+                "game-config",
+                &format!(
+                    "{} Apps, {} Ordner, automatisch {}",
+                    config.kill_list.len(),
+                    config.scan_paths.len(),
+                    if config.auto { "an" } else { "aus" }
+                ),
+                true,
+            );
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(message) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Speichern fehlgeschlagen: {message}"),
         ),
     }
 }

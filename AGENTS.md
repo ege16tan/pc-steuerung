@@ -38,7 +38,20 @@ Status).
 - Endpunkte: `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
   `GET /ping`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
-  `POST /setup`, `POST /mode?simulate=`, `GET /`.
+  `POST /setup`, `POST /mode?simulate=`, `GET /`,
+  `GET /plugins`, `POST /plugins/{id}/start?game=&auto=`, `POST /plugins/{id}/stop`,
+  `GET /plugins/{id}/output?lines=`,
+  `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`.
+- **Plugins:** `src/plugins.rs` startet Hilfsprogramme nur auf Anforderung (kein
+  24/7-Dienst) und beendet sie wieder. Manifeste liegen in `<EXE>\plugins\*.json`
+  oder `<Datenordner>\plugins\*.json`; ohne Manifest gilt die eingebaute
+  Definition fuer `game-optimizer`.
+- **Game Optimization:** Plugin-Binary `game-optimizer.exe` (neben `pc-agent.exe`),
+  Quellcode `src/bin/game-optimizer.rs`. Macht Energieplan -> Hoechstleistung,
+  schliesst die Kill-Liste, bereinigt Arbeitsspeicher (Working Sets + Standby-Liste
+  ueber Windows-API, Admin fuer Standby) und setzt die Spiel-Prioritaet; auf `stop`
+  wird der vorherige Energieplan zurueckgesetzt. Web-UI-Tab „Game Optimization“.
+  Spiele-Scan (`src/games.rs`) liest Steam, Epic, GOG und eigene Ordner.
 - Datenordner: `%LOCALAPPDATA%\PC Steuerung` (per `PC_AGENT_DATA` überschreibbar).
   Dort liegen `credentials.json`, `token.json`, `device.json`, `agent.log`,
   `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE werden beim

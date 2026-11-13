@@ -14,9 +14,11 @@
 mod app;
 mod auth;
 mod commands;
+mod games;
 mod journal;
 mod page;
 mod pairing;
+mod plugins;
 mod routes;
 mod wol;
 
@@ -51,6 +53,9 @@ fn main() {
     migrate_legacy_data(&exe_dir, &data_dir);
     let shared: SharedApp =
         std::sync::Arc::new(app::App::new(token.clone(), simulate, &data_dir, port));
+    // Spiel-Optimierung: Standardprofil einmal anlegen, damit Plugin und
+    // Web-Oberflaeche dieselbe Kill-Liste sehen.
+    games::ensure_config(shared.as_ref());
 
     let credentials_missing = {
         let guard = shared.inner.lock().expect("Zustands-Sperre");
@@ -145,6 +150,16 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/ping", axum::routing::post(routes::ping_ep))
         .route("/events", axum::routing::get(routes::events_ep))
         .route("/log", axum::routing::get(routes::log_ep))
+        .route("/plugins", axum::routing::get(routes::plugins_ep))
+        .route("/plugins/{id}/start", axum::routing::post(routes::plugin_start))
+        .route("/plugins/{id}/stop", axum::routing::post(routes::plugin_stop))
+        .route("/plugins/{id}/output", axum::routing::get(routes::plugin_output))
+        .route("/games", axum::routing::get(routes::games_ep))
+        .route("/games/scan", axum::routing::post(routes::games_scan_ep))
+        .route(
+            "/game-config",
+            axum::routing::get(routes::game_config_get).post(routes::game_config_set),
+        )
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
         .with_state(shared);

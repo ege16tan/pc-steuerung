@@ -39,6 +39,7 @@ Source: "..\start-tray.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "open-setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\PC Agent Rust\target\release\pc-agent.exe"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
+Source: "..\PC Agent Rust\target\release\game-optimizer.exe"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
 Source: "..\PC Agent Rust\install-autostart.ps1"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
 Source: "..\PC Agent Rust\uninstall-autostart.ps1"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion
 Source: "..\PC Agent Rust\README.md"; DestDir: "{app}\PC Agent Rust"; Flags: ignoreversion

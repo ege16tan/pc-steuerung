@@ -118,5 +118,38 @@ Kein Ping, da Windows Ping oft blockiert. Stattdessen Verbindungsversuch auf Por
 
 - Korrektur: Der Schnellstart wird in den Energieoptionen deaktiviert, nicht über `powercfg /h off`, da sonst der Ruhezustand wegfällt.
 - Statusprüfung über Port-Verbindung und `/status`, statt Ping.
+
+---
+
+## 7. Spiel-Optimierung (Plugin, 13.11.2026)
+
+**Entscheidung:** Die Spiel-Optimierung ist ein **Plugin**, kein fester Button-Zustand.
+Der Agent startet `game-optimizer.exe` nur auf Anforderung (Web-UI/App) und beendet
+es danach wieder – nichts läuft dauerhaft im Hintergrund. Die Main-App gibt das
+Signal, das Plugin arbeitet.
+
+**Ablauf:**
+
+1. **Web-UI-Tab „Game Optimization“**: Spiele scannen (Steam, Epic, GOG, eigene
+   Ordner), Profil pflegen (Kill-Liste, Suchordner, Automatik), Spiel wählen und
+   „Optimieren“ – oder „Automatisch optimieren“ (Agent erkennt das laufende Spiel).
+2. **Plugin**: Energieplan → Höchstleistung, Kill-Liste schließen, Arbeitsspeicher
+   bereinigen, Spiel-Priorität hoch.
+3. **Beenden**: `stop` setzt den vorherigen Energieplan zurück. Beendete Apps
+   werden bewusst nicht neu gestartet.
+
+**Arbeitsspeicher:** nachgebaut nach dem Vorbild *Mem Reduct* (Henry++, GPL-3.0):
+`EmptyWorkingSet` für die Working Sets und
+`NtSetSystemInformation(SystemMemoryListInformation, MemoryPurgeStandbyList)` für
+die Standby-Liste. **Kein Code übernommen** (Lizenz), Credits in `CREDITS.md`.
+Die Standby-Bereinigung braucht Administratorrechte; ohne Admin wird nur getrimmt.
+
+**Endpunkte:** `GET /plugins`, `POST /plugins/{id}/start?game=&auto=`,
+`POST /plugins/{id}/stop`, `GET /plugins/{id}/output`, `GET /games`,
+`POST /games/scan`, `GET /game-config`, `POST /game-config`.
+
+**Offen:** Kill-Liste je Spiel (statt global), Spiel-Erkennung über Prozesspfad
+statt Dateiname, optionaler Auto-Rücklauf nach X Minuten.
+
 - Verbindung nur im Heimnetz, VPN aus dem Plan entfernt.
 - Weboberfläche auf dem PC verworfen.

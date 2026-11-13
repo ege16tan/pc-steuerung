@@ -83,6 +83,16 @@ pub struct App {
     pub token_file: PathBuf,
     pub device_file: PathBuf,
     pub device_settings: Mutex<DeviceSettings>,
+    /// Ordner der laufenden EXE (dort liegen Plugins und das Manifest-Verzeichnis).
+    pub exe_dir: PathBuf,
+    /// Zentraler Datenordner (`%LOCALAPPDATA%\PC Steuerung`).
+    pub data_dir: PathBuf,
+    /// Laufende Plugins und deren Ausgabe (siehe `plugins`).
+    pub plugins: Mutex<crate::plugins::PluginState>,
+    /// Zwischengespeicherte Spiele-Liste (`games.json`).
+    pub games_cache_file: PathBuf,
+    /// Einstellungen der Spiel-Optimierung (`game-config.json`).
+    pub game_config_file: PathBuf,
 }
 
 impl App {
@@ -94,6 +104,10 @@ impl App {
         let token_credentials = load_token_credentials(&token_file);
         let device_file = base_dir.join("device.json");
         let device_settings = load_device_settings(&device_file);
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."));
         App {
             inner: Mutex::new(InnerApp {
                 simulate,
@@ -111,6 +125,11 @@ impl App {
             token_file,
             device_file,
             device_settings: Mutex::new(device_settings),
+            exe_dir,
+            data_dir: base_dir.to_path_buf(),
+            plugins: Mutex::new(crate::plugins::PluginState::default()),
+            games_cache_file: base_dir.join("games.json"),
+            game_config_file: base_dir.join("game-config.json"),
         }
     }
 }

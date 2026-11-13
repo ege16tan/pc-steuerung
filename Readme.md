@@ -20,6 +20,7 @@
 | ⚡ **Energieplan** | Höchstleistung, Ausbalanciert oder Energiesparen |
 | 📊 **Status** | PC an/aus, aktiver Plan und Live-Countdown (grün/gelb/rot) |
 | ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden – oder eigene Zeit |
+| 🎮 **Game Optimization** | Plugin auf Knopfdruck: Spiele scannen, Energieplan hoch, Hintergrund-Apps zu, RAM frei (läuft nicht dauerhaft) |
 | 🚀 **App-Shortcuts** | Einschalten/Herunterfahren per Long-Press aufs App-Symbol |
 | Darstellung | Hell, Dunkel oder System – Farben blenden weich über (Crossfade) |
 | ⬆️ **App-Update** | Neue Version in den Einstellungen über GitHub Releases laden und per Android oder Shizuku installieren |
