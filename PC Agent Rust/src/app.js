@@ -25,7 +25,38 @@ const state = {
   timerSignature: '',
   busy: false,
   ticks: 0,
+  metrics: null,
+  cpuHistory: [],
+  ramHistory: [],
 };
+
+/* ---------------- Darstellung: Hell/Dunkel/System ---------------- */
+
+const THEME_KEY = 'pcTheme';
+const THEME_ORDER = ['system', 'light', 'dark'];
+const THEME_LABEL = { system: '◐ System', light: '☀ Hell', dark: '☾ Dunkel' };
+
+function currentTheme() {
+  const stored = localStorage.getItem(THEME_KEY);
+  return THEME_LABEL[stored] ? stored : 'system';
+}
+
+function applyTheme() {
+  const choice = currentTheme();
+  const prefersLight = window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: light)').matches
+    : false;
+  const light = choice === 'light' || (choice === 'system' && prefersLight);
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  const pill = $('themePill');
+  if (pill) pill.textContent = THEME_LABEL[choice];
+}
+
+function cycleTheme() {
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(currentTheme()) + 1) % THEME_ORDER.length];
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme();
+}
 
 /* ---------------- Hilfen ---------------- */
 
@@ -230,6 +261,10 @@ function mount() {
   });
 
   $('modePill').onclick = toggleMode;
+  $('themePill').onclick = cycleTheme;
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').addEventListener) {
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyTheme);
+  }
   $('btnOptimize').onclick = () => runAction(optimizeSelected);
   $('btnAuto').onclick = () => runAction(autoOptimize);
   $('btnStopGame').onclick = () => runAction(stopOptimize);
@@ -263,7 +298,8 @@ function render() {
   $('connPill').className = 'pill ' + (connected ? 'ok' : 'off');
   $('connText').textContent = connected ? '● Online' : '○ Keine Verbindung';
 
-  const name = (state.pairing && state.pairing.name) || (status && status.host) || 'PC';
+  const name = (status && status.device_name) || (state.pairing && state.pairing.name) ||
+    (status && status.host) || 'PC';
   $('deviceName').textContent = name;
 
   const modePill = $('modePill');
@@ -284,13 +320,14 @@ function render() {
 
   renderStatusActions();
   renderEvents();
+  renderMetrics();
   renderTimer();
   renderPlugin();
 }
 
 function renderStatusActions() {
   const pending = state.status ? (state.status.pending_shutdown || 0) : 0;
-  const wol = !!(state.pairing && state.pairing.wol_enabled && state.pairing.mac);
+  const wol = !!(state.status && state.status.wol_enabled);
   const signature = (state.connected ? 'on' : 'off') + '|' + (pending > 0 ? 'pending' : 'idle') + '|' + (wol ? 'wol' : '-');
   if (signature === statusSignature) return;
   statusSignature = signature;
@@ -338,12 +375,59 @@ function renderEvents() {
   ).join('');
 }
 
+function sparkPoints(values) {
+  if (values.length < 2) return '';
+  const step = 200 / (values.length - 1);
+  return values.map((value, index) => {
+    const x = (index * step).toFixed(1);
+    const y = (60 - Math.max(0, Math.min(100, value)) * 0.56).toFixed(1);
+    return x + ',' + y;
+  }).join(' ');
+}
+
+function renderSpark(id, values, color) {
+  const svg = $(id);
+  if (!svg) return;
+  if (values.length < 2) {
+    svg.innerHTML = '';
+    return;
+  }
+  svg.innerHTML = '<polyline points="' + sparkPoints(values) + '" style="stroke:' + color + '"/>';
+}
+
+function renderMetrics() {
+  const metrics = state.metrics;
+  const cpu = metrics && typeof metrics.cpu_percent === 'number' ? metrics.cpu_percent : null;
+  if (cpu === null) {
+    $('cpuVal').textContent = '–';
+    $('cpuSub').textContent = metrics && state.connected
+      ? 'erste Messung läuft …'
+      : 'keine Messwerte';
+  } else {
+    $('cpuVal').textContent = cpu.toFixed(1).replace('.', ',') + ' %';
+    $('cpuSub').textContent = metrics.cpu_cores
+      ? metrics.cpu_cores + ' logische Prozessoren'
+      : 'Auslastung';
+  }
+  renderSpark('cpuSpark', state.cpuHistory, 'var(--teal)');
+
+  const ram = metrics && typeof metrics.ram_percent === 'number' ? metrics.ram_percent : null;
+  if (ram === null) {
+    $('ramVal').textContent = '–';
+    $('ramSub').textContent = 'keine Messwerte';
+  } else {
+    $('ramVal').textContent = ram.toFixed(1).replace('.', ',') + ' %';
+    $('ramSub').textContent = metrics.ram_used_mb + ' von ' + metrics.ram_total_mb + ' MB';
+  }
+  renderSpark('ramSpark', state.ramHistory, 'var(--blue)');
+}
+
 function ringSvg(total, remaining) {
   const circumference = 2 * Math.PI * 40;
   const ratio = total > 0 ? Math.max(0, Math.min(1, remaining / total)) : 0;
   return '<svg class="ring" viewBox="0 0 100 100" role="img" aria-label="Verbleibende Zeit">' +
-    '<circle cx="50" cy="50" r="40" fill="none" stroke="#243052" stroke-width="9"/>' +
-    '<circle class="progress" cx="50" cy="50" r="40" fill="none" stroke="var(--red)" stroke-width="9" ' +
+    '<circle class="track" cx="50" cy="50" r="40" fill="none" stroke-width="9"/>' +
+    '<circle class="progress" cx="50" cy="50" r="40" fill="none" stroke-width="9" ' +
     'stroke-linecap="round" stroke-dasharray="' + circumference.toFixed(1) + '" stroke-dashoffset="' +
     (circumference * (1 - ratio)).toFixed(1) + '"/></svg>';
 }
@@ -351,7 +435,11 @@ function ringSvg(total, remaining) {
 function renderTimer() {
   const pending = state.status ? (state.status.pending_shutdown || 0) : 0;
   if (pending === 0) state.pendingTotal = null;
-  const total = pending > 0 ? state.pendingTotal : null;
+  // Gesamtdauer: der Agent kennt sie (`pending_seconds`), sonst die im Browser gemerkte.
+  const serverTotal = state.status && state.status.pending_seconds > 0
+    ? state.status.pending_seconds
+    : null;
+  const total = pending > 0 ? (serverTotal || state.pendingTotal) : null;
   const signature = pending > 0 ? 'run:' + (total === null ? 'unknown' : 'known') : 'idle';
   if (signature === state.timerSignature) {
     updateTimerText();
@@ -400,10 +488,13 @@ function updateTimerText() {
   if (text) {
     text.textContent = pending > 0 ? 'Herunterfahren in ' + fmtTime(pending) : '';
   }
+  const total = (state.status && state.status.pending_seconds > 0)
+    ? state.status.pending_seconds
+    : state.pendingTotal;
   const circle = document.querySelector('#timerBody circle.progress');
-  if (circle && state.pendingTotal) {
+  if (circle && total) {
     const circumference = 2 * Math.PI * 40;
-    const ratio = Math.max(0, Math.min(1, pending / state.pendingTotal));
+    const ratio = Math.max(0, Math.min(1, pending / total));
     circle.setAttribute('stroke-dashoffset', (circumference * (1 - ratio)).toFixed(1));
   }
 }
@@ -513,9 +604,8 @@ async function toggleMode() {
 }
 
 async function wake() {
-  const mac = state.pairing && state.pairing.mac;
-  if (!mac) return;
-  await api('/wake?mac=' + encodeURIComponent(mac), { method: 'POST' });
+  // Ohne MAC-Parameter: der Agent nimmt die eingerichtete Adresse aus device.json.
+  await api('/wake', { method: 'POST' });
 }
 
 async function optimizeSelected() {
@@ -540,6 +630,27 @@ async function scanGames() {
 }
 
 /* ---------------- Daten holen ---------------- */
+
+async function refreshMetrics() {
+  if (!state.connected) {
+    state.metrics = null;
+    return;
+  }
+  try {
+    const data = await api('/metrics');
+    state.metrics = data;
+    if (typeof data.cpu_percent === 'number') {
+      state.cpuHistory.push(data.cpu_percent);
+      if (state.cpuHistory.length > 30) state.cpuHistory.shift();
+    }
+    if (typeof data.ram_percent === 'number') {
+      state.ramHistory.push(data.ram_percent);
+      if (state.ramHistory.length > 30) state.ramHistory.shift();
+    }
+  } catch (error) {
+    state.metrics = null;
+  }
+}
 
 async function refreshPlugin() {
   if (!state.connected) {
@@ -601,10 +712,12 @@ async function tick() {
   } catch (error) {
     state.connected = false;
     state.status = null;
+    state.metrics = null;
     showBanner(connectionError(error));
   }
 
   if (state.connected) {
+    await refreshMetrics();
     try {
       state.events = (await api('/events')).events || [];
     } catch (error) {
@@ -624,6 +737,7 @@ async function tick() {
 /* ---------------- Start ---------------- */
 
 async function boot() {
+  applyTheme();
   mount();
 
   try {

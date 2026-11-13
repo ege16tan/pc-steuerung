@@ -169,6 +169,26 @@ Game-Kachel mit Spielauswahl/Start/Stop/Scan, Fehlerzustand bei 401/Timeout.
 **Noch offen (Phase 2):** `GET /metrics` für CPU/RAM (bis dahin zeigt die Kachel `–`),
 `pending_seconds` in `/status`, Wake-Fallback-MAC, SSE, mehrere PCs, Rollen/Rechte.
 
+---
+
+## 9. Web-Oberfläche Phase 2 (13.11.2026)
+
+- **`GET /metrics`** – `cpu_percent` (eine Nachkommastelle), `cpu_cores`, `ram_used_mb`,
+  `ram_total_mb`, `ram_percent`, `uptime_s`. CPU aus zwei `GetSystemTimes`-Stichproben
+  (die erste Antwort ist `null`), RAM über `GlobalMemoryStatusEx`, Laufzeit über
+  `GetTickCount64` – alles in `src/metrics.rs`, ohne neue Crate.
+- **`/status` erweitert** – `pending_seconds` (Gesamtdauer), `device_name`,
+  `wol_enabled`. Dadurch zeigt der Timer-Ring auch nach einem Neuladen den Fortschritt.
+- **`POST /wake` ohne `mac`** – nutzt die eingerichtete MAC aus `device.json`;
+  ohne Wake-on-LAN antwortet der Agent mit 422.
+- **Darstellung** – System/Hell/Dunkel über `data-theme` (Palette in CSS-Variablen,
+  Auswahl in `localStorage` unter `pcTheme`), Umschalter in der Kopfzeile.
+- **UI** – echte CPU-/RAM-Kacheln mit Sparkline (letzte 30 Messungen im Browser),
+  Wake-Knopf ohne MAC-Eingabe.
+
+**Offen:** SSE, mehrere PCs (CORS), Rollen/Rechte.
+
+
 
 - Verbindung nur im Heimnetz, VPN aus dem Plan entfernt.
 - Weboberfläche auf dem PC verworfen.

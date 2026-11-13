@@ -66,6 +66,7 @@ struct Snapshot {
     simulate: bool,
     sim_plan: Option<String>,
     pending_at: Option<f64>,
+    pending_seconds: i64,
     credentials: Option<crate::app::Credentials>,
 }
 
@@ -75,7 +76,28 @@ fn snapshot(app: &App) -> Snapshot {
         simulate: guard.simulate,
         sim_plan: guard.sim_plan.clone(),
         pending_at: guard.pending_at,
+        pending_seconds: guard.pending_seconds,
         credentials: guard.credentials.clone(),
+    }
+}
+
+/// Anzeigename des PCs aus `device.json` (sonst der Windows-Computername).
+fn device_name(app: &App) -> String {
+    let settings = app.device_settings.lock().expect("Setup-Sperre");
+    if settings.name.trim().is_empty() {
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".to_string())
+    } else {
+        settings.name.clone()
+    }
+}
+
+/// MAC aus den Geraeteeinstellungen – nur wenn Wake-on-LAN aktiviert ist.
+fn configured_mac(app: &App) -> Option<String> {
+    let settings = app.device_settings.lock().expect("Setup-Sperre");
+    if settings.wol_enabled && !settings.mac.trim().is_empty() {
+        Some(settings.mac.trim().to_string())
+    } else {
+        None
     }
 }
 
@@ -442,15 +464,26 @@ pub async fn status_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
         .unwrap_or_else(|_| "unbekannt".to_string())
     };
     let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "?".to_string());
+    let name = device_name(&app);
+    let wol = configured_mac(&app).is_some();
     Json(json!({
         "online": true,
         "host": host,
+        "device_name": name,
         "simulate": snap.simulate,
         "power_plan": power_plan,
         "pending_shutdown": seconds,
+        "pending_seconds": snap.pending_seconds,
+        "wol_enabled": wol,
         "setup_required": snap.credentials.is_none(),
     }))
     .into_response()
+}
+
+/// GET /metrics — CPU-Auslastung, Arbeitsspeicher und Laufzeit.
+/// Die erste Anfrage liefert `cpu_percent: null` (zwei Stichproben noetig).
+pub async fn metrics_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    Json(crate::metrics::read(&app.metrics)).into_response()
 }
 
 /// Validierung wie FastAPI: fehlend -> 0, sonst 0..=86400, alles uebige -> Fehler.
@@ -646,9 +679,16 @@ pub async fn wake_ep(
 ) -> Response {
     let mac = match first_query(&query, "mac") {
         Some(mac) => mac.to_string(),
-        None => {
-            return error_response(StatusCode::UNPROCESSABLE_ENTITY, "MAC fehlt".to_string())
-        }
+        // Ohne Angabe die eingerichtete MAC verwenden (Web-UI, Tray).
+        None => match configured_mac(&app) {
+            Some(mac) => mac,
+            None => {
+                return error_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "MAC fehlt und Wake-on-LAN ist nicht eingerichtet".to_string(),
+                )
+            }
+        },
     };
     let port = match parse_port(&query) {
         Ok(port) => port,

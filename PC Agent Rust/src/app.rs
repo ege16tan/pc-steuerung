@@ -89,6 +89,8 @@ pub struct App {
     pub data_dir: PathBuf,
     /// Laufende Plugins und deren Ausgabe (siehe `plugins`).
     pub plugins: Mutex<crate::plugins::PluginState>,
+    /// Zwischengespeicherte CPU-Stichprobe fuer `/metrics`.
+    pub metrics: Mutex<crate::metrics::MetricsState>,
     /// Zwischengespeicherte Spiele-Liste (`games.json`).
     pub games_cache_file: PathBuf,
     /// Einstellungen der Spiel-Optimierung (`game-config.json`).
@@ -128,6 +130,7 @@ impl App {
             exe_dir,
             data_dir: base_dir.to_path_buf(),
             plugins: Mutex::new(crate::plugins::PluginState::default()),
+            metrics: Mutex::new(crate::metrics::MetricsState::default()),
             games_cache_file: base_dir.join("games.json"),
             game_config_file: base_dir.join("game-config.json"),
         }

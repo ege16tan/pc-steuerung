@@ -93,6 +93,12 @@ button.ghost { background: transparent; }
 
 /* Timer-Ring */
 .ring { width: 96px; height: 96px; transform: rotate(-90deg); margin: auto; display: block; }
+.ring .track { stroke: var(--line); }
+.ring .progress { stroke: var(--red); }
+
+/* Sparklines (CPU-/RAM-Verlauf) */
+.spark { width: 100%; height: 52px; display: block; margin-top: auto; }
+.spark polyline { fill: none; stroke-width: 2.5; stroke-linejoin: round; }
 
 /* Ereignisse / Verlauf */
 .log {
@@ -155,4 +161,38 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
 
 .foot { color: var(--mut); font-size: 12px; text-align: center; margin: 18px 0 6px; }
 .foot a { color: var(--mut); }
+
+/* ---------------- Hell (Phase 2) ----------------
+   Standard ist dunkel. `data-theme="light"` schaltet die helle Palette;
+   das Attribut setzt app.js (bei „System“ passend zu prefers-color-scheme). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef2f9;
+  --card: #ffffff;
+  --card2: #f1f5fb;
+  --line: #d7dded;
+  --text: #0f172a;
+  --mut: #5b6785;
+  --teal: #0f766e;
+  --blue: #2563eb;
+  --red: #c02626;
+  --amb: #a16207;
+  --grn: #15803d;
+}
+:root[data-theme="light"] body {
+  background: radial-gradient(900px 500px at 10% -10%, #dbe7ff, var(--bg) 60%) fixed;
+}
+:root[data-theme="light"] .tile { background: linear-gradient(180deg, var(--card), #f8faff); }
+:root[data-theme="light"] input,
+:root[data-theme="light"] select { background: #ffffff; }
+:root[data-theme="light"] .banner { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
+:root[data-theme="light"] .banner.warn { background: #fffbeb; border-color: #fde68a; color: #78350f; }
+:root[data-theme="light"] .chip { background: #dcfce7; color: #14532d; }
+:root[data-theme="light"] .log,
+:root[data-theme="light"] .gamestate { color: #334155; }
+:root[data-theme="light"] button.go,
+:root[data-theme="light"] button.stop,
+:root[data-theme="light"] .plans button.on { color: #ffffff; }
+:root[data-theme="light"] .glow { opacity: .18; }
+
 

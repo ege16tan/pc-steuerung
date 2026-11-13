@@ -35,7 +35,7 @@ Status).
 
 ## Architektur / Wichtige Fakten
 
-- Endpunkte: `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
+- Endpunkte: `GET /status`, `GET /metrics`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
   `GET /ping`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
   `POST /setup`, `POST /mode?simulate=`, `GET /` (Web-UI-Gerüst),
@@ -47,11 +47,13 @@ Status).
   24/7-Dienst) und beendet sie wieder. Manifeste liegen in `<EXE>\plugins\*.json`
   oder `<Datenordner>\plugins\*.json`; ohne Manifest gilt die eingebaute
   Definition fuer `game-optimizer`.
-- **Web-UI (Phase 1, 13.11.2026):** `src/page.html` (Gerüst), `src/app.css`,
+- **Web-UI (Phase 1+2, 13.11.2026):** `src/page.html` (Gerüst), `src/app.css`,
   `src/app.js` – per `include_str!` im Binary, ohne Login unter `/`, `/app.css`,
   `/app.js`. Polling alle 2 s, pausiert bei verstecktem Tab; Status/Plan/Timer/
   Ereignisse/Verlauf und die Game-Kachel (Auswahl, Start, Stop, Scan).
-  CPU/RAM zeigen `–`, bis `/metrics` existiert.
+  CPU/RAM kommen aus `GET /metrics` (erste Antwort `cpu_percent: null`, weil zwei
+  Stichproben nötig sind). Timer-Ring nutzt `pending_seconds` aus `/status`.
+  Darstellung: System/Hell/Dunkel über `data-theme` (localStorage `pcTheme`).
 - **Game Optimization:** Plugin-Binary `game-optimizer.exe` (neben `pc-agent.exe`),
   Quellcode `src/bin/game-optimizer.rs`. Macht Energieplan -> Hoechstleistung,
   schliesst die Kill-Liste, bereinigt Arbeitsspeicher (Working Sets + Standby-Liste

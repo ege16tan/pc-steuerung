@@ -86,6 +86,7 @@
       <h1 id="deviceName">PC</h1>
       <span class="pill" id="connPill"><span id="connText">Verbinde …</span></span>
       <button type="button" class="pill sim" id="modePill" title="Simulation und Echt umschalten">SIMULATION</button>
+      <button type="button" class="pill" id="themePill" title="Darstellung wechseln">◐ System</button>
     </div>
   </header>
 
@@ -103,13 +104,15 @@
     <div class="tile">
       <div class="lab">CPU</div>
       <div class="big" id="cpuVal">–</div>
-      <div class="mut">Messwerte folgen</div>
+      <div class="mut" id="cpuSub">Messwert wird geladen …</div>
+      <svg class="spark" id="cpuSpark" viewBox="0 0 200 64" preserveAspectRatio="none" aria-hidden="true"></svg>
     </div>
 
     <div class="tile">
       <div class="lab">RAM</div>
       <div class="big" id="ramVal">–</div>
-      <div class="mut">Messwerte folgen</div>
+      <div class="mut" id="ramSub">Messwert wird geladen …</div>
+      <svg class="spark" id="ramSpark" viewBox="0 0 200 64" preserveAspectRatio="none" aria-hidden="true"></svg>
     </div>
 
     <div class="tile">

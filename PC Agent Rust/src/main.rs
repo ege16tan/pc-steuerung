@@ -16,6 +16,7 @@ mod auth;
 mod commands;
 mod games;
 mod journal;
+mod metrics;
 mod page;
 mod pairing;
 mod plugins;
@@ -144,6 +145,7 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/setup", axum::routing::post(routes::setup))
         .route("/mode", axum::routing::post(routes::set_mode))
         .route("/status", axum::routing::get(routes::status_ep))
+        .route("/metrics", axum::routing::get(routes::metrics_ep))
         .route("/shutdown", axum::routing::post(routes::shutdown_ep))
         .route("/abort", axum::routing::post(routes::abort_ep))
         .route("/hibernate", axum::routing::post(routes::hibernate_ep))

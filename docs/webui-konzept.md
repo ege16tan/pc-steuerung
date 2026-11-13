@@ -145,3 +145,27 @@
 **Bewusst offen (Phase 2):** `/metrics` (CPU/RAM), `pending_seconds` in `/status`,
 Wake-Fallback-MAC, SSE, mehrere PCs, Rollen/Rechte.
 
+## 9. Umsetzung Phase 2 (13.11.2026)
+
+**Erledigt:**
+
+- **`GET /metrics`** (`src/metrics.rs`): `cpu_percent`, `cpu_cores`, `ram_used_mb`,
+  `ram_total_mb`, `ram_percent`, `uptime_s`. CPU aus zwei `GetSystemTimes`-Stichproben
+  (erste Antwort `null`), RAM über `GlobalMemoryStatusEx`. Keine neue Crate.
+- **`/status`**: `pending_seconds` (Gesamtdauer), `device_name`, `wol_enabled`.
+  Der Timer-Ring kennt die Gesamtdauer jetzt auch nach einem Neuladen; die im Browser
+  gemerkte Zeit ist nur noch Rückfall.
+- **`POST /wake` ohne `mac`**: nutzt die eingerichtete MAC aus `device.json`
+  (422, wenn Wake-on-LAN aus ist). Das UI sendet keinen MAC-Parameter mehr.
+- **Hell/System**: Palette als CSS-Variablen, Umschalter in der Kopfzeile
+  (System → Hell → Dunkel, gespeichert unter `localStorage.pcTheme`); „System"
+  folgt `prefers-color-scheme` und reagiert live auf Systemwechsel.
+- **CPU-/RAM-Kacheln** zeigen echte Werte plus Sparkline der letzten 30 Messungen.
+
+**Verifiziert:** `cargo test` 41 grün; `/metrics` liefert zuerst `cpu_percent: null`,
+danach z. B. `8.8` bei 8 Kernen und 32 % RAM; `/status` enthält `pending_seconds`;
+`/wake` ohne MAC → 422 ohne WoL, 200 mit eingerichteter MAC; `node --check` sauber.
+
+**Offen (Phase 3):** SSE, Geräteliste über mehrere Agenten (CORS), Rollen/Rechte.
+
+
