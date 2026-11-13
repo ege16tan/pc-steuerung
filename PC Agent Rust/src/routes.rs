@@ -21,7 +21,7 @@ use crate::app::{remaining_seconds, App, DeviceSettings, TokenCredentials};
 use crate::auth::{create_credentials, Auth};
 use crate::commands::{detect_active_plan, run, PLANS};
 use crate::journal::{log_event, tail_lines};
-use crate::page::PAGE;
+use crate::page::{APP_CSS, APP_JS, PAGE};
 use crate::pairing::{lan_ipv4, network_adapters, payload_json};
 use crate::wol::{configured_broadcast, parse_mac, send_wol};
 
@@ -113,7 +113,76 @@ pub fn parse_query_bool(value: &str) -> Option<bool> {
 // ---------------- Endpunkte ohne Anmeldung ----------------
 
 pub async fn index() -> Response {
-    Html(PAGE).into_response()
+    let mut response = Html(PAGE).into_response();
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// GET /app.css — Stylesheet der Web-Oberfläche (ohne Login, wie `/`).
+pub async fn app_css() -> Response {
+    static_asset(APP_CSS, "text/css; charset=utf-8")
+}
+
+/// GET /app.js — Skript der Web-Oberfläche (ohne Login, wie `/`).
+pub async fn app_js() -> Response {
+    static_asset(APP_JS, "application/javascript; charset=utf-8")
+}
+
+fn static_asset(body: &'static str, mime: &'static str) -> Response {
+    let mut response = body.into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(mime),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+// ---------------- CSRF-Schutz fuer localhost ----------------
+
+/// Kopfzeile, die die Web-Oberflaeche bei jeder schreibenden Anfrage mitschickt.
+/// `localhost` verlangt keine Anmeldung – ohne diese Pruefung koennte eine fremde
+/// Webseite im Browser `POST /shutdown` an `127.0.0.1` ausloesen.
+pub const CSRF_HEADER: &str = "x-pc-steuerung";
+
+fn is_mutating(method: &axum::http::Method) -> bool {
+    matches!(
+        *method,
+        axum::http::Method::POST
+            | axum::http::Method::PUT
+            | axum::http::Method::PATCH
+            | axum::http::Method::DELETE
+    )
+}
+
+/// Prueft schreibende Anfragen von `localhost` auf die CSRF-Kopfzeile.
+/// Zugriffe aus dem LAN bleiben unveraendert (dort greift Basic Auth).
+pub async fn csrf_guard(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if is_mutating(request.method()) && addr.ip().is_loopback() {
+        let ok = request
+            .headers()
+            .get(CSRF_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(|text| text == "1" || text.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !ok {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                format!("CSRF-Schutz: Kopfzeile '{CSRF_HEADER}: 1' fehlt"),
+            );
+        }
+    }
+    next.run(request).await
 }
 
 pub async fn setup_status(State(app): State<SharedApp>) -> Response {
@@ -881,6 +950,18 @@ mod tests {
         assert!(parse_lines(&pairs(&[("lines", "0")])).is_err());
         assert!(parse_lines(&pairs(&[("lines", "1001")])).is_err());
         assert!(parse_lines(&pairs(&[("lines", "abc")])).is_err());
+    }
+
+    #[test]
+    fn csrf_gilt_nur_fuer_schreibende_methoden() {
+        use axum::http::Method;
+        assert!(is_mutating(&Method::POST));
+        assert!(is_mutating(&Method::PUT));
+        assert!(is_mutating(&Method::PATCH));
+        assert!(is_mutating(&Method::DELETE));
+        assert!(!is_mutating(&Method::GET));
+        assert!(!is_mutating(&Method::HEAD));
+        assert!(!is_mutating(&Method::OPTIONS));
     }
 
     #[test]

@@ -35,7 +35,8 @@ function Open-WebUi {
 
 function Invoke-AgentPost([string]$path, [string]$success) {
     try {
-        Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port$path" -TimeoutSec 3 | Out-Null
+        # CSRF-Kopfzeile: der Agent verlangt sie bei schreibenden Anfragen von localhost.
+        Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port$path" -Headers @{ 'X-PC-Steuerung' = '1' } -TimeoutSec 3 | Out-Null
         $notify.ShowBalloonTip(3000, 'PC Steuerung', $success, [System.Windows.Forms.ToolTipIcon]::Info)
     } catch {
         $notify.ShowBalloonTip(3000, 'PC Steuerung', 'Agent nicht erreichbar oder Aktion fehlgeschlagen.', [System.Windows.Forms.ToolTipIcon]::Warning)

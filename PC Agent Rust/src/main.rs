@@ -134,6 +134,8 @@ fn migrate_legacy_data(exe_dir: &Path, data_dir: &Path) {
 async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
     let router = axum::Router::new()
         .route("/", axum::routing::get(routes::index))
+        .route("/app.css", axum::routing::get(routes::app_css))
+        .route("/app.js", axum::routing::get(routes::app_js))
         .route("/setup-status", axum::routing::get(routes::setup_status))
         .route("/network-adapters", axum::routing::get(routes::network_adapters_ep))
         .route("/device-setup", axum::routing::post(routes::device_setup))
@@ -162,6 +164,9 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         )
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
+        // CSRF: schreibende Anfragen von localhost brauchen die Kopfzeile
+        // `X-PC-Steuerung: 1` (die Web-Oberfläche sendet sie immer).
+        .layer(axum::middleware::from_fn(routes::csrf_guard))
         .with_state(shared);
 
     // Bindung an 0.0.0.0:8000, damit das Handy im LAN zugreifen kann;

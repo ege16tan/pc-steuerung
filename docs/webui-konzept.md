@@ -1,6 +1,6 @@
 # Web-UI-Konzept „Dashboard" – Abgleich mit dem Agenten
 
-**Stand:** 2026-11-13 · **Status:** Konzept geprüft, **noch nicht eingebaut**
+**Stand:** 2026-11-13 · **Status:** geprüft · **Phase 1 umgesetzt** (siehe §8)
 **Vorlage:** `docs/webui-konzept.html` (das gelieferte Mockup, reines HTML/CSS/JS)
 
 ## 1. Was das Konzept zeigt
@@ -114,4 +114,34 @@
 | `docs/webui-konzept.html` | gelieferte Vorlage (Referenz, wird nicht ausgeliefert) |
 | `docs/webui-konzept.md` | diese Abgleich-Liste |
 | `PC Agent Rust/src/page.html` | heute ausgelieferte UI (~28 KB, per `include_str!`) |
+
+## 8. Umsetzung Phase 1 (13.11.2026)
+
+**Entschieden und gebaut:**
+
+- **Ein Gerät:** keine Geräte-Sidebar; Kopfzeile mit PC-Name, Status-Pill und
+  klickbarer Modus-Pill. Eine Geräteliste im Browser kommt später (braucht CORS).
+- **Keine Benutzer/Rollen-Kachel.** `credentials.json` bleibt ein Benutzer; das lässt
+  sich später zu einer Liste erweitern, ohne heute etwas zu verbauen.
+- **Polling alle 2 s**, pausiert bei verstecktem Tab (`visibilitychange`).
+- **Nur dunkel**, aber alle Farben als CSS-Variablen → Hell/System sind in Phase 2 klein.
+- **Barrierefreiheit:** Labels ab 12 px, Status mit Text **und** Symbol
+  (`● Online` / `○ Keine Verbindung`), `aria-label` an Ring und Timer-Feld.
+- **Dateien getrennt:** `src/page.html` (Gerüst), `src/app.css`, `src/app.js`,
+  jeweils `include_str!`; Routen `/`, `/app.css`, `/app.js` ohne Login.
+- **Raus:** Zufalls-CPU/RAM (Kachel zeigt `–`), Benutzer-Kachel, Geräteliste.
+- **Rein:** Ersteinrichtung (Name → optional WoL → Zugangsdaten → QR), Verlauf
+  (`/log?lines=200`), Fehlerzustand bei 401/Timeout („Keine Verbindung" + Retry),
+  Game-Kachel mit Spielauswahl, „läuft"-Marker, Start/Auto/Stop/Scan und Plugin-Log.
+- **Timer-Ring:** Gesamtdauer wird im Browser gemerkt (nach Start/Planen); nach einem
+  Neuladen zeigt die Kachel nur Text, bis `pending_seconds` aus dem Agenten kommt.
+- **CSRF:** Kopfzeile `X-PC-Steuerung: 1` bei allen schreibenden Aufrufen; der Agent
+  prüft sie für `localhost` (Middleware `csrf_guard`, 403 ohne Header). LAN-Zugriffe
+  bleiben bei Basic Auth. Tray sendet die Kopfzeile ebenfalls.
+
+**Im Agenten ergänzt:** `GET /app.css`, `GET /app.js`, `csrf_guard`,
+`src/app.css`, `src/app.js`.
+
+**Bewusst offen (Phase 2):** `/metrics` (CPU/RAM), `pending_seconds` in `/status`,
+Wake-Fallback-MAC, SSE, mehrere PCs, Rollen/Rechte.
 

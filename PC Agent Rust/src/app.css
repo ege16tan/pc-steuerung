@@ -1,0 +1,158 @@
+/* PC Steuerung – Dashboard (Phase 1, dunkel)
+   Farben liegen in Variablen: Hell/System kommen in Phase 2 dazu. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --card: #131a2e;
+  --card2: #1a2340;
+  --line: #243052;
+  --text: #e8ecf8;
+  --mut: #8b97b8;
+  --teal: #2dd4bf;
+  --blue: #60a5fa;
+  --red: #f87171;
+  --amb: #fbbf24;
+  --grn: #34d399;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: radial-gradient(900px 500px at 10% -10%, #16254a, var(--bg) 60%) fixed;
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0);
+}
+
+main { padding: 18px; max-width: 1100px; width: 100%; margin: 0 auto; }
+
+/* Kopfzeile (früher Sidebar mit Geräteliste) */
+header.top {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.brand { font-weight: 800; font-size: 17px; display: flex; gap: 8px; align-items: center; }
+.brand i {
+  width: 28px; height: 28px; border-radius: 9px; font-style: normal;
+  background: linear-gradient(135deg, #0f766e, #1e293b); display: grid; place-items: center;
+}
+.devline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+h1 { margin: 0; font-size: 22px; letter-spacing: -.3px; }
+
+.pill {
+  padding: 5px 12px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line);
+  background: var(--card); color: var(--mut); font: inherit; font-size: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.pill.sim { color: var(--amb); border-color: #fbbf2466; cursor: pointer; }
+.pill.sim.echt { color: var(--red); border-color: #f8717166; }
+.pill.ok { color: var(--grn); border-color: #34d39955; }
+.pill.off { color: var(--red); border-color: #f8717155; }
+
+/* Raster */
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); margin-bottom: 14px; }
+@media (min-width: 700px) { .grid { grid-template-columns: repeat(4, 1fr); } }
+.tile {
+  background: linear-gradient(180deg, var(--card), #10162a); border: 1px solid var(--line);
+  border-radius: 22px; padding: 16px; position: relative; overflow: hidden; min-height: 140px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.w2 { grid-column: span 2; }
+.w4 { grid-column: span 2; }
+@media (min-width: 700px) { .w4 { grid-column: span 4; } }
+.h2 { grid-row: span 2; }
+
+.lab {
+  color: var(--mut); font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+}
+.big { font-size: 34px; font-weight: 800; letter-spacing: -.5px; }
+.mut { color: var(--mut); font-size: 13px; }
+.glow {
+  position: absolute; right: -30px; top: -30px; width: 110px; height: 110px;
+  border-radius: 50%; filter: blur(40px); opacity: .35;
+}
+
+/* Knöpfe */
+button {
+  font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--card2);
+  color: var(--text); padding: 12px; border-radius: 14px; cursor: pointer; transition: .15s;
+}
+button:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--blue); }
+button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+button.go { background: linear-gradient(135deg, #0f766e, #14b8a6); border: 0; font-weight: 700; }
+button.stop { background: linear-gradient(135deg, #b91c1c, #ef4444); border: 0; font-weight: 700; }
+button.ghost { background: transparent; }
+.btns { display: flex; gap: 8px; margin-top: auto; flex-wrap: wrap; }
+.btns button { flex: 1; min-width: 96px; }
+
+/* Energieplan-Segmente */
+.plans { display: flex; gap: 6px; margin-top: auto; }
+.plans button { flex: 1; padding: 10px 4px; font-size: 12px; }
+.plans button.on { background: var(--blue); color: #06142e; border: 0; font-weight: 700; }
+
+/* Timer-Ring */
+.ring { width: 96px; height: 96px; transform: rotate(-90deg); margin: auto; display: block; }
+
+/* Ereignisse / Verlauf */
+.log {
+  font: 12px/1.7 ui-monospace, "Cascadia Mono", Consolas, monospace; color: #c3cce6;
+  max-height: 150px; overflow: auto; word-break: break-word;
+}
+pre.log { white-space: pre-wrap; margin: 0; }
+
+/* Formularfelder */
+input, select {
+  font: inherit; font-size: 14px; padding: 11px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: #0d1322; color: var(--text); width: 100%;
+}
+input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--teal); }
+.field { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.field > label { font-size: 13px; color: var(--mut); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.row > * { flex: 1 1 160px; }
+.checkline { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.checkline input { width: auto; flex: 0 0 auto; }
+.checkline label { font-size: 13px; }
+
+/* Spiele */
+.gamestate {
+  font: 12px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace; color: #c3cce6;
+  max-height: 96px; overflow: auto; white-space: pre-wrap; margin-top: 8px;
+}
+.chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 99px; background: #34d39922;
+  color: var(--grn); white-space: nowrap;
+}
+
+/* Hinweis-/Fehlerleiste */
+.banner {
+  border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; font-size: 14px;
+  border: 1px solid #f8717155; background: #2a1520; color: #fecaca;
+}
+.banner.warn { border-color: #fbbf2455; background: #2a2412; color: #fde68a; }
+.banner[hidden] { display: none; }
+
+/* Einrichtungs-Assistent */
+.setup { max-width: 620px; margin: 40px auto; }
+.setup h2 { margin: 0 0 6px; font-size: 20px; }
+.steps { display: flex; gap: 6px; margin: 16px 0; }
+.steps span { height: 4px; flex: 1; border-radius: 99px; background: var(--line); }
+.steps span.on { background: var(--teal); }
+.setup-msg { color: var(--red); font-size: 13px; min-height: 20px; margin-top: 10px; }
+.qrbox { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.qrbox img { width: 168px; height: 168px; background: #fff; padding: 8px; border-radius: 12px; }
+.qrbox code { font-size: 13px; color: var(--teal); }
+
+/* Barrierefreiheit */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+.foot { color: var(--mut); font-size: 12px; text-align: center; margin: 18px 0 6px; }
+.foot a { color: var(--mut); }
+

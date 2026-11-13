@@ -151,5 +151,24 @@ Die Standby-Bereinigung braucht Administratorrechte; ohne Admin wird nur getrimm
 **Offen:** Kill-Liste je Spiel (statt global), Spiel-Erkennung über Prozesspfad
 statt Dateiname, optionaler Auto-Rücklauf nach X Minuten.
 
+---
+
+## 8. Web-Oberfläche Phase 1 (13.11.2026)
+
+Die Vorlage `docs/webui-konzept.html` wird als dunkles Dashboard umgesetzt, aufgeteilt
+in `page.html` (Gerüst), `app.css` und `app.js` – alle drei per `include_str!` im Binary.
+
+**Entschieden:** ein Gerät (keine Geräte-Sidebar), keine Benutzer/Rollen, Polling alle
+2 s mit Pause bei verstecktem Tab, nur dunkel (Farben als CSS-Variablen), Labels ab
+12 px, Status mit Text und Symbol, CSRF-Kopfzeile `X-PC-Steuerung: 1` für localhost.
+
+**Enthalten:** Status und Steuerung, Energieplan, Timer (Ring nur mit im Browser
+gemerkter Gesamtdauer), Ereignisse, Verlauf (`/log`), Ersteinrichtung mit QR,
+Game-Kachel mit Spielauswahl/Start/Stop/Scan, Fehlerzustand bei 401/Timeout.
+
+**Noch offen (Phase 2):** `GET /metrics` für CPU/RAM (bis dahin zeigt die Kachel `–`),
+`pending_seconds` in `/status`, Wake-Fallback-MAC, SSE, mehrere PCs, Rollen/Rechte.
+
+
 - Verbindung nur im Heimnetz, VPN aus dem Plan entfernt.
 - Weboberfläche auf dem PC verworfen.

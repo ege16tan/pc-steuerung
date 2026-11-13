@@ -38,7 +38,8 @@ Status).
 - Endpunkte: `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
   `GET /ping`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
-  `POST /setup`, `POST /mode?simulate=`, `GET /`,
+  `POST /setup`, `POST /mode?simulate=`, `GET /` (Web-UI-Gerüst),
+  `GET /app.css`, `GET /app.js`,
   `GET /plugins`, `POST /plugins/{id}/start?game=&auto=`, `POST /plugins/{id}/stop`,
   `GET /plugins/{id}/output?lines=`,
   `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`.
@@ -46,6 +47,11 @@ Status).
   24/7-Dienst) und beendet sie wieder. Manifeste liegen in `<EXE>\plugins\*.json`
   oder `<Datenordner>\plugins\*.json`; ohne Manifest gilt die eingebaute
   Definition fuer `game-optimizer`.
+- **Web-UI (Phase 1, 13.11.2026):** `src/page.html` (Gerüst), `src/app.css`,
+  `src/app.js` – per `include_str!` im Binary, ohne Login unter `/`, `/app.css`,
+  `/app.js`. Polling alle 2 s, pausiert bei verstecktem Tab; Status/Plan/Timer/
+  Ereignisse/Verlauf und die Game-Kachel (Auswahl, Start, Stop, Scan).
+  CPU/RAM zeigen `–`, bis `/metrics` existiert.
 - **Game Optimization:** Plugin-Binary `game-optimizer.exe` (neben `pc-agent.exe`),
   Quellcode `src/bin/game-optimizer.rs`. Macht Energieplan -> Hoechstleistung,
   schliesst die Kill-Liste, bereinigt Arbeitsspeicher (Working Sets + Standby-Liste
@@ -105,3 +111,9 @@ Status).
 
 - Agent per `curl` testen (`/status`, `/shutdown?delay=60`, `/abort`, `/power-plan`,
   `/wake?mac=AA:BB:CC:DD:EE:FF&port=9`, …); Simulationsmodus ist Default.
+- **CSRF:** schreibende Aufrufe von `localhost` brauchen die Kopfzeile
+  `X-PC-Steuerung: 1`, sonst antwortet der Agent mit 403 (Schutz gegen fremde
+  Webseiten, weil localhost ohne Login erreichbar ist):
+  `curl -X POST -H "X-PC-Steuerung: 1" "http://127.0.0.1:8000/shutdown?delay=60"`.
+  Zugriffe aus dem LAN bleiben unverändert (dort greift Basic Auth);
+  Tray und Web-UI senden die Kopfzeile selbst.
