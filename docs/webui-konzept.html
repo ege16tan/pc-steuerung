@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PC Steuerung – Dashboard</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--card:#131a2e;--card2:#1a2340;--line:#243052;--text:#e8ecf8;--mut:#8b97b8;--teal:#2dd4bf;--blue:#60a5fa;--red:#f87171;--amb:#fbbf24;--grn:#34d399}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(900px 500px at 10% -10%,#16254a,var(--bg) 60%) fixed;color:var(--text);font:15px/1.4 system-ui,sans-serif;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+.shell{display:grid;grid-template-columns:1fr;min-height:100vh}
+@media(min-width:900px){.shell{grid-template-columns:240px 1fr}}
+aside{padding:16px;border-bottom:1px solid var(--line)}
+@media(min-width:900px){aside{border:0;border-right:1px solid var(--line)}}
+.logo{font-weight:800;font-size:18px;display:flex;gap:8px;align-items:center;margin-bottom:12px}
+.logo i{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,#0f766e,#1e293b);display:grid;place-items:center;font-style:normal}
+.devs{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+@media(min-width:900px){.devs{flex-direction:column;overflow:visible}}
+.dev{flex:0 0 auto;display:flex;gap:10px;align-items:center;padding:10px 14px;border-radius:14px;background:var(--card);border:1px solid var(--line);cursor:pointer;color:var(--text);font:inherit;text-align:left}
+.dev.on{border-color:var(--teal);background:var(--card2)}
+.dev small{display:block;color:var(--mut);font-size:11px}
+.sec{color:var(--mut);font-size:11px;letter-spacing:.12em;margin:16px 0 8px}
+.dot{width:10px;height:10px;border-radius:50%;flex:0 0 10px}
+.on-dot{background:var(--grn);animation:pulse 1.8s infinite}
+.off-dot{background:var(--red)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #34d39988}100%{box-shadow:0 0 0 10px #34d39900}}
+main{padding:18px;max-width:1200px;width:100%}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+h1{margin:0;font-size:24px}
+.pill{padding:5px 12px;border-radius:99px;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--mut)}
+.pill.sim{color:var(--amb);border-color:#fbbf2466}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(2,1fr)}
+@media(min-width:700px){.grid{grid-template-columns:repeat(4,1fr)}}
+.tile{background:linear-gradient(180deg,var(--card),#10162a);border:1px solid var(--line);border-radius:22px;padding:16px;animation:in .5s both;position:relative;overflow:hidden;min-height:140px;display:flex;flex-direction:column;gap:6px}
+.w2{grid-column:span 2}.h2{grid-row:span 2}
+@media(min-width:700px){.w4{grid-column:span 4}}
+@keyframes in{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.lab{color:var(--mut);font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+.big{font-size:34px;font-weight:800;letter-spacing:-.5px}
+.mut{color:var(--mut);font-size:12px}
+button{font:inherit;border:1px solid var(--line);background:var(--card2);color:var(--text);padding:12px;border-radius:14px;cursor:pointer;transition:.15s}
+button:hover{transform:translateY(-1px);border-color:var(--blue)}
+button.go{background:linear-gradient(135deg,#0f766e,#14b8a6);border:0;font-weight:700}
+button.stop{background:linear-gradient(135deg,#b91c1c,#ef4444);border:0;font-weight:700}
+.btns{display:flex;gap:8px;margin-top:auto;flex-wrap:wrap}.btns button{flex:1}
+svg{width:100%;height:64px;display:block;margin-top:auto}
+.ring{width:96px;height:96px;transform:rotate(-90deg);margin:auto}
+.plans{display:flex;gap:6px;margin-top:auto}.plans button{flex:1;padding:10px 4px;font-size:12px}
+.plans button.on{background:var(--blue);color:#06142e;border:0;font-weight:700}
+.glow{position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;filter:blur(40px);opacity:.35}
+.log{font:12px/1.7 ui-monospace,monospace;color:#c3cce6;max-height:150px;overflow:auto}
+.user{display:flex;gap:8px;align-items:center;margin-top:4px}
+.av{width:28px;height:28px;border-radius:50%;background:var(--card2);display:grid;place-items:center;font-size:12px;border:1px solid var(--line)}
+.tag{font-size:10px;padding:2px 8px;border-radius:99px;background:#60a5fa22;color:var(--blue);margin-left:auto}
+.soon{opacity:.6;border-style:dashed}
+</style></head><body>
+<div class="shell">
+<aside>
+ <div class="logo"><i>⏻</i>PC Steuerung</div>
+ <div class="sec" style="margin-top:0">GERÄTE</div>
+ <div class="devs" id="devs"></div>
+ <div class="sec">BENUTZER</div>
+ <div class="user"><span class="av">E</span>Du<span class="tag">Admin</span></div>
+ <div class="user"><span class="av">+</span><span class="mut">Benutzer einladen (bald)</span></div>
+</aside>
+<main>
+ <header><h1 id="title"></h1><span class="pill" id="conn"></span><span class="pill sim" id="mode" style="cursor:pointer" title="Klicken zum Umschalten"></span></header>
+ <div class="grid" id="g"></div>
+</main></div>
+<script>
+const D=[{n:'Wohnzimmer-PC',ip:'192.168.1.100',on:true,plan:'balanced',pend:0,cpu:[],ram:42},{n:'Büro-PC',ip:'192.168.1.101',on:false,plan:'saver',pend:0,cpu:[],ram:0}];
+let cur=0,sim=true,log=['18:02  status  ok','18:03  power-plan balanced  ok'];
+const $=id=>document.getElementById(id);
+const PL={high:'Höchstleistung',balanced:'Ausbalanciert',saver:'Spar'};
+const t=()=>new Date().toTimeString().slice(0,5);
+const fd=s=>s<60?s+' s':s<3600?Math.floor(s/60)+' min '+s%60+' s':Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min';
+function spark(a,col){const p=a.map((v,i)=>(i/(Math.max(a.length-1,1))*200)+','+(60-v*0.56)).join(' ');return '<svg viewBox="0 0 200 64" preserveAspectRatio="none"><polyline points="'+p+'" fill="none" stroke="'+col+'" stroke-width="2.5" stroke-linejoin="round"/></svg>'}
+function render(){
+ const d=D[cur];
+ $('devs').innerHTML=D.map((x,i)=>'<button class="dev '+(i==cur?'on':'')+'" onclick="cur='+i+';render()"><span class="dot '+(x.on?'on-dot':'off-dot')+'"></span><span>'+x.n+'<small>'+x.ip+'</small></span></button>').join('')+'<button class="dev soon" onclick="alert(\'Konzept: Weitere Geräte per QR-Code hinzufügen\')"><span>＋</span><span>Gerät hinzufügen</span></button>';
+ $('title').textContent=d.n;
+ $('conn').innerHTML='<span class="dot '+(d.on?'on-dot':'off-dot')+'" style="display:inline-block;margin-right:6px"></span>'+(d.on?'Online':'Offline');
+ $('mode').textContent=sim?'SIMULATION':'ECHT';$('mode').style.color=sim?'':'var(--red)';
+ const pct=d.pend?Math.min(1,d.pend/(d.total||1)):0, C=2*Math.PI*40;
+ let h='';
+ h+='<div class="tile w2 h2"><div class="glow" style="background:'+(d.on?'var(--grn)':'var(--red)')+'"></div><div class="lab">Status</div><div class="big">'+(d.on?'Online':'Aus')+'</div><div class="mut">'+(d.on?'Agent läuft · '+PL[d.plan]:'Wake-on-LAN bereit')+'</div>'
+  +'<div class="btns">'+(d.on?'<button class="stop" onclick="shut()">Herunterfahren</button><button onclick="act(\'Ruhezustand\')">Ruhezustand</button>':'<button class="go" onclick="wake()">PC einschalten</button>')+'</div></div>';
+ h+='<div class="tile"><div class="lab">CPU</div><div class="big" id="cpuv">'+(d.on?(d.cpu.at(-1)||0)+' %':'–')+'</div>'+spark(d.cpu,'var(--teal)')+'</div>';
+ h+='<div class="tile"><div class="lab">RAM</div><div class="big">'+(d.on?d.ram+' %':'–')+'</div>'+spark(d.cpu.map(v=>d.ram+v/10),'var(--blue)')+'</div>';
+ h+='<div class="tile"><div class="lab">Timer</div>'+(d.pend>0?'<svg class="ring" viewBox="0 0 100 100" style="height:96px;width:96px;margin:auto"><circle cx="50" cy="50" r="40" fill="none" stroke="#243052" stroke-width="9"/><circle cx="50" cy="50" r="40" fill="none" stroke="var(--red)" stroke-width="9" stroke-linecap="round" stroke-dasharray="'+C+'" stroke-dashoffset="'+C*(1-pct)+'" style="transition:stroke-dashoffset 1s linear"/></svg><div class="mut" style="text-align:center">'+fd(d.pend)+'</div><button onclick="abort()">Abbrechen</button>':'<div class="mut">Kein Herunterfahren geplant</div><div class="btns"><button onclick="timer(3600)">1 h</button><button onclick="timer(7200)">2 h</button></div>')+'</div>';
+ h+='<div class="tile"><div class="lab">Energieplan</div><div class="big" style="font-size:22px">'+PL[d.plan]+'</div><div class="plans">'+Object.keys(PL).map(k=>'<button class="'+(k==d.plan?'on':'')+'" onclick="plan(\''+k+'\')">'+PL[k].slice(0,6)+'</button>').join('')+'</div></div>';
+ h+='<div class="tile w2"><div class="lab">Game Optimization</div><div class="mut">Energieplan hoch, Hintergrund-Apps zu, RAM frei – nur auf Knopfdruck.</div><div class="btns"><button class="go" onclick="act(\'Game-Optimierung gestartet\')">Optimieren</button><button onclick="act(\'Spiele gescannt\')">Spiele scannen</button></div></div>';
+ h+='<div class="tile w2"><div class="lab">Ereignisse</div><div class="log">'+log.slice(-8).reverse().join('<br>')+'</div></div>';
+ h+='<div class="tile w2 soon"><div class="lab">Benutzer &amp; Rechte (später)</div><div class="mut">Z. B. „Kind“ darf nur Status sehen, „Partner“ darf Einschalten, „Admin“ alles. Geräte pro Benutzer freigeben.</div></div>';
+ if(!$('g').dataset.done){$('g').dataset.done=1;$('g').innerHTML=h}else{$('g').innerHTML=h;[...$('g').children].forEach(c=>c.style.animation='none')}
+}
+function act(m){log.push(t()+'  '+m+'  ok');render()}
+function plan(k){D[cur].plan=k;act('power-plan '+k)}
+function shut(){const d=D[cur];if(confirm(d.n+' in 60 Sekunden herunterfahren?'))timer(60)}
+function timer(s){D[cur].pend=s;D[cur].total=s;act('shutdown in '+s+'s')}
+function abort(){D[cur].pend=0;act('abort')}
+function wake(){act('wake gesendet');setTimeout(()=>{D[cur].on=true;D[cur].ram=38;render()},2500)}
+$('mode').onclick=()=>{sim=!sim;render()};
+setInterval(()=>{D.forEach(d=>{if(d.on){d.cpu.push(Math.round(Math.max(3,Math.min(95,(d.cpu.at(-1)||20)+(Math.random()*20-10)))));if(d.cpu.length>30)d.cpu.shift();d.ram=Math.max(20,Math.min(80,d.ram+Math.round(Math.random()*4-2)))}
+ if(d.pend>0){d.pend--;if(!d.pend){d.on=false;d.cpu=[]}}});render()},1000);
+render();
+</script></body></html>
