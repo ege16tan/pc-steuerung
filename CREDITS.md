@@ -7,13 +7,15 @@ unserer MIT-Lizenz.
 ## Agent-Skills (Entwicklungshilfen, nicht Teil der App)
 
 Diese Skills liegen global unter `~/.agents/skills` und werden über die
-[Skills-CLI](https://skills.sh) gepflegt (`cline skill list -g`).
+[Skills-CLI](https://skills.sh) gepflegt (`cline skill list -g`). Zusätzlich liegt
+das offizielle Obsidian-Paket **projektlokal** unter `.agents/skills` (7 Skills,
+MIT, Lizenztext in `.agents/skills/LICENSE-obsidian-skills.txt`).
 
 | Skill-Paket | Verwendete Skills | Zweck |
 |---|---|---|
 | [android/skills](https://github.com/android/skills) | `r8-analyzer`, `testing-setup`, `camerax`, `anr-audit-and-fix`, `edge-to-edge` | Offizielle Android-Guidance (R8, Tests, CameraX, Edge-to-Edge) |
 | [chrisbanes/skills](https://github.com/chrisbanes/skills) | `compose-performance`, `compose-state-and-effects`, `compose-ui-testing-patterns`, `gradle-run` | Jetpack-Compose-Qualität und Gradle-Workflow |
-| [obsidianmd/obsidian-skills](https://github.com/obsidianmd/obsidian-skills) | `obsidian-markdown`, `obsidian-bases`, `obsidian-cli` | Vault-Dokumentation (Wikilinks, Properties, Bases) |
+| [obsidianmd/obsidian-skills](https://github.com/obsidianmd/obsidian-skills) | `obsidian-markdown`, `obsidian-bases`, `obsidian-cli`, `json-canvas`, `knap`, `defuddle`, `obsidian-headless` | Vault-Dokumentation (Markdown, Bases, Canvas, CLI, Vorlagen, Web-Extraktion) |
 | [apollographql/skills](https://github.com/apollographql/skills) | `rust-best-practices` | Idiomatisches Rust (basiert auf dem Rust-Best-Practices-Handbuch) |
 | [wshobson/agents](https://github.com/wshobson/agents) | `rust-async-patterns` | Tokio-/Axum-Muster |
 | [trailofbits/skills](https://github.com/trailofbits/skills) | `rust-review` | Security-Review für Rust-Code |
