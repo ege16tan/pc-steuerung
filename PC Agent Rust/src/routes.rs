@@ -7,20 +7,26 @@
 //! GET /plugins/{id}/output,
 //! GET /games, POST /games/scan, GET/POST /game-config.
 
+use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{ConnectInfo, Path, Query, State};
-use axum::http::StatusCode;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{
+    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+    ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE, CACHE_CONTROL, CONTENT_TYPE, ORIGIN, VARY,
+};
+use axum::http::{HeaderValue, Method, StatusCode};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Json, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::{remaining_seconds, App, DeviceSettings, TokenCredentials};
-use crate::auth::{create_credentials, Auth};
+use crate::app::{parse_role, remaining_seconds, App, Credentials, DeviceSettings, TokenCredentials, UserEntry};
+use crate::auth::{create_credentials, Auth, WriteAuth};
 use crate::commands::{detect_active_plan, run, PLANS};
 use crate::journal::{log_event, tail_lines};
+use crate::live::LiveMessage;
 use crate::page::{APP_CSS, APP_JS, PAGE};
 use crate::pairing::{lan_ipv4, network_adapters, payload_json};
 use crate::wol::{configured_broadcast, parse_mac, send_wol};
@@ -205,6 +211,113 @@ pub async fn csrf_guard(
         }
     }
     next.run(request).await
+}
+
+// ---------------- CORS fuer die Geraeteliste (opt-in) ----------------
+
+/// Antwortet auf Preflight (`OPTIONS`) und setzt CORS-Kopfzeilen, aber nur fuer
+/// Origins aus `PC_AGENT_CORS`. Ohne Allowlist verhaelt sich der Agent wie
+/// bisher (keine CORS-Kopfzeilen, fremde Seiten koennen nichts lesen).
+pub async fn cors_guard(
+    State(app): State<SharedApp>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let origin = request
+        .headers()
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    let allowed = origin
+        .as_ref()
+        .map(|value| app.live.origin_allowed(value))
+        .unwrap_or(false);
+
+    if request.method() == Method::OPTIONS && allowed {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        if let Some(origin) = origin {
+            apply_cors_headers(&origin, response.headers_mut());
+        }
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    if allowed {
+        if let Some(origin) = origin {
+            apply_cors_headers(&origin, response.headers_mut());
+        }
+    }
+    response
+}
+
+/// Kopfzeilen fuer genau diese Origin. `*` waere falsch, weil Anmeldedaten
+/// mitgeschickt werden duerfen (`Allow-Credentials`).
+fn apply_cors_headers(origin: &str, headers: &mut axum::http::HeaderMap) {
+    let Ok(origin) = HeaderValue::from_str(origin) else {
+        return;
+    };
+    headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    headers.insert(ACCESS_CONTROL_ALLOW_CREDENTIALS, HeaderValue::from_static("true"));
+    headers.insert(VARY, HeaderValue::from_static("Origin"));
+    headers.insert(
+        ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
+    );
+    headers.insert(
+        ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization, content-type, x-pc-steuerung, x-token"),
+    );
+    headers.insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
+}
+
+// ---------------- Live-Updates (Server-Sent Events) ----------------
+
+/// GET /events/stream — haelt die Verbindung offen und schickt `state` alle 2 s
+/// sowie `event` sofort bei neuen Ereignissen. Die Anmeldung gilt wie ueberall.
+pub async fn events_stream(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let receiver = app.live.subscribe();
+    // Erster Stand sofort: der Empfaenger existiert bereits, die Nachricht kommt an.
+    app.live.publish(crate::live::state_message(&app).await);
+
+    let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
+        loop {
+            match receiver.recv().await {
+                Ok(message) => return Some((Ok::<_, Infallible>(sse_event(message)), receiver)),
+                // Abgehaengt (langsamer Client): weiterlesen statt abbrechen.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+
+    let keep_alive = KeepAlive::new()
+        .interval(Duration::from_secs(15))
+        .text("keep-alive");
+    let mut response = Sse::new(stream).keep_alive(keep_alive).into_response();
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    // Zwischenspeicher (Proxy) sollen den Strom nicht puffern.
+    response.headers_mut().insert(
+        "x-accel-buffering",
+        HeaderValue::from_static("no"),
+    );
+    response
+}
+
+/// Rundruf-Nachricht in ein SSE-Ereignis uebersetzen.
+fn sse_event(message: LiveMessage) -> SseEvent {
+    match message {
+        LiveMessage::State(value) => SseEvent::default()
+            .event("state")
+            .json_data(value)
+            .unwrap_or_else(|_| SseEvent::default().event("state").data("{}")),
+        LiveMessage::Event(event) => SseEvent::default()
+            .event("event")
+            .json_data(event)
+            .unwrap_or_else(|_| SseEvent::default().event("event").data("{}")),
+    }
 }
 
 pub async fn setup_status(State(app): State<SharedApp>) -> Response {
@@ -417,7 +530,7 @@ pub async fn setup(
 pub async fn set_mode(
     State(app): State<SharedApp>,
     Query(query): Query<Vec<(String, String)>>,
-    _auth: Auth,
+    _auth: WriteAuth,
 ) -> Response {
     let simulate = match first_query(&query, "simulate").and_then(parse_query_bool) {
         Some(simulate) => simulate,
@@ -443,10 +556,10 @@ pub async fn set_mode(
     Json(json!({ "ok": true, "simulate": simulate })).into_response()
 }
 
-/// GET /status — Plan-Erkennung laeuft auch im Simulationsmodus echt ab
-/// (nur Lesen), genau wie beim Python-Agent.
-pub async fn status_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
-    let snap = snapshot(&app);
+/// Baut den Status (ohne Rollenangabe) – genutzt von `GET /status` und vom
+/// Live-Rundruf (`/events/stream`).
+pub async fn status_payload(app: &SharedApp) -> serde_json::Value {
+    let snap = snapshot(app);
     let seconds = remaining_seconds(snap.pending_at, now_epoch());
     let power_plan = if snap.simulate && snap.sim_plan.is_some() {
         snap.sim_plan.clone().unwrap()
@@ -464,9 +577,9 @@ pub async fn status_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
         .unwrap_or_else(|_| "unbekannt".to_string())
     };
     let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "?".to_string());
-    let name = device_name(&app);
-    let wol = configured_mac(&app).is_some();
-    Json(json!({
+    let name = device_name(app);
+    let wol = configured_mac(app).is_some();
+    json!({
         "online": true,
         "host": host,
         "device_name": name,
@@ -476,8 +589,16 @@ pub async fn status_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
         "pending_seconds": snap.pending_seconds,
         "wol_enabled": wol,
         "setup_required": snap.credentials.is_none(),
-    }))
-    .into_response()
+        "cors_origins": app.live.origins(),
+    })
+}
+
+/// GET /status — Plan-Erkennung laeuft auch im Simulationsmodus echt ab
+/// (nur Lesen), genau wie beim Python-Agent. Enthaelt die Rolle des Aufrufers.
+pub async fn status_ep(State(app): State<SharedApp>, auth: Auth) -> Response {
+    let mut value = status_payload(&app).await;
+    value["role"] = json!(auth.role);
+    Json(value).into_response()
 }
 
 /// GET /metrics — CPU-Auslastung, Arbeitsspeicher und Laufzeit.
@@ -507,7 +628,7 @@ pub fn parse_delay(query: &[(String, String)]) -> Result<u32, String> {
 pub async fn shutdown_ep(
     State(app): State<SharedApp>,
     Query(query): Query<Vec<(String, String)>>,
-    _auth: Auth,
+    _auth: WriteAuth,
 ) -> Response {
     let delay = match parse_delay(&query) {
         Ok(delay) => delay,
@@ -554,7 +675,7 @@ pub async fn shutdown_ep(
 }
 
 /// POST /abort — laufendes Herunterfahren abbrechen; pending immer zurueck.
-pub async fn abort_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+pub async fn abort_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Response {
     let simulate = snapshot(&app).simulate;
     let (code, out) = tokio::task::spawn_blocking(move || run(&["shutdown", "/a"], simulate, false))
         .await
@@ -577,7 +698,7 @@ pub async fn abort_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
 }
 
 /// POST /hibernate — Windows in den Ruhezustand versetzen.
-pub async fn hibernate_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+pub async fn hibernate_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Response {
     let simulate = snapshot(&app).simulate;
     let (code, out) =
         tokio::task::spawn_blocking(move || run(&["shutdown", "/h"], simulate, false))
@@ -612,7 +733,7 @@ pub async fn hibernate_ep(State(app): State<SharedApp>, _auth: Auth) -> Response
 pub async fn power_plan_ep(
     State(app): State<SharedApp>,
     Query(query): Query<Vec<(String, String)>>,
-    _auth: Auth,
+    _auth: WriteAuth,
 ) -> Response {
     let name = match first_query(&query, "name") {
         Some(name) => name.to_string(),
@@ -675,7 +796,7 @@ pub fn parse_port(query: &[(String, String)]) -> Result<u16, String> {
 pub async fn wake_ep(
     State(app): State<SharedApp>,
     Query(query): Query<Vec<(String, String)>>,
-    _auth: Auth,
+    _auth: WriteAuth,
 ) -> Response {
     let mac = match first_query(&query, "mac") {
         Some(mac) => mac.to_string(),
@@ -798,7 +919,7 @@ pub async fn plugin_start(
     State(app): State<SharedApp>,
     Path(id): Path<String>,
     Query(query): Query<Vec<(String, String)>>,
-    _auth: Auth,
+    _auth: WriteAuth,
 ) -> Response {
     let simulate = snapshot(&app).simulate;
     let auto = first_query(&query, "auto")
@@ -842,7 +963,7 @@ pub async fn plugin_start(
 pub async fn plugin_stop(
     State(app): State<SharedApp>,
     Path(id): Path<String>,
-    _auth: Auth,
+    _auth: WriteAuth,
 ) -> Response {
     let run = match crate::plugins::take_run(&app, &id) {
         Ok(run) => run,
@@ -892,7 +1013,7 @@ pub async fn games_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
 }
 
 /// POST /games/scan — Spiele suchen (Steam, Epic, GOG, eigene Ordner).
-pub async fn games_scan_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+pub async fn games_scan_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Response {
     let worker = Arc::clone(&app);
     let result = tokio::task::spawn_blocking(move || crate::games::scan_and_store(&worker)).await;
     match result {
@@ -922,7 +1043,7 @@ pub async fn game_config_get(State(app): State<SharedApp>, _auth: Auth) -> Respo
 /// POST /game-config — Kill-Liste, eigene Suchordner und Automatik speichern.
 pub async fn game_config_set(
     State(app): State<SharedApp>,
-    _auth: Auth,
+    _auth: WriteAuth,
     Json(config): Json<crate::games::GameConfig>,
 ) -> Response {
     match crate::games::save_config(&app, &config) {
@@ -947,6 +1068,181 @@ pub async fn game_config_set(
             format!("Speichern fehlgeschlagen: {message}"),
         ),
     }
+}
+
+// ---------------- Benutzer und Rollen (Phase 3) ----------------
+
+/// Body fuer `POST /users`.
+#[derive(Debug, Deserialize)]
+pub struct NewUserRequest {
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub role: String,
+}
+
+/// Schreibt `credentials.json` neu (Rollen und Benutzerliste inklusive).
+fn save_credentials_file(app: &App, credentials: &Credentials) -> Result<(), String> {
+    let serial = serde_json::to_string_pretty(credentials)
+        .map_err(|error| format!("Serialisieren fehlgeschlagen: {error}"))?;
+    std::fs::write(&app.creds_file, serial)
+        .map_err(|error| format!("Speichern fehlgeschlagen: {error}"))
+}
+
+/// GET /users — Hauptbenutzer und weitere Benutzer mit Rolle (ohne Hashes).
+/// Nur Administratoren; `viewer` bekommt 403.
+pub async fn users_ep(State(app): State<SharedApp>, auth: Auth) -> Response {
+    if !auth.is_admin() {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "Benutzerverwaltung nur fuer Administratoren".to_string(),
+        );
+    }
+    let guard = app.inner.lock().expect("Zustands-Sperre");
+    let Some(credentials) = guard.credentials.as_ref() else {
+        return Json(json!({
+            "primary": serde_json::Value::Null,
+            "users": [],
+            "cors_origins": app.live.origins(),
+        }))
+        .into_response();
+    };
+    let users = credentials
+        .users
+        .iter()
+        .filter(|entry| entry.is_usable())
+        .map(|entry| json!({ "user": entry.user, "role": entry.role() }))
+        .collect::<Vec<_>>();
+    let primary = if credentials.is_usable() {
+        json!({ "user": credentials.user, "role": credentials.role() })
+    } else {
+        serde_json::Value::Null
+    };
+    Json(json!({
+        "primary": primary,
+        "users": users,
+        "cors_origins": app.live.origins(),
+    }))
+    .into_response()
+}
+
+/// POST /users — Benutzer anlegen oder (gleicher Name) Passwort/Rolle ersetzen.
+/// Der Hauptbenutzer bleibt unveraendert; nur Administratoren duerfen das.
+pub async fn user_add(
+    State(app): State<SharedApp>,
+    auth: WriteAuth,
+    Json(body): Json<NewUserRequest>,
+) -> Response {
+    if !auth.0.is_admin() {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "Nur Administratoren duerfen Benutzer verwalten".to_string(),
+        );
+    }
+    let user = body.user.trim().to_string();
+    let password = body.password.clone();
+    if user.is_empty() || user.chars().count() > 64 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Benutzername muss 1 bis 64 Zeichen haben".to_string(),
+        );
+    }
+    if password.chars().count() < 8 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Passwort muss mindestens 8 Zeichen haben".to_string(),
+        );
+    }
+    let role = parse_role(&body.role);
+    let created = match create_credentials(&user, &password) {
+        Ok(credentials) => credentials,
+        Err(detail) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
+    };
+
+    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let Some(mut credentials) = guard.credentials.clone() else {
+        return error_response(
+            StatusCode::CONFLICT,
+            "Noch keine Zugangsdaten eingerichtet".to_string(),
+        );
+    };
+    if user == credentials.user {
+        return error_response(
+            StatusCode::CONFLICT,
+            "Der Hauptbenutzer kann hier nicht geaendert werden".to_string(),
+        );
+    }
+    let entry = UserEntry {
+        user: user.clone(),
+        salt: created.salt,
+        hash: created.hash,
+        role: role.to_string(),
+    };
+    match credentials.users.iter_mut().find(|existing| existing.user == user) {
+        Some(existing) => *existing = entry,
+        None => credentials.users.push(entry),
+    }
+    if let Err(error) = save_credentials_file(&app, &credentials) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    guard.credentials = Some(credentials);
+    log_event(
+        &app,
+        &mut guard,
+        "benutzer",
+        &format!("{user} als {role} gespeichert"),
+        true,
+    );
+    Json(json!({ "ok": true, "user": user, "role": role })).into_response()
+}
+
+/// DELETE /users/{user} — weiteren Benutzer entfernen (Hauptbenutzer bleibt).
+pub async fn user_delete(
+    State(app): State<SharedApp>,
+    Path(user): Path<String>,
+    auth: WriteAuth,
+) -> Response {
+    if !auth.0.is_admin() {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "Nur Administratoren duerfen Benutzer verwalten".to_string(),
+        );
+    }
+    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let Some(mut credentials) = guard.credentials.clone() else {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "Keine Benutzer eingerichtet".to_string(),
+        );
+    };
+    if user == credentials.user {
+        return error_response(
+            StatusCode::CONFLICT,
+            "Der Hauptbenutzer kann nicht geloescht werden".to_string(),
+        );
+    }
+    let before = credentials.users.len();
+    credentials.users.retain(|entry| entry.user != user);
+    if credentials.users.len() == before {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            format!("Benutzer '{user}' nicht gefunden"),
+        );
+    }
+    if let Err(error) = save_credentials_file(&app, &credentials) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    guard.credentials = Some(credentials);
+    log_event(
+        &app,
+        &mut guard,
+        "benutzer",
+        &format!("{user} entfernt"),
+        true,
+    );
+    Json(json!({ "ok": true, "removed": user })).into_response()
 }
 
 #[cfg(test)]

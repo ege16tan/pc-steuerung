@@ -10,12 +10,16 @@
 //!            sondern nur gelogt; /mode?simulate=true|false schaltet um.
 //!          - PC_WOL_Broadcast: Umgebungsvariable PC_WOL_BROADCAST fuer /wake.
 //!          - PC_AGENT_PORT (optional, Standard 8000) fuer Tests/Parallellauf.
+//!          - PC_AGENT_CORS (optional): Origins fuer die Geraeteliste im
+//!            Browser, komma-getrennt; leer = kein CORS.
+//!          - Rollen: admin (alles) und viewer (nur lesen) in credentials.json.
 
 mod app;
 mod auth;
 mod commands;
 mod games;
 mod journal;
+mod live;
 mod metrics;
 mod page;
 mod pairing;
@@ -133,6 +137,8 @@ fn migrate_legacy_data(exe_dir: &Path, data_dir: &Path) {
 }
 
 async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
+    // Zweite Referenz fuer den Live-Rundruf und die CORS-Schicht.
+    let app = shared.clone();
     let router = axum::Router::new()
         .route("/", axum::routing::get(routes::index))
         .route("/app.css", axum::routing::get(routes::app_css))
@@ -153,7 +159,13 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/wake", axum::routing::post(routes::wake_ep))
         .route("/ping", axum::routing::post(routes::ping_ep))
         .route("/events", axum::routing::get(routes::events_ep))
+        .route("/events/stream", axum::routing::get(routes::events_stream))
         .route("/log", axum::routing::get(routes::log_ep))
+        .route(
+            "/users",
+            axum::routing::get(routes::users_ep).post(routes::user_add),
+        )
+        .route("/users/{user}", axum::routing::delete(routes::user_delete))
         .route("/plugins", axum::routing::get(routes::plugins_ep))
         .route("/plugins/{id}/start", axum::routing::post(routes::plugin_start))
         .route("/plugins/{id}/stop", axum::routing::post(routes::plugin_stop))
@@ -169,7 +181,16 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         // CSRF: schreibende Anfragen von localhost brauchen die Kopfzeile
         // `X-PC-Steuerung: 1` (die Web-Oberfläche sendet sie immer).
         .layer(axum::middleware::from_fn(routes::csrf_guard))
+        // CORS: nur fuer Origins aus PC_AGENT_CORS (Geraeteliste im Browser).
+        // Aeußerste Schicht, damit auch Preflight (OPTIONS) hier ankommt.
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            routes::cors_guard,
+        ))
         .with_state(shared);
+
+    // Live-Rundruf fuer `/events/stream` (schickt nur, wenn jemand zuhoert).
+    tokio::spawn(crate::live::run_loop(app));
 
     // Bindung an 0.0.0.0:8000, damit das Handy im LAN zugreifen kann;
     // die Windows-Firewall fragt beim ersten Start einmalig nach.

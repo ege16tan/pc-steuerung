@@ -13,12 +13,85 @@ use serde::{Deserialize, Serialize};
 /// Kappungsgrenze = 50 Ereignisse (wie Deque(maxlen=50) im Python-Agent).
 pub const EVENT_MAX: usize = 50;
 
-/// Zugangsdaten aus `credentials.json` (Passwort nur als PBKDF2-Hash).
+/// Rolle mit allen Rechten (schalten, Benutzer verwalten).
+pub const ROLE_ADMIN: &str = "admin";
+/// Rolle mit Lesezugriff (Status, Messwerte, Ereignisse, Log).
+pub const ROLE_VIEWER: &str = "viewer";
+
+/// Unbekannte Rolle -> `admin` (alte `credentials.json` ohne `role`-Feld).
+pub fn parse_role(value: &str) -> &'static str {
+    if value.trim().eq_ignore_ascii_case(ROLE_VIEWER) {
+        ROLE_VIEWER
+    } else {
+        ROLE_ADMIN
+    }
+}
+
+/// Weiterer Benutzer aus `credentials.json` (Phase 3, Rollen/Rechte).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserEntry {
+    pub user: String,
+    pub salt: String,
+    pub hash: String,
+    pub role: String,
+}
+
+impl Default for UserEntry {
+    fn default() -> Self {
+        Self {
+            user: String::new(),
+            salt: String::new(),
+            hash: String::new(),
+            role: ROLE_ADMIN.to_string(),
+        }
+    }
+}
+
+impl UserEntry {
+    /// Alle drei Felder muessen gefuellt sein, sonst ist der Eintrag unbrauchbar.
+    pub fn is_usable(&self) -> bool {
+        !self.user.is_empty() && !self.salt.is_empty() && !self.hash.is_empty()
+    }
+
+    /// Rolle des Benutzers, nie leer.
+    pub fn role(&self) -> &'static str {
+        parse_role(&self.role)
+    }
+}
+
+/// Zugangsdaten aus `credentials.json` (Passwort nur als PBKDF2-Hash).
+///
+/// Phase 3: Neben dem Hauptbenutzer (`user`/`salt`/`hash`) gibt es eine Liste
+/// weiterer Benutzer mit eigener Rolle. Alte Dateien ohne `role`/`users`
+/// bleiben gueltig – der Hauptbenutzer ist dann `admin`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Credentials {
     pub user: String,
     pub salt: String,
     pub hash: String,
+    pub role: String,
+    pub users: Vec<UserEntry>,
+}
+
+impl Default for Credentials {
+    fn default() -> Self {
+        Self {
+            user: String::new(),
+            salt: String::new(),
+            hash: String::new(),
+            role: ROLE_ADMIN.to_string(),
+            users: Vec::new(),
+        }
+    }
+}
+
+impl Credentials {
+    /// Rolle des Hauptbenutzers, nie leer.
+    pub fn role(&self) -> &'static str {
+        parse_role(&self.role)
+    }
 }
 
 /// Token-Zugangsdaten: nur Salt und PBKDF2-Hash werden gespeichert.
@@ -43,9 +116,11 @@ impl Default for DeviceSettings {
 }
 
 impl Credentials {
-    /// Wie der Python-Agent: user, salt und hash muessen vorhanden sein.
+    /// Gueltig, wenn der Hauptbenutzer vollstaendig ist oder mindestens ein
+    /// weiterer Benutzer; sonst muss die Einrichtung erneut laufen.
     pub fn is_usable(&self) -> bool {
-        !self.user.is_empty() && !self.salt.is_empty() && !self.hash.is_empty()
+        let primary = !self.user.is_empty() && !self.salt.is_empty() && !self.hash.is_empty();
+        primary || self.users.iter().any(UserEntry::is_usable)
     }
 }
 
@@ -95,6 +170,8 @@ pub struct App {
     pub games_cache_file: PathBuf,
     /// Einstellungen der Spiel-Optimierung (`game-config.json`).
     pub game_config_file: PathBuf,
+    /// Live-Updates (SSE) und CORS-Allowlist fuer die Geraeteliste.
+    pub live: crate::live::LiveHub,
 }
 
 impl App {
@@ -133,6 +210,7 @@ impl App {
             metrics: Mutex::new(crate::metrics::MetricsState::default()),
             games_cache_file: base_dir.join("games.json"),
             game_config_file: base_dir.join("game-config.json"),
+            live: crate::live::LiveHub::new(crate::live::cors_origins_from_env()),
         }
     }
 }
@@ -192,15 +270,45 @@ mod tests {
             user: "u".into(),
             salt: "00".into(),
             hash: "11".into(),
+            ..Default::default()
         };
         assert!(usable.is_usable());
+        assert_eq!(usable.role(), ROLE_ADMIN);
 
         let broken = Credentials {
             user: "".into(),
             salt: "00".into(),
             hash: "11".into(),
+            ..Default::default()
         };
         assert!(!broken.is_usable());
+    }
+
+    #[test]
+    fn weitere_benutzer_halten_die_anmeldung_am_leben() {
+        // Hauptbenutzer unvollstaendig, aber ein Gast ist eingerichtet.
+        let credentials = Credentials {
+            users: vec![UserEntry {
+                user: "gast".into(),
+                salt: "00".into(),
+                hash: "11".into(),
+                role: ROLE_VIEWER.into(),
+            }],
+            ..Default::default()
+        };
+        assert!(credentials.is_usable());
+        assert_eq!(credentials.users[0].role(), ROLE_VIEWER);
+    }
+
+    #[test]
+    fn rolle_wird_normalisiert() {
+        assert_eq!(parse_role("viewer"), ROLE_VIEWER);
+        assert_eq!(parse_role(" VIEWER "), ROLE_VIEWER);
+        assert_eq!(parse_role("Viewer"), ROLE_VIEWER);
+        assert_eq!(parse_role("admin"), ROLE_ADMIN);
+        // Unbekannt/leer (alte Dateien) -> admin, damit niemand ausgesperrt wird.
+        assert_eq!(parse_role(""), ROLE_ADMIN);
+        assert_eq!(parse_role("chef"), ROLE_ADMIN);
     }
 
     #[test]

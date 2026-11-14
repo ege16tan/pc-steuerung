@@ -29,6 +29,8 @@ pub fn log_event(app: &App, inner: &mut InnerApp, action: &str, detail: &str, ok
     while inner.events.len() > EVENT_MAX {
         inner.events.pop_back();
     }
+    // Live an alle offenen SSE-Verbindungen (Phase 3).
+    app.live.publish(crate::live::LiveMessage::Event(entry.clone()));
     let line = log_line(&entry);
     append_line(&app.log_file, &line);
     // Python druckt True/False (gross), damit die Konsole identisch aussieht.

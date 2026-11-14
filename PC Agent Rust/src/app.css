@@ -49,6 +49,24 @@ h1 { margin: 0; font-size: 22px; letter-spacing: -.3px; }
 .pill.sim.echt { color: var(--red); border-color: #f8717166; }
 .pill.ok { color: var(--grn); border-color: #34d39955; }
 .pill.off { color: var(--red); border-color: #f8717155; }
+.pill.live { color: var(--teal); border-color: #2dd4bf55; cursor: default; }
+.pill[hidden] { display: none; }
+
+/* Geräte- und Benutzerliste (Phase 3) */
+.devlist { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.devrow {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card2);
+}
+.devrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mut); flex: 0 0 auto; }
+.devrow .dot.ok { background: var(--grn); }
+.devrow .dot.off { background: var(--red); }
+.devrow .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.devrow .sub { color: var(--mut); font-size: 12px; }
+.devrow button { padding: 6px 10px; font-size: 12px; flex: 0 0 auto; }
+.devrow .chip { flex: 0 0 auto; }
+.tile code { font-size: 12px; color: var(--teal); }
+.tile.empty .devlist { display: none; }
 
 /* Raster */
 .grid { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); margin-bottom: 14px; }

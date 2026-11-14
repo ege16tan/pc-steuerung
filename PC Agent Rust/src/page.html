@@ -85,6 +85,7 @@
     <div class="devline">
       <h1 id="deviceName">PC</h1>
       <span class="pill" id="connPill"><span id="connText">Verbinde …</span></span>
+      <span class="pill" id="livePill" hidden title="Live-Verbindung (SSE)">⚡ Live</span>
       <button type="button" class="pill sim" id="modePill" title="Simulation und Echt umschalten">SIMULATION</button>
       <button type="button" class="pill" id="themePill" title="Darstellung wechseln">◐ System</button>
     </div>
@@ -144,6 +145,39 @@
     </div>
 
     <div class="tile w2">
+      <div class="lab">Geräte</div>
+      <div class="mut">Mehrere PCs in einer Oberfläche – der andere Agent muss diese Seite per
+        <code>PC_AGENT_CORS</code> freischalten.</div>
+      <div class="devlist" id="deviceList"></div>
+      <div class="row" style="margin-top:10px">
+        <input id="deviceUrl" placeholder="http://192.168.1.20:8000"
+               aria-label="Adresse des PCs" autocomplete="off">
+        <input id="deviceLabel" placeholder="Name (optional)"
+               aria-label="Anzeigename des PCs" autocomplete="off">
+        <button type="button" class="ghost" id="btnAddDevice" style="flex:0 0 auto">Hinzufügen</button>
+      </div>
+      <p class="mut" id="deviceHint" style="margin:8px 0 0"></p>
+    </div>
+
+    <div class="tile w2">
+      <div class="lab">Benutzer &amp; Rechte</div>
+      <div class="mut"><strong>admin</strong> darf alles, <strong>viewer</strong> nur lesen.</div>
+      <div class="devlist" id="userList"></div>
+      <div class="row" id="userForm" style="margin-top:10px" hidden>
+        <input id="newUserName" placeholder="Benutzername" autocomplete="off"
+               aria-label="Neuer Benutzername">
+        <input id="newUserPass" type="password" placeholder="Passwort (min. 8)"
+               autocomplete="new-password" aria-label="Passwort für den neuen Benutzer">
+        <select id="newUserRole" aria-label="Rolle des neuen Benutzers">
+          <option value="viewer">viewer</option>
+          <option value="admin">admin</option>
+        </select>
+        <button type="button" class="ghost" id="btnAddUser" style="flex:0 0 auto">Anlegen</button>
+      </div>
+      <p class="mut" id="usersHint" style="margin:8px 0 0"></p>
+    </div>
+
+    <div class="tile w2">
       <div class="lab">Ereignisse</div>
       <div class="log" id="events"></div>
     </div>
@@ -154,7 +188,7 @@
     </div>
   </div>
 
-  <p class="foot">PC Steuerung · Dashboard (Phase 1)</p>
+  <p class="foot">PC Steuerung · Dashboard (Phase 3: Live-Updates, Geräte, Rollen)</p>
 </div>
 
 </body>

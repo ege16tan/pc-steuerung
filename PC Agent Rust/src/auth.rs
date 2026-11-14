@@ -15,7 +15,7 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use crate::app::{Credentials, TokenCredentials, App};
+use crate::app::{Credentials, TokenCredentials, App, ROLE_ADMIN};
 
 /// Iterationen wie der Python-Agent (200000); SHA-256 mit 32-Byte-Ausgabe.
 pub const PBKDF2_ROUNDS: u32 = 200_000;
@@ -46,28 +46,46 @@ fn hex_digit(b: u8) -> Option<u8> {
     }
 }
 
-/// Prueft den Authorization-Header gegen die Zugangsdaten.
-/// Ablauf wie im Python-Agent `_check_basic`.
+/// Prueft den Authorization-Header gegen die Zugangsdaten und liefert die Rolle
+/// (`admin`/`viewer`). Ablauf wie im Python-Agent `_check_basic`, erweitert um
+/// die Benutzerliste aus Phase 3.
+pub fn check_basic_role(credentials: &Credentials, authorization: &str) -> Option<String> {
+    let payload = authorization.strip_prefix("Basic ")?;
+    let decoded = B64.decode(payload).ok()?;
+    let raw = String::from_utf8(decoded).ok()?;
+    let (user, password) = raw.split_once(':')?;
+
+    // Hauptbenutzer (alte Dateien ohne `role` sind admin).
+    if verify_password(user, &credentials.user, &credentials.salt, &credentials.hash, password) {
+        return Some(credentials.role().to_string());
+    }
+    // Weitere Benutzer mit eigener Rolle.
+    for entry in &credentials.users {
+        if !entry.is_usable() {
+            continue;
+        }
+        if verify_password(user, &entry.user, &entry.salt, &entry.hash, password) {
+            return Some(entry.role().to_string());
+        }
+    }
+    None
+}
+
+/// Wie `check_basic_role`, nur als Ja/Nein (Tests/Kompatibilitaet).
+#[allow(dead_code)]
 pub fn check_basic(credentials: &Credentials, authorization: &str) -> bool {
-    let Some(payload) = authorization.strip_prefix("Basic ") else {
-        return false;
-    };
-    let Ok(decoded) = B64.decode(payload) else {
-        return false;
-    };
-    let Ok(raw) = String::from_utf8(decoded) else {
-        return false;
-    };
-    let Some((user, password)) = raw.split_once(':') else {
-        return false;
-    };
-    if user != credentials.user {
+    check_basic_role(credentials, authorization).is_some()
+}
+
+/// Benutzername + PBKDF2-Hash vergleichen (konstante Zeit fuer den Hash).
+fn verify_password(user: &str, expected_user: &str, salt: &str, hash: &str, password: &str) -> bool {
+    if expected_user.is_empty() || user != expected_user {
         return false;
     }
-    let Some(salt) = hex_decode(&credentials.salt) else {
+    let Some(salt) = hex_decode(salt) else {
         return false;
     };
-    let Some(expected) = hex_decode(&credentials.hash) else {
+    let Some(expected) = hex_decode(hash) else {
         return false;
     };
     if expected.len() != HASH_LEN {
@@ -139,13 +157,34 @@ impl AuthDenied {
             www_auth: false,
         }
     }
+
+    fn read_only() -> AuthDenied {
+        AuthDenied {
+            status: StatusCode::FORBIDDEN,
+            detail: "Nur Lesezugriff (Rolle viewer)",
+            www_auth: false,
+        }
+    }
+}
+
+/// Ergebnis der Anmeldung: Rolle des Benutzers.
+#[derive(Clone, Copy, Debug)]
+pub struct Auth {
+    pub role: &'static str,
+}
+
+impl Auth {
+    pub fn admin() -> Auth {
+        Auth { role: ROLE_ADMIN }
+    }
+
+    pub fn is_admin(&self) -> bool {
+        self.role == ROLE_ADMIN
+    }
 }
 
 /// Marker-Extractor, der vor jedem geschuetzten Endpunkt die Anmeldung prueft.
-pub struct Auth;
-
-/// Zustands-Typ: der Router haelt den Zustand als Arc<App>, also muss der
-/// Extractor fuer genau diesen Typ existieren.
+/// Lesezugriff (Status, Messwerte, Ereignisse, Log) genuegt hier.
 impl FromRequestParts<Arc<App>> for Auth {
     type Rejection = AuthDenied;
 
@@ -153,9 +192,10 @@ impl FromRequestParts<Arc<App>> for Auth {
         parts: &mut Parts,
         app: &Arc<App>,
     ) -> Result<Self, Self::Rejection> {
-        // 1) Lokale Zugriffe (PC selbst: Tray, Web-UI) brauchen keinen Login.
+        // 1) Lokale Zugriffe (PC selbst: Tray, Web-UI) brauchen keinen Login
+        //    und haben alle Rechte.
         if is_local(parts) {
-            return Ok(Auth);
+            return Ok(Auth::admin());
         }
         // 2) Anmeldung per Benutzername/Passwort (Basic Auth).
         let (credentials, token_credentials) = {
@@ -164,24 +204,46 @@ impl FromRequestParts<Arc<App>> for Auth {
         };
         if let Some(cursor) = credentials {
             let authorization = header_str(parts, AUTHORIZATION);
-            if !check_basic(&cursor, &authorization) {
+            let Some(role) = check_basic_role(&cursor, &authorization) else {
                 return Err(AuthDenied::missing_login());
-            }
-            return Ok(Auth);
+            };
+            return Ok(Auth {
+                role: crate::app::parse_role(&role),
+            });
         }
         if let Some(credentials) = token_credentials {
             let token = header_str(parts, "x-token");
-            return if check_token(&credentials, &token) { Ok(Auth) } else { Err(AuthDenied::wrong_token()) };
+            return if check_token(&credentials, &token) { Ok(Auth::admin()) } else { Err(AuthDenied::wrong_token()) };
         }
         // 3) Fallback: alter Token-Schutz.
         if app.token.is_empty() {
-            return Ok(Auth);
+            return Ok(Auth::admin());
         }
         let x_token = header_str(parts, "x-token");
         if tokens_match(&x_token, &app.token) {
-            Ok(Auth)
+            Ok(Auth::admin())
         } else {
             Err(AuthDenied::wrong_token())
+        }
+    }
+}
+
+/// Wie [`Auth`], aber zusaetzlich nur fuer Rollen mit Schreibrecht (`admin`).
+/// `viewer` bekommt 403 – die Web-UI blendet die Knoepfe zusaetzlich aus.
+pub struct WriteAuth(pub Auth);
+
+impl FromRequestParts<Arc<App>> for WriteAuth {
+    type Rejection = AuthDenied;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        app: &Arc<App>,
+    ) -> Result<Self, Self::Rejection> {
+        let auth = Auth::from_request_parts(parts, app).await?;
+        if auth.is_admin() {
+            Ok(WriteAuth(auth))
+        } else {
+            Err(AuthDenied::read_only())
         }
     }
 }
@@ -221,6 +283,8 @@ pub fn create_credentials(user: &str, password: &str) -> Result<Credentials, Str
         user: user.to_string(),
         salt: hex_encode(&salt),
         hash: hex_encode(&digest),
+        role: ROLE_ADMIN.to_string(),
+        users: Vec::new(),
     })
 }
 
@@ -242,6 +306,7 @@ mod tests {
             user: "testuser".to_string(),
             salt: "000102030405060708090a0b0c0d0e0f".to_string(),
             hash: "38d15d243c81af4321de9f9047634d5d8f6843afedfe90150ec6d6071d6a7179".to_string(),
+            ..Default::default()
         }
     }
 
@@ -306,5 +371,42 @@ mod tests {
         assert_eq!(credentials.hash.len(), 64);
         let header = basic_header("tester", "EinLongPasswort99");
         assert!(check_basic(&credentials, &header));
+        // Ohne Rollenfeld ist der Hauptbenutzer Administrator.
+        assert_eq!(credentials.role(), ROLE_ADMIN);
+        assert_eq!(
+            check_basic_role(&credentials, &header).as_deref(),
+            Some(ROLE_ADMIN)
+        );
+    }
+
+    #[test]
+    fn weitere_benutzer_bekommen_ihre_rolle() {
+        let mut credentials = test_credentials();
+        let viewer = create_credentials("gast", "NurLesen123").unwrap();
+        credentials.users.push(crate::app::UserEntry {
+            user: viewer.user,
+            salt: viewer.salt,
+            hash: viewer.hash,
+            role: "viewer".to_string(),
+        });
+
+        let guest_header = basic_header("gast", "NurLesen123");
+        assert_eq!(
+            check_basic_role(&credentials, &guest_header).as_deref(),
+            Some("viewer")
+        );
+        // Hauptbenutzer bleibt admin.
+        let admin_header = basic_header("testuser", "MeinTestpasswort1");
+        assert_eq!(
+            check_basic_role(&credentials, &admin_header).as_deref(),
+            Some(ROLE_ADMIN)
+        );
+        // Falsches Passwort beim Gast bleibt falsch.
+        assert!(check_basic_role(&credentials, &basic_header("gast", "falsch")).is_none());
+        // Alte Felder in `credentials.json` (ohne role/users) bleiben lesbar.
+        let legacy: Credentials =
+            serde_json::from_str(r#"{"user":"u","salt":"00","hash":"11"}"#).unwrap();
+        assert_eq!(legacy.role(), ROLE_ADMIN);
+        assert!(legacy.users.is_empty());
     }
 }

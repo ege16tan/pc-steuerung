@@ -1,16 +1,28 @@
 'use strict';
 
-// PC Steuerung – Dashboard (Phase 1)
+// PC Steuerung – Dashboard (Phase 3)
 // Alle schreibenden Aufrufe tragen den CSRF-Header: localhost verlangt keinen
 // Login, deshalb muss der Agent fremde POSTs ablehnen können.
+//
+// Phase 3: Live-Updates per SSE (`/events/stream`), Geräteliste im Browser
+// (localStorage, fremde Agenten brauchen `PC_AGENT_CORS`) und Rollen
+// (`admin` darf schalten, `viewer` sieht nur zu).
 
 const CSRF_HEADER = 'X-PC-Steuerung';
 const POLL_MS = 2000;
+const SLOW_MS = 5000;
+const DEVICE_PING_MS = 15000;
+const LIVE_TIMEOUT_MS = 8000;
+const DEVICES_KEY = 'pcDevices';
+const ACTIVE_DEVICE_KEY = 'pcActiveDevice';
 
 const $ = (id) => document.getElementById(id);
 const PLANS = { high: 'Höchstleistung', balanced: 'Ausbalanciert', saver: 'Energiesparen' };
 
 const state = {
+  base: location.origin,
+  role: 'admin',
+  live: false,
   status: null,
   events: [],
   games: [],
@@ -28,6 +40,12 @@ const state = {
   metrics: null,
   cpuHistory: [],
   ramHistory: [],
+  devices: [],
+  deviceStatus: {},
+  users: [],
+  usersPrimary: null,
+  corsOrigins: [],
+  slowTicks: 0,
 };
 
 /* ---------------- Darstellung: Hell/Dunkel/System ---------------- */
@@ -84,6 +102,22 @@ function fmtUptime(seconds) {
 
 /* ---------------- API ---------------- */
 
+// Basis-Adresse: eigener Agent oder ein Eintrag aus der Geräteliste.
+function apiUrl(path) {
+  return state.base.replace(/\/+$/, '') + path;
+}
+
+function normalizeBase(value) {
+  let text = String(value || '').trim().replace(/\/+$/, '');
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text)) text = 'http://' + text;
+  return text;
+}
+
+function isOwnOrigin() {
+  return state.base === location.origin;
+}
+
 async function api(path, options) {
   const opts = options || {};
   const method = opts.method || 'GET';
@@ -91,12 +125,13 @@ async function api(path, options) {
   if (method !== 'GET') headers[CSRF_HEADER] = '1';
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     method,
     headers,
     body: opts.body,
     cache: 'no-store',
-    credentials: 'same-origin',
+    // Fremde Agenten: Basic-Auth-Anmeldung des Browsers mitschicken (CORS).
+    credentials: isOwnOrigin() ? 'same-origin' : 'include',
   });
 
   if (!response.ok) {
@@ -114,6 +149,18 @@ async function api(path, options) {
 
   const type = response.headers.get('content-type') || '';
   return type.indexOf('application/json') >= 0 ? response.json() : response.text();
+}
+
+/* ---------------- Rolle ---------------- */
+
+function canWrite() {
+  return state.role !== 'viewer';
+}
+
+function guardWrite() {
+  if (canWrite()) return true;
+  showBanner('Nur Lesezugriff: die Rolle „viewer“ darf nichts schalten.', 'warn');
+  return false;
 }
 
 /* ---------------- Hinweis- und Fehlerleiste ---------------- */
@@ -283,9 +330,21 @@ function mount() {
     if (mac) $('setupMac').value = mac;
   };
 
+  $('btnAddDevice').onclick = addDevice;
+  $('deviceUrl').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); addDevice(); }
+  });
+  $('btnAddUser').onclick = addUser;
+
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopPolling();
-    else { tick(); startPolling(); }
+    if (document.hidden) {
+      stopLive();
+      stopPolling();
+    } else {
+      startLive();
+      if (!state.live) startPolling();
+      tick();
+    }
   });
 }
 
@@ -297,18 +356,22 @@ function render() {
 
   $('connPill').className = 'pill ' + (connected ? 'ok' : 'off');
   $('connText').textContent = connected ? '● Online' : '○ Keine Verbindung';
+  const livePill = $('livePill');
+  if (livePill) livePill.hidden = !state.live;
 
   const name = (status && status.device_name) || (state.pairing && state.pairing.name) ||
     (status && status.host) || 'PC';
-  $('deviceName').textContent = name;
+  $('deviceName').textContent = name + (isOwnOrigin() ? '' : ' · ' + state.base.replace(/^https?:\/\//, ''));
 
   const modePill = $('modePill');
   modePill.textContent = state.simulate ? 'SIMULATION' : 'ECHT';
   modePill.className = 'pill sim' + (state.simulate ? '' : ' echt');
+  modePill.disabled = !canWrite();
 
   $('statusBig').textContent = connected ? 'Online' : 'Unbekannt';
   $('statusSub').textContent = connected
-    ? 'Agent läuft · Plan: ' + (PLANS[status.power_plan] || status.power_plan || 'unbekannt')
+    ? 'Agent läuft · Plan: ' + (PLANS[status.power_plan] || status.power_plan || 'unbekannt') +
+      (canWrite() ? '' : ' · nur Lesen')
     : 'Kein Kontakt zum Agenten';
   $('statusGlow').style.background = connected ? 'var(--grn)' : 'var(--red)';
 
@@ -316,6 +379,7 @@ function render() {
     (status && (PLANS[status.power_plan] || status.power_plan)) || '–';
   document.querySelectorAll('#plans button[data-plan]').forEach((button) => {
     button.classList.toggle('on', !!status && button.dataset.plan === status.power_plan);
+    button.disabled = !canWrite();
   });
 
   renderStatusActions();
@@ -323,6 +387,8 @@ function render() {
   renderMetrics();
   renderTimer();
   renderPlugin();
+  renderDevices();
+  renderUsers();
 }
 
 function renderStatusActions() {
@@ -346,6 +412,7 @@ function renderStatusActions() {
   }
 
   box.querySelectorAll('button[data-act]').forEach((button) => {
+    if (button.dataset.act !== 'retry') button.disabled = !canWrite();
     button.onclick = () => {
       const act = button.dataset.act;
       if (act === 'retry') { tick(); return; }
@@ -454,6 +521,7 @@ function renderTimer() {
       '<div class="mut" id="timerText" style="text-align:center;margin-top:8px"></div>' +
       '<div class="btns" style="margin-top:10px">' +
       '<button type="button" class="ghost" data-act="abort">Abbrechen</button></div>';
+    box.querySelector('[data-act="abort"]').disabled = !canWrite();
     box.querySelector('[data-act="abort"]').onclick = () => runAction(abortShutdown);
   } else {
     box.innerHTML =
@@ -467,6 +535,7 @@ function renderTimer() {
       '<button type="button" class="ghost" data-act="3600">1 h</button>' +
       '<button type="button" class="ghost" data-act="7200">2 h</button></div>';
 
+    box.querySelector('[data-act="schedule"]').disabled = !canWrite();
     box.querySelector('[data-act="schedule"]').onclick = () => {
       const raw = parseInt($('timerInput').value || '0', 10);
       const seconds = Math.max(0, Math.min(86400, isNaN(raw) ? 0 : raw));
@@ -476,6 +545,7 @@ function renderTimer() {
     box.querySelectorAll('button[data-act]').forEach((button) => {
       const value = Number(button.dataset.act);
       if (isNaN(value)) return;
+      button.disabled = !canWrite();
       button.onclick = () => runAction(() => scheduleShutdown(value));
     });
   }
@@ -522,10 +592,11 @@ function renderPlugin() {
   }
 
   const running = !!(plugin && plugin.running);
-  $('btnOptimize').disabled = state.busy || running || !state.selectedGame;
-  $('btnAuto').disabled = state.busy || running;
-  $('btnStopGame').disabled = state.busy || !running;
-  $('btnScan').disabled = state.busy;
+  select.disabled = state.busy || !canWrite();
+  $('btnOptimize').disabled = state.busy || running || !state.selectedGame || !canWrite();
+  $('btnAuto').disabled = state.busy || running || !canWrite();
+  $('btnStopGame').disabled = state.busy || !running || !canWrite();
+  $('btnScan').disabled = state.busy || !canWrite();
 
   const line = $('pluginState');
   if (!plugin) {
@@ -548,6 +619,7 @@ function renderPlugin() {
 
 async function runAction(action) {
   if (state.busy) return;
+  if (!guardWrite()) return;
   state.busy = true;
   renderPlugin();
   try {
@@ -631,6 +703,19 @@ async function scanGames() {
 
 /* ---------------- Daten holen ---------------- */
 
+/// CPU-/RAM-Verlauf fortschreiben (Polling und SSE-Rundruf nutzen dieselbe Liste).
+function recordMetrics(data) {
+  if (!data) return;
+  if (typeof data.cpu_percent === 'number') {
+    state.cpuHistory.push(data.cpu_percent);
+    if (state.cpuHistory.length > 30) state.cpuHistory.shift();
+  }
+  if (typeof data.ram_percent === 'number') {
+    state.ramHistory.push(data.ram_percent);
+    if (state.ramHistory.length > 30) state.ramHistory.shift();
+  }
+}
+
 async function refreshMetrics() {
   if (!state.connected) {
     state.metrics = null;
@@ -639,14 +724,7 @@ async function refreshMetrics() {
   try {
     const data = await api('/metrics');
     state.metrics = data;
-    if (typeof data.cpu_percent === 'number') {
-      state.cpuHistory.push(data.cpu_percent);
-      if (state.cpuHistory.length > 30) state.cpuHistory.shift();
-    }
-    if (typeof data.ram_percent === 'number') {
-      state.ramHistory.push(data.ram_percent);
-      if (state.ramHistory.length > 30) state.ramHistory.shift();
-    }
+    recordMetrics(data);
   } catch (error) {
     state.metrics = null;
   }
@@ -686,7 +764,7 @@ async function refreshLog() {
   }
 }
 
-/* ---------------- Polling (pausiert im Hintergrund) ---------------- */
+/* ---------------- Polling (Fallback, pausiert im Hintergrund) ---------------- */
 
 let pollTimer = null;
 
@@ -708,6 +786,9 @@ async function tick() {
     const status = await api('/status');
     state.status = status;
     state.simulate = !!status.simulate;
+    // Rolle kommt nur bei /status mit (SSE-Rundrufe sind rollen-neutral).
+    state.role = status.role === 'viewer' ? 'viewer' : 'admin';
+    if (Array.isArray(status.cors_origins)) state.corsOrigins = status.cors_origins;
     state.connected = true;
   } catch (error) {
     state.connected = false;
@@ -723,14 +804,420 @@ async function tick() {
     } catch (error) {
       // Ereignisse sind nicht kritisch
     }
-    state.ticks += 1;
-    if (state.ticks % 2 === 0) await refreshPlugin();
-    if (state.ticks % 5 === 0) {
-      await refreshGames();
-      await refreshLog();
-    }
   }
 
+  render();
+}
+
+/* ---------------- Langsame Abfragen (Spiele, Log, Benutzer) ---------------- */
+
+let slowTimer = null;
+
+function startSlow() {
+  if (!slowTimer) slowTimer = window.setInterval(slowTick, SLOW_MS);
+}
+
+function stopSlow() {
+  if (slowTimer) {
+    window.clearInterval(slowTimer);
+    slowTimer = null;
+  }
+}
+
+async function slowTick() {
+  if (document.hidden || !state.connected) return;
+  state.slowTicks += 1;
+  await refreshPlugin();
+  if (state.slowTicks % 2 === 0) {
+    await refreshGames();
+    await refreshUsers();
+  }
+  if (state.slowTicks % 3 === 0) {
+    await refreshLog();
+    await refreshDeviceStatus();
+  }
+  render();
+}
+
+/* ---------------- Live-Updates (SSE) ---------------- */
+
+let eventSource = null;
+let liveWatchdog = null;
+let lastLiveAt = 0;
+
+function stopLive() {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  if (liveWatchdog) {
+    window.clearInterval(liveWatchdog);
+    liveWatchdog = null;
+  }
+  state.live = false;
+}
+
+function applyState(payload) {
+  if (!payload) return;
+  const wasOffline = !state.connected;
+  if (payload.status) {
+    state.status = payload.status;
+    state.simulate = !!payload.status.simulate;
+    if (Array.isArray(payload.status.cors_origins)) state.corsOrigins = payload.status.cors_origins;
+    state.connected = true;
+  }
+  if (payload.metrics) {
+    state.metrics = payload.metrics;
+    recordMetrics(payload.metrics);
+  }
+  if (Array.isArray(payload.events)) state.events = payload.events;
+  // Nur Verbindungsfehler verschwinden automatisch; Warnungen bleiben stehen.
+  if (wasOffline && state.connected) clearBanner();
+  render();
+}
+
+function pushEvent(entry) {
+  if (!entry || !entry.time) return;
+  const exists = state.events.some((event) => event.time === entry.time &&
+    event.action === entry.action && event.detail === entry.detail);
+  if (!exists) state.events = [entry].concat(state.events).slice(0, 50);
+  renderEvents();
+}
+
+function startLive() {
+  stopLive();
+  // SSE nur zum eigenen Agenten: EventSource kann bei fremden Origins keine
+  // Basic-Auth-Anmeldung mitschicken – dort bleibt das Polling.
+  if (!isOwnOrigin() || typeof EventSource === 'undefined') {
+    startPolling();
+    return;
+  }
+  const source = new EventSource(apiUrl('/events/stream'));
+  eventSource = source;
+
+  source.addEventListener('state', (event) => {
+    lastLiveAt = Date.now();
+    state.live = true;
+    stopPolling();
+    try {
+      applyState(JSON.parse(event.data));
+    } catch (error) {
+      // kaputte Nachricht: ignorieren, naechste kommt in 2 s
+    }
+  });
+
+  source.addEventListener('event', (event) => {
+    try {
+      pushEvent(JSON.parse(event.data));
+    } catch (error) {
+      // egal
+    }
+  });
+
+  source.onerror = () => {
+    // EventSource verbindet selbst neu; bis dahin pollt die Oberflaeche.
+    state.live = false;
+    render();
+    startPolling();
+  };
+
+  liveWatchdog = window.setInterval(() => {
+    if (!state.live) return;
+    if (Date.now() - lastLiveAt > LIVE_TIMEOUT_MS) {
+      stopLive();
+      startLive();
+    }
+  }, 4000);
+}
+
+/* ---------------- Geräteliste (localStorage) ---------------- */
+
+function storedBase() {
+  const stored = normalizeBase(localStorage.getItem(ACTIVE_DEVICE_KEY) || '');
+  return stored || location.origin;
+}
+
+function loadDevices() {
+  try {
+    const list = JSON.parse(localStorage.getItem(DEVICES_KEY) || '[]');
+    state.devices = Array.isArray(list)
+      ? list.filter((device) => device && typeof device.url === 'string')
+      : [];
+  } catch (error) {
+    state.devices = [];
+  }
+}
+
+function saveDevices() {
+  localStorage.setItem(DEVICES_KEY, JSON.stringify(state.devices));
+}
+
+function deviceEntries() {
+  const entries = [{ url: location.origin, label: 'Dieser PC', own: true }];
+  state.devices.forEach((device) => {
+    const url = normalizeBase(device.url);
+    if (!url || url === location.origin) return;
+    entries.push({
+      url,
+      label: device.label || url.replace(/^https?:\/\//, ''),
+      own: false,
+    });
+  });
+  return entries;
+}
+
+function renderDevices() {
+  const box = $('deviceList');
+  if (!box) return;
+  const entries = deviceEntries();
+  const signature = entries.map((entry) => entry.url + entry.label).join('|') +
+    '#' + state.base + '#' + state.connected + '#' + JSON.stringify(state.deviceStatus);
+
+  if (signature !== state.deviceSignature) {
+    state.deviceSignature = signature;
+    box.innerHTML = entries.map((entry) => {
+      const active = entry.url === state.base;
+      const known = entry.url === state.base ? state.connected : state.deviceStatus[entry.url];
+      const dot = known === true ? 'ok' : (known === false ? 'off' : '');
+      const label = entry.url === state.base && state.status && state.status.device_name
+        ? state.status.device_name
+        : entry.label;
+      return '<div class="devrow" data-url="' + esc(entry.url) + '">' +
+        '<span class="dot ' + dot + '" aria-hidden="true"></span>' +
+        '<div class="grow">' + esc(label) +
+        '<div class="sub">' + esc(entry.url.replace(/^https?:\/\//, '')) + '</div></div>' +
+        (active ? '<span class="chip">aktiv</span>'
+          : '<button type="button" data-act="use">Wechseln</button>') +
+        (!entry.own && !active ? '<button type="button" data-act="remove">Entfernen</button>' : '') +
+        '</div>';
+    }).join('');
+    box.querySelectorAll('.devrow').forEach((row) => {
+      const use = row.querySelector('[data-act="use"]');
+      if (use) use.onclick = () => switchDevice(row.dataset.url);
+      const remove = row.querySelector('[data-act="remove"]');
+      if (remove) remove.onclick = () => removeDevice(row.dataset.url);
+    });
+  }
+
+  const hint = $('deviceHint');
+  if (hint) {
+    hint.textContent = state.corsOrigins && state.corsOrigins.length
+      ? 'Dieser Agent erlaubt fremde Seiten von: ' + state.corsOrigins.join(', ')
+      : 'Dieser Agent erlaubt keine fremden Seiten (PC_AGENT_CORS ist leer).';
+  }
+}
+
+async function checkDevice(url) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), 2500) : null;
+  try {
+    const response = await fetch(url.replace(/\/+$/, '') + '/status', {
+      cache: 'no-store',
+      credentials: url === location.origin ? 'same-origin' : 'include',
+      signal: controller ? controller.signal : undefined,
+    });
+    return response.ok;
+  } catch (error) {
+    return false;
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
+}
+
+async function refreshDeviceStatus() {
+  const entries = deviceEntries().filter((entry) => entry.url !== state.base);
+  for (const entry of entries) {
+    state.deviceStatus[entry.url] = await checkDevice(entry.url);
+  }
+  state.deviceSignature = '';
+  renderDevices();
+}
+
+function addDevice() {
+  const url = normalizeBase($('deviceUrl').value);
+  const label = $('deviceLabel').value.trim();
+  if (!url) {
+    $('deviceHint').textContent = 'Bitte eine Adresse angeben, z. B. http://192.168.1.20:8000';
+    return;
+  }
+  if (url !== location.origin) {
+    const existing = state.devices.find((device) => normalizeBase(device.url) === url);
+    if (existing) existing.label = label || existing.label || '';
+    else state.devices.push({ url, label });
+    saveDevices();
+  }
+  $('deviceUrl').value = '';
+  $('deviceLabel').value = '';
+  state.deviceSignature = '';
+  refreshDeviceStatus();
+}
+
+function removeDevice(url) {
+  state.devices = state.devices.filter((device) => normalizeBase(device.url) !== url);
+  saveDevices();
+  delete state.deviceStatus[url];
+  state.deviceSignature = '';
+  if (state.base === url) {
+    switchDevice(location.origin);
+    return;
+  }
+  renderDevices();
+}
+
+function resetData() {
+  stopLive();
+  stopPolling();
+  state.status = null;
+  state.connected = false;
+  state.live = false;
+  state.events = [];
+  state.metrics = null;
+  state.cpuHistory = [];
+  state.ramHistory = [];
+  state.plugin = null;
+  state.games = [];
+  state.selectedGame = '';
+  state.gameSignature = '';
+  state.timerSignature = '';
+  state.pendingTotal = null;
+  state.pairing = null;
+  state.role = 'admin';
+  state.users = [];
+  state.usersPrimary = null;
+  state.deviceSignature = '';
+  statusSignature = '';
+  eventsSignature = '';
+  usersSignature = '';
+  $('fileLog').textContent = 'Wird geladen …';
+}
+
+function switchDevice(url) {
+  const base = normalizeBase(url);
+  if (!base || base === state.base) return;
+  state.base = base;
+  localStorage.setItem(ACTIVE_DEVICE_KEY, base);
+  resetData();
+  render();
+  resume();
+}
+
+async function refreshIdentity() {
+  if (!isOwnOrigin()) {
+    state.pairing = null;
+    return;
+  }
+  try {
+    state.pairing = await api('/pairing-info');
+  } catch (error) {
+    state.pairing = null;
+  }
+}
+
+async function resume() {
+  await refreshIdentity();
+  await tick();
+  startLive();
+  startSlow();
+  startPolling();
+}
+
+
+/* ---------------- Benutzer & Rechte ---------------- */
+
+let usersSignature = '';
+
+async function refreshUsers() {
+  if (!state.connected || !canWrite()) {
+    state.users = [];
+    state.usersPrimary = null;
+    return;
+  }
+  try {
+    const data = await api('/users');
+    state.users = data.users || [];
+    state.usersPrimary = data.primary || null;
+    if (Array.isArray(data.cors_origins)) state.corsOrigins = data.cors_origins;
+  } catch (error) {
+    // Kein Admin / alter Agent: Kachel bleibt bei dem, was sie hat.
+  }
+}
+
+function renderUsers() {
+  const box = $('userList');
+  if (!box) return;
+  const form = $('userForm');
+  form.hidden = !canWrite();
+
+  const list = [];
+  if (state.usersPrimary) {
+    list.push({ user: state.usersPrimary.user, role: state.usersPrimary.role, primary: true });
+  }
+  state.users.forEach((entry) => list.push({ user: entry.user, role: entry.role, primary: false }));
+
+  const signature = JSON.stringify(list) + '#' + canWrite();
+  if (signature !== usersSignature) {
+    usersSignature = signature;
+    box.innerHTML = list.length
+      ? list.map((entry) =>
+        '<div class="devrow">' +
+        '<div class="grow">' + esc(entry.user) +
+        (entry.primary ? ' <span class="sub">(Hauptbenutzer)</span>' : '') + '</div>' +
+        '<span class="chip">' + esc(entry.role) + '</span>' +
+        (!entry.primary && canWrite()
+          ? '<button type="button" data-user="' + esc(entry.user) + '">Entfernen</button>'
+          : '') +
+        '</div>'
+      ).join('')
+      : '<div class="mut">Noch keine Zugangsdaten eingerichtet.</div>';
+
+    box.querySelectorAll('button[data-user]').forEach((button) => {
+      button.onclick = () => removeUser(button.dataset.user);
+    });
+  }
+
+  $('usersHint').textContent = canWrite()
+    ? 'Neue Benutzer gelten sofort, ohne Neustart.'
+    : 'Diese Sitzung hat nur Lesezugriff.';
+}
+
+async function addUser() {
+  if (!guardWrite()) return;
+  const user = $('newUserName').value.trim();
+  const password = $('newUserPass').value;
+  const role = $('newUserRole').value;
+  if (!user) {
+    showBanner('Bitte einen Benutzernamen angeben.', 'warn');
+    return;
+  }
+  if (password.length < 8) {
+    showBanner('Das Passwort braucht mindestens 8 Zeichen.', 'warn');
+    return;
+  }
+  $('btnAddUser').disabled = true;
+  try {
+    await api('/users', { method: 'POST', body: JSON.stringify({ user, password, role }) });
+    $('newUserName').value = '';
+    $('newUserPass').value = '';
+    clearBanner();
+    await refreshUsers();
+  } catch (error) {
+    showBanner('Benutzer konnte nicht angelegt werden: ' + error.message, 'warn');
+  } finally {
+    $('btnAddUser').disabled = false;
+    render();
+  }
+}
+
+async function removeUser(user) {
+  if (!guardWrite()) return;
+  if (!window.confirm('Benutzer „' + user + '“ entfernen?')) return;
+  try {
+    await api('/users/' + encodeURIComponent(user), { method: 'DELETE' });
+    clearBanner();
+    await refreshUsers();
+  } catch (error) {
+    showBanner('Benutzer konnte nicht entfernt werden: ' + error.message, 'warn');
+  }
   render();
 }
 
@@ -739,26 +1226,30 @@ async function tick() {
 async function boot() {
   applyTheme();
   mount();
+  loadDevices();
+  state.base = storedBase();
 
-  try {
-    const setup = await api('/setup-status');
-    if (setup && setup.required) {
-      $('setup').hidden = false;
-      showSetup(1);
-      return;
+  // Ersteinrichtung nur am eigenen PC (fremde Agenten sind schon eingerichtet).
+  if (isOwnOrigin()) {
+    try {
+      const setup = await api('/setup-status');
+      if (setup && setup.required) {
+        $('setup').hidden = false;
+        showSetup(1);
+        return;
+      }
+    } catch (error) {
+      // Agent nicht erreichbar: Dashboard zeigen, Banner erklärt es
     }
-  } catch (error) {
-    // Agent nicht erreichbar: Dashboard zeigen, Banner erklärt es
   }
 
   $('app').hidden = false;
-  try {
-    state.pairing = await api('/pairing-info');
-  } catch (error) {
-    state.pairing = null;
-  }
+  await refreshIdentity();
   await tick();
+  startLive();
+  startSlow();
   startPolling();
 }
 
 document.addEventListener('DOMContentLoaded', boot);
+

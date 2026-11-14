@@ -106,7 +106,6 @@
 
 **Phase 3 – optional**
 - SSE, mehrere PCs, Rollen/Rechte, eigenes Dialog-Design
-
 ## 7. Dateien
 
 | Datei | Zweck |
@@ -167,5 +166,39 @@ danach z. B. `8.8` bei 8 Kernen und 32 % RAM; `/status` enthält `pending_second
 `/wake` ohne MAC → 422 ohne WoL, 200 mit eingerichteter MAC; `node --check` sauber.
 
 **Offen (Phase 3):** SSE, Geräteliste über mehrere Agenten (CORS), Rollen/Rechte.
+
+## 10. Umsetzung Phase 3 (14.11.2026)
+
+**Erledigt:**
+
+- **Live-Updates per SSE** (`src/live.rs`, `GET /events/stream`): eine gemeinsame
+  Rundruf-Schleife baut alle 2 s einen Stand (`status`, `metrics`, letzte 20
+  Ereignisse) und schickt ihn als `state`-Ereignis; neue Log-Einträge gehen
+  sofort als `event` raus. Nur bei offener Verbindung wird gerechnet
+  (`receiver_count()`), Keep-Alive alle 15 s. Die UI nutzt `EventSource`,
+  zeigt „⚡ Live“ und fällt bei Fehler/Timeout automatisch auf Polling zurück.
+- **Rollen/Rechte**: `credentials.json` hat jetzt `role` und eine Liste
+  `users` (`UserEntry`). `admin` darf alles, `viewer` nur lesen; schreibende
+  Routen nutzen den Extractor `WriteAuth` (403 „Nur Lesezugriff“). Alte Dateien
+  ohne `role`/`users` bleiben gültig (Hauptbenutzer = `admin`).
+  Neue Routen: `GET /users`, `POST /users`, `DELETE /users/{user}`.
+  Die Rolle des Aufrufers steht in `GET /status` (`role`), die UI sperrt
+  Knöpfe für `viewer` und zeigt die Kachel „Benutzer & Rechte“ nur zum Anlegen.
+- **Geräteliste (localStorage + CORS)**: Kachel „Geräte“ listet den eigenen PC
+  und weitere Agenten (`http://host:port`), Wechseln/Entfernen, Online-Punkte.
+  CORS ist opt-in über `PC_AGENT_CORS` (komma-getrennte, exakte Origins);
+  Preflight (`OPTIONS`) beantwortet die Middleware `cors_guard` mit 204,
+  `Allow-Credentials: true`, `Allow-Headers: authorization, content-type,
+  x-pc-steuerung, x-token`. `*` gibt es bewusst nicht. SSE bleibt dem eigenen
+  Agenten vorbehalten (EventSource kann keine Basic-Auth mitschicken), fremde
+  Geräte werden gepollt.
+
+**Verifiziert:** `cargo test` 46 grün (`app`, `auth`, `live` neu: Rollen,
+Altdatei-Kompatibilität, CORS-Allowlist); `node --check src/app.js` sauber;
+Live-Test gegen Port 8123: `/events/stream` liefert `state` im 2-s-Takt und
+`event` sofort nach `/ping`; `viewer` → `/shutdown` 403, `/users` 403,
+DELETE 403, `/status` 200 (`role: viewer`); `admin` → 200; CORS-Preflight und
+Kopfzeilen nur für erlaubte Origins, `OPTIONS` von fremder Origin 405;
+`/`, `/app.css`, `/app.js` liefern 200 mit korrekten Typen.
 
 

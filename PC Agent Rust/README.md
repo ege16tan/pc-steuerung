@@ -27,12 +27,44 @@ Alte Daten aus `PC App/` oder neben der EXE werden beim Start einmalig
 `POST /setup`, `POST /mode?simulate=`,
 `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
 `POST /power-plan?name=`, `POST /wake?mac=&port=`, `POST /ping`,
-`GET /events`, `GET /log?lines=`.
+`GET /events`, `GET /events/stream`, `GET /log?lines=`,
+`GET /users`, `POST /users`, `DELETE /users/{user}`.
+
+`GET /events/stream` ist ein Server-Sent-Events-Strom: alle zwei Sekunden ein
+`state`-Ereignis (Status, Messwerte, letzte Ereignisse), neue Log-Einträge sofort
+als `event`. Die Web-Oberfläche nutzt ihn, faellt aber auf Polling zurueck.
 
 Die Routen und Erfolgsantworten entsprechen der Android-App. Anmeldung wie
 bisher: Basic Auth für LAN-Zugriffe, localhost ohne Login,
 `X-Token`/`PC_AGENT_TOKEN` als Fallback, Ersteinrichtung nur am PC
 (`POST /setup`, nur localhost).
+
+## Rollen (Phase 3)
+
+`credentials.json` traegt neben dem Hauptbenutzer (`user`/`salt`/`hash`/`role`)
+eine Liste weiterer Benutzer. Rollen:
+
+- `admin` – alles (schalten, Spiele starten, Benutzer verwalten)
+- `viewer` – nur lesen (`/status`, `/metrics`, `/events`, `/log`, `/plugins`,
+  `/games`); schreibende Aufrufe antworten mit 403
+
+Alte Dateien ohne `role`/`users` bleiben gueltig (Hauptbenutzer = `admin`).
+Benutzer anlegen/entfernen ueber `POST /users` bzw. `DELETE /users/{user}`
+oder in der Web-UI (Kachel „Benutzer & Rechte“).
+
+## Mehrere PCs (CORS)
+
+Die Web-UI fuehrt eine Geräteliste im Browser (`localStorage`). Damit die Seite
+eines PCs einen anderen Agenten lesen darf, muss der **andere** Agent die
+Origin freischalten:
+
+```
+PC_AGENT_CORS=http://192.168.1.10:8000
+```
+
+Komma-getrennt, nur vollstaendige Origins mit Schema; `*` gibt es bewusst
+nicht. Ohne `PC_AGENT_CORS` verhaelt sich der Agent wie bisher (keine
+CORS-Kopfzeilen).
 
 ## Bauen
 
@@ -108,6 +140,9 @@ powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 -WithTray
 - `PC_WOL_BROADCAST`         Broadcast-Ziel fuer `/wake` (Standard 192.168.1.255).
 - `PC_AGENT_PORT`            Optionaler Port (Standard 8000), z. B. fuer Tests.
 - `PC_AGENT_DATA`            Optionaler Datenordner (absolut oder relativ zur EXE).
+- `PC_AGENT_CORS`            Komma-getrennte Origins, die die Geräteliste im
+                             Browser lesen darf (z. B. `http://192.168.1.10:8000`).
+                             Leer = kein CORS (Standard).
 
 ## Hinweise
 
@@ -120,8 +155,12 @@ powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 -WithTray
 
 ## Status
 
-- Einheitstests: PBKDF2-Kompatibilitaetsvektor, Basic Auth, MAC-Parsing,
-  WoL-Paket, Log-Format/Rotation, Query-Validierung, Ringpuffer.
+- Einheitstests: PBKDF2-Kompatibilitaetsvektor, Basic Auth (inkl. Rollen),
+  MAC-Parsing, WoL-Paket, Log-Format/Rotation, Query-Validierung, Ringpuffer,
+  CORS-Allowlist.
 - Live-Test im Simulationsmodus: Setup, Auth (401/403/200), Status,
   Shutdown/Abort/Hibernate, Energieplan, Wake (auch ungueltige MAC),
   Ping, Events und Log wurden gegen die laufende EXE geprueft.
+- Phase 3 geprueft: `/events/stream` liefert `state` alle 2 s und `event`
+  sofort; `viewer` bekommt 403 auf `/shutdown`, `/users` und DELETE, `admin`
+  200; CORS-Preflight und -Kopfzeilen nur fuer erlaubte Origins.

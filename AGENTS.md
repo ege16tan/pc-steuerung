@@ -26,6 +26,9 @@ Status).
 - `PC_AGENT_SIMULATE` (Default `0` im Manager) = echte Aktion; `1` = Simulation (nur Loggen).
   Simulation nur bewusst einschalten; destruktive Aufrufe (Shutdown) immer mit Countdown testen.
 - `PC_WOL_BROADCAST` (Default `192.168.1.255`) = Broadcast-Ziel für `/wake`.
+- `PC_AGENT_CORS` (Default leer) = Komma-getrennte Origins, die die Geräteliste im
+  Browser lesen dürfen (z. B. `http://192.168.1.10:8000`). Leer = kein CORS; `*`
+  gibt es bewusst nicht.
 - Tray-Steuerung: `start-tray.bat` (Web-UI öffnen, Agent starten/stoppen).
   Nur eine Tray-Instanz gleichzeitig (Mutex `Local\PCSteuerungTray`).
 - Push-Schutz: `scripts/check-sensitive.sh` (Pre-Push-Hook in `.githooks/`,
@@ -37,6 +40,7 @@ Status).
 
 - Endpunkte: `GET /status`, `GET /metrics`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
+  `GET /events/stream` (SSE), `GET /users`, `POST /users`, `DELETE /users/{user}`,
   `GET /ping`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
   `POST /setup`, `POST /mode?simulate=`, `GET /` (Web-UI-Gerüst),
   `GET /app.css`, `GET /app.js`,
@@ -47,10 +51,15 @@ Status).
   24/7-Dienst) und beendet sie wieder. Manifeste liegen in `<EXE>\plugins\*.json`
   oder `<Datenordner>\plugins\*.json`; ohne Manifest gilt die eingebaute
   Definition fuer `game-optimizer`.
-- **Web-UI (Phase 1+2, 13.11.2026):** `src/page.html` (Gerüst), `src/app.css`,
-  `src/app.js` – per `include_str!` im Binary, ohne Login unter `/`, `/app.css`,
-  `/app.js`. Polling alle 2 s, pausiert bei verstecktem Tab; Status/Plan/Timer/
-  Ereignisse/Verlauf und die Game-Kachel (Auswahl, Start, Stop, Scan).
+- **Web-UI (Phase 1+2, 13.11.2026; Phase 3, 14.11.2026):** `src/page.html` (Gerüst),
+  `src/app.css`, `src/app.js` – per `include_str!` im Binary, ohne Login unter `/`,
+  `/app.css`, `/app.js`. **Phase 3:** SSE unter `GET /events/stream` (Rundruf alle 2 s
+  als `state`, neue Log-Einträge sofort als `event`; UI fällt bei Fehler auf Polling
+  zurück), Geräteliste im Browser (localStorage `pcDevices`/`pcActiveDevice`, fremde
+  Agenten brauchen `PC_AGENT_CORS`), Rollen `admin`/`viewer` in `credentials.json`
+  (`users`-Liste, `WriteAuth` → 403 für viewer; Kachel „Benutzer & Rechte“).
+  Polling alle 2 s (Live-Modus aus), Status/Plan/Timer/Ereignisse/Verlauf und die
+  Game-Kachel (Auswahl, Start, Stop, Scan).
   CPU/RAM kommen aus `GET /metrics` (erste Antwort `cpu_percent: null`, weil zwei
   Stichproben nötig sind). Timer-Ring nutzt `pending_seconds` aus `/status`.
   Darstellung: System/Hell/Dunkel über `data-theme` (localStorage `pcTheme`).
