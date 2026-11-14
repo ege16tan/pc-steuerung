@@ -41,6 +41,7 @@ Status).
 - Endpunkte: `GET /status`, `GET /metrics`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
   `GET /events/stream` (SSE), `GET /users`, `POST /users`, `DELETE /users/{user}`,
+  `GET /routines`, `POST /routines`, `DELETE /routines/{id}`, `POST /routines/{id}/run`,
   `GET /ping`, `GET /setup-status`, `GET /pairing-info`, `GET /pairing-qr.svg`,
   `POST /setup`, `POST /mode?simulate=`, `GET /` (Web-UI-Gerüst),
   `GET /app.css`, `GET /app.js`,
@@ -51,7 +52,7 @@ Status).
   24/7-Dienst) und beendet sie wieder. Manifeste liegen in `<EXE>\plugins\*.json`
   oder `<Datenordner>\plugins\*.json`; ohne Manifest gilt die eingebaute
   Definition fuer `game-optimizer`.
-- **Web-UI (Phase 1+2, 13.11.2026; Phase 3, 14.11.2026):** `src/page.html` (Gerüst),
+- **Web-UI (Phase 1+2, 13.11.2026; Phase 3, 14.11.2026; Phase 4, 14.11.2026):** `src/page.html` (Gerüst),
   `src/app.css`, `src/app.js` – per `include_str!` im Binary, ohne Login unter `/`,
   `/app.css`, `/app.js`. **Phase 3:** SSE unter `GET /events/stream` (Rundruf alle 2 s
   als `state`, neue Log-Einträge sofort als `event`; UI fällt bei Fehler auf Polling
@@ -63,6 +64,16 @@ Status).
   CPU/RAM kommen aus `GET /metrics` (erste Antwort `cpu_percent: null`, weil zwei
   Stichproben nötig sind). Timer-Ring nutzt `pending_seconds` aus `/status`.
   Darstellung: System/Hell/Dunkel über `data-theme` (localStorage `pcTheme`).
+- **Routinen (Phase 4, 14.11.2026):** `src/routines.rs` speichert
+  `routines.json` (Auslöser `time` mit `HH:MM` + Wochentagen 1–7 oder `manual`,
+  1–3 Aktionen `shutdown`/`hibernate`/`power_plan`). Die Schleife prüft alle 10 s;
+  `last_run` wird **vor** dem Ausführen gespeichert, verpasste Zeiten werden nicht
+  nachgeholt. `src/actions.rs` bündelt die Aktionsausführung für HTTP und Routinen
+  (gleiche Simulation/Journal/pending-Werte). Web-UI-Kachel „Routinen“ mit
+  An/Aus, „Jetzt“, Löschen und Formular (nur `admin`); eigener
+  `<dialog>`-Bestätigungsdialog statt `window.confirm()`.
+- **Einschalten per Routine gibt es bewusst nicht:** Der Agent läuft nur, wenn der
+  PC an ist; WoL bräuchte ein zweites Gerät oder einen RTC-Wake-Timer.
 - **Game Optimization:** Plugin-Binary `game-optimizer.exe` (neben `pc-agent.exe`),
   Quellcode `src/bin/game-optimizer.rs`. Macht Energieplan -> Hoechstleistung,
   schliesst die Kill-Liste, bereinigt Arbeitsspeicher (Working Sets + Standby-Liste
@@ -70,9 +81,9 @@ Status).
   wird der vorherige Energieplan zurueckgesetzt. Web-UI-Tab „Game Optimization“.
   Spiele-Scan (`src/games.rs`) liest Steam, Epic, GOG und eigene Ordner.
 - Datenordner: `%LOCALAPPDATA%\PC Steuerung` (per `PC_AGENT_DATA` überschreibbar).
-  Dort liegen `credentials.json`, `token.json`, `device.json`, `agent.log`,
-  `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE werden beim
-  Start einmalig übernommen.
+  Dort liegen `credentials.json`, `token.json`, `device.json`, `routines.json`,
+  `agent.log`, `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE
+  werden beim Start einmalig übernommen.
 - Logdatei: `agent.log` im Datenordner (Datum/Uhrzeit, Rotation nach `agent.log.1`,
   gitignored).
 - Auth: Basic Auth (Benutzername/Passwort, PBKDF2-Hash in `credentials.json`)

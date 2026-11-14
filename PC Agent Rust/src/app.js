@@ -1,12 +1,14 @@
 'use strict';
 
-// PC Steuerung – Dashboard (Phase 3)
+// PC Steuerung – Dashboard (Phase 4)
 // Alle schreibenden Aufrufe tragen den CSRF-Header: localhost verlangt keinen
 // Login, deshalb muss der Agent fremde POSTs ablehnen können.
 //
 // Phase 3: Live-Updates per SSE (`/events/stream`), Geräteliste im Browser
 // (localStorage, fremde Agenten brauchen `PC_AGENT_CORS`) und Rollen
 // (`admin` darf schalten, `viewer` sieht nur zu).
+// Phase 4: Routinen (`/routines`, Uhrzeit oder Knopf) und ein eigener
+// Bestätigungsdialog statt `window.confirm()`.
 
 const CSRF_HEADER = 'X-PC-Steuerung';
 const POLL_MS = 2000;
@@ -46,6 +48,8 @@ const state = {
   usersPrimary: null,
   corsOrigins: [],
   slowTicks: 0,
+  routines: [],
+  routineSignature: '',
 };
 
 /* ---------------- Darstellung: Hell/Dunkel/System ---------------- */
@@ -176,6 +180,31 @@ function clearBanner() {
   const banner = $('banner');
   banner.hidden = true;
   banner.textContent = '';
+}
+
+/* ---------------- Bestätigungsdialog ---------------- */
+
+/// Ersetzt `window.confirm()`: eigenes `<dialog>` mit Fokus, ESC und klaren
+/// Knöpfen. Liefert ein Promise<boolean> (true = bestätigt).
+function askConfirm(options) {
+  const opts = options || {};
+  const text = opts.text || 'Fortfahren?';
+  const dialog = $('dialog');
+  if (!dialog || typeof dialog.showModal !== 'function') {
+    return Promise.resolve(window.confirm(text));
+  }
+  if (dialog.open) dialog.close();
+  $('dlgTitle').textContent = opts.title || 'Bestätigen';
+  $('dlgText').textContent = text;
+  const ok = $('dlgOk');
+  ok.textContent = opts.ok || 'OK';
+  ok.className = opts.danger ? 'stop' : 'go';
+  $('dlgCancel').textContent = opts.cancel || 'Abbrechen';
+  dialog.returnValue = '';
+  return new Promise((resolve) => {
+    dialog.onclose = () => resolve(dialog.returnValue === 'ok');
+    dialog.showModal();
+  });
 }
 
 function connectionError(error) {
@@ -336,6 +365,30 @@ function mount() {
   });
   $('btnAddUser').onclick = addUser;
 
+  const planSelect = $('routinePlan');
+  planSelect.innerHTML = Object.keys(PLANS).map((key) =>
+    '<option value="' + key + '">' + PLANS[key] + '</option>').join('');
+  $('routineAction').onchange = updateRoutineAction;
+  document.querySelectorAll('#routineDays button').forEach((button) => {
+    button.onclick = () => {
+      const on = button.classList.toggle('on');
+      button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+  });
+  $('btnAddRoutine').onclick = addRoutine;
+  updateRoutineAction();
+
+  $('dlgOk').onclick = () => {
+    const dlg = $('dialog');
+    dlg.returnValue = 'ok';
+    dlg.close();
+  };
+  $('dlgCancel').onclick = () => {
+    const dlg = $('dialog');
+    dlg.returnValue = 'cancel';
+    dlg.close();
+  };
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       stopLive();
@@ -389,6 +442,7 @@ function render() {
   renderPlugin();
   renderDevices();
   renderUsers();
+  renderRoutines();
 }
 
 function renderStatusActions() {
@@ -638,14 +692,26 @@ async function runAction(action) {
 }
 
 async function shutdownNow(seconds) {
-  if (!window.confirm('PC in ' + seconds + ' Sekunden herunterfahren?')) return;
+  const ok = await askConfirm({
+    title: 'Herunterfahren',
+    text: 'PC in ' + seconds + ' Sekunden herunterfahren?',
+    ok: 'Herunterfahren',
+    danger: true,
+  });
+  if (!ok) return;
   await api('/shutdown?delay=' + seconds, { method: 'POST' });
   state.pendingTotal = seconds;
   state.timerSignature = '';
 }
 
 async function hibernate() {
-  if (!window.confirm('PC jetzt in den Ruhezustand versetzen?')) return;
+  const ok = await askConfirm({
+    title: 'Ruhezustand',
+    text: 'PC jetzt in den Ruhezustand versetzen?',
+    ok: 'Ruhezustand',
+    danger: true,
+  });
+  if (!ok) return;
   await api('/hibernate', { method: 'POST' });
 }
 
@@ -668,7 +734,13 @@ async function setPlan(plan) {
 
 async function toggleMode() {
   if (state.simulate) {
-    if (!window.confirm('Echtzeitmodus aktivieren? Befehle werden wirklich ausgeführt!')) return;
+    const ok = await askConfirm({
+      title: 'Echtzeitmodus',
+      text: 'Echtzeitmodus aktivieren? Befehle werden wirklich ausgeführt!',
+      ok: 'Echt aktivieren',
+      danger: true,
+    });
+    if (!ok) return;
     await api('/mode?simulate=false', { method: 'POST' });
   } else {
     await api('/mode?simulate=true', { method: 'POST' });
@@ -683,8 +755,14 @@ async function wake() {
 async function optimizeSelected() {
   const exe = state.selectedGame;
   if (!exe) return;
-  if (!window.confirm('PC für dieses Spiel optimieren?\n' + exe +
-    '\n\nApps aus der Kill-Liste werden geschlossen.')) return;
+  const ok = await askConfirm({
+    title: 'Spiel optimieren',
+    text: 'PC für dieses Spiel optimieren?\n' + exe +
+      '\n\nApps aus der Kill-Liste werden geschlossen.',
+    ok: 'Optimieren',
+    danger: true,
+  });
+  if (!ok) return;
   await api('/plugins/game-optimizer/start?game=' + encodeURIComponent(exe), { method: 'POST' });
 }
 
@@ -831,6 +909,7 @@ async function slowTick() {
   if (state.slowTicks % 2 === 0) {
     await refreshGames();
     await refreshUsers();
+    await refreshRoutines();
   }
   if (state.slowTicks % 3 === 0) {
     await refreshLog();
@@ -882,6 +961,10 @@ function pushEvent(entry) {
     event.action === entry.action && event.detail === entry.detail);
   if (!exists) state.events = [entry].concat(state.events).slice(0, 50);
   renderEvents();
+  // Routinen sofort nachziehen, damit „letzter Lauf“ ohne 10-s-Takt stimmt.
+  if (entry.action === 'routine') {
+    refreshRoutines().then(renderRoutines);
+  }
 }
 
 function startLive() {
@@ -1084,6 +1167,8 @@ function resetData() {
   state.role = 'admin';
   state.users = [];
   state.usersPrimary = null;
+  state.routines = [];
+  state.routineSignature = '';
   state.deviceSignature = '';
   statusSignature = '';
   eventsSignature = '';
@@ -1121,6 +1206,185 @@ async function resume() {
   startPolling();
 }
 
+
+/* ---------------- Routinen (Phase 4) ---------------- */
+
+const DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+
+function triggerText(routine) {
+  const trigger = routine.trigger || {};
+  if (trigger.type !== 'time') return 'Nur manuell';
+  const days = Array.isArray(trigger.days) ? trigger.days : [];
+  let dayText = 'Täglich';
+  if (days.length && days.length < 7) {
+    const workdays = days.length === 5 && days.every((day) => day <= 5);
+    const weekend = days.length === 2 && days.indexOf(6) >= 0 && days.indexOf(7) >= 0;
+    dayText = workdays ? 'Mo–Fr'
+      : (weekend ? 'Sa–So' : days.map((day) => DAY_LABELS[day - 1]).join(', '));
+  }
+  return dayText + ' · ' + (trigger.at || '--:--');
+}
+
+function nextText(routine) {
+  if (!routine.enabled) return 'aus';
+  if (routine.next_in === null || routine.next_in === undefined) return 'nur manuell';
+  return routine.next_in <= 1 ? 'jetzt' : 'in ' + fmtTime(routine.next_in);
+}
+
+function actionListText(routine) {
+  const actions = Array.isArray(routine.actions) ? routine.actions : [];
+  return actions.map((action) => {
+    if (action.type === 'shutdown') return 'Herunterfahren in ' + action.delay + ' s';
+    if (action.type === 'hibernate') return 'Ruhezustand';
+    if (action.type === 'power_plan') return 'Energieplan ' + (PLANS[action.plan] || action.plan);
+    return action.type;
+  }).join(' · ');
+}
+
+async function refreshRoutines() {
+  if (!state.connected) {
+    state.routines = [];
+    return;
+  }
+  try {
+    const data = await api('/routines');
+    state.routines = Array.isArray(data.routines) ? data.routines : [];
+  } catch (error) {
+    // Kachel behält den letzten Stand (z. B. alter Agent ohne /routines).
+  }
+}
+
+function renderRoutines() {
+  const box = $('routineList');
+  if (!box) return;
+  $('routineForm').hidden = !canWrite();
+  $('routineHint').textContent = canWrite()
+    ? 'Zeiten gelten lokal für diesen PC. Höchstens 20 Routinen, drei Aktionen je Routine.'
+    : 'Diese Sitzung hat nur Lesezugriff.';
+
+  const list = state.routines || [];
+  const signature = JSON.stringify(list) + '#' + canWrite();
+  if (signature === state.routineSignature) return;
+  state.routineSignature = signature;
+
+  if (!list.length) {
+    box.innerHTML = '<div class="mut">Noch keine Routinen.</div>';
+    return;
+  }
+
+  box.innerHTML = list.map((routine) =>
+    '<div class="devrow" data-id="' + esc(routine.id) + '">' +
+    '<span class="dot ' + (routine.enabled ? 'ok' : '') + '" aria-hidden="true"></span>' +
+    '<div class="grow">' + esc(routine.name) +
+    '<div class="sub">' + esc(triggerText(routine)) + ' · ' + esc(nextText(routine)) + '</div></div>' +
+    (canWrite()
+      ? '<button type="button" data-act="toggle">' + (routine.enabled ? 'Aus' : 'An') + '</button>' +
+        '<button type="button" data-act="run">Jetzt</button>' +
+        '<button type="button" data-act="remove">Entfernen</button>'
+      : '<span class="chip">' + (routine.enabled ? 'an' : 'aus') + '</span>') +
+    '</div>'
+  ).join('');
+
+  box.querySelectorAll('.devrow').forEach((row) => {
+    const routine = list.find((entry) => entry.id === row.dataset.id);
+    if (!routine) return;
+    const toggle = row.querySelector('[data-act="toggle"]');
+    if (toggle) toggle.onclick = () => runAction(() => toggleRoutine(routine));
+    const run = row.querySelector('[data-act="run"]');
+    if (run) run.onclick = () => runAction(() => runRoutine(routine));
+    const remove = row.querySelector('[data-act="remove"]');
+    if (remove) remove.onclick = () => runAction(() => removeRoutine(routine));
+  });
+}
+
+async function toggleRoutine(routine) {
+  const body = Object.assign({}, routine, { enabled: !routine.enabled });
+  await api('/routines', { method: 'POST', body: JSON.stringify(body) });
+  await refreshRoutines();
+}
+
+async function runRoutine(routine) {
+  const ok = await askConfirm({
+    title: 'Routine ausführen',
+    text: '„' + routine.name + '“ jetzt ausführen?\n' + actionListText(routine),
+    ok: 'Ausführen',
+    danger: true,
+  });
+  if (!ok) return;
+  await api('/routines/' + encodeURIComponent(routine.id) + '/run', { method: 'POST' });
+  await refreshRoutines();
+}
+
+async function removeRoutine(routine) {
+  const ok = await askConfirm({
+    title: 'Routine entfernen',
+    text: '„' + routine.name + '“ wirklich entfernen?',
+    ok: 'Entfernen',
+    danger: true,
+  });
+  if (!ok) return;
+  await api('/routines/' + encodeURIComponent(routine.id), { method: 'DELETE' });
+  await refreshRoutines();
+}
+
+function selectedRoutineDays() {
+  return Array.prototype.slice.call(document.querySelectorAll('#routineDays button.on'))
+    .map((button) => Number(button.dataset.day));
+}
+
+function updateRoutineAction() {
+  const kind = $('routineAction').value;
+  $('routineDelay').hidden = kind !== 'shutdown';
+  $('routinePlan').hidden = kind !== 'power_plan';
+}
+
+async function addRoutine() {
+  if (!guardWrite()) return;
+  const name = $('routineName').value.trim();
+  const at = $('routineTime').value;
+  if (!name) {
+    showBanner('Bitte einen Namen für die Routine angeben.', 'warn');
+    return;
+  }
+  if (!/^\d{2}:\d{2}$/.test(at)) {
+    showBanner('Bitte eine Uhrzeit wählen.', 'warn');
+    return;
+  }
+  const kind = $('routineAction').value;
+  let action;
+  if (kind === 'shutdown') {
+    const raw = parseInt($('routineDelay').value || '60', 10);
+    const delay = Math.max(0, Math.min(86400, isNaN(raw) ? 60 : raw));
+    action = { type: 'shutdown', delay };
+  } else if (kind === 'hibernate') {
+    action = { type: 'hibernate' };
+  } else {
+    action = { type: 'power_plan', plan: $('routinePlan').value };
+  }
+  const body = {
+    name,
+    enabled: true,
+    trigger: { type: 'time', at, days: selectedRoutineDays() },
+    actions: [action],
+  };
+
+  $('btnAddRoutine').disabled = true;
+  try {
+    await api('/routines', { method: 'POST', body: JSON.stringify(body) });
+    $('routineName').value = '';
+    document.querySelectorAll('#routineDays button.on').forEach((button) => {
+      button.classList.remove('on');
+      button.setAttribute('aria-pressed', 'false');
+    });
+    clearBanner();
+    await refreshRoutines();
+  } catch (error) {
+    showBanner('Routine konnte nicht gespeichert werden: ' + error.message, 'warn');
+  } finally {
+    $('btnAddRoutine').disabled = false;
+    render();
+  }
+}
 
 /* ---------------- Benutzer & Rechte ---------------- */
 
@@ -1210,7 +1474,13 @@ async function addUser() {
 
 async function removeUser(user) {
   if (!guardWrite()) return;
-  if (!window.confirm('Benutzer „' + user + '“ entfernen?')) return;
+  const ok = await askConfirm({
+    title: 'Benutzer entfernen',
+    text: 'Benutzer „' + user + '“ entfernen?',
+    ok: 'Entfernen',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await api('/users/' + encodeURIComponent(user), { method: 'DELETE' });
     clearBanner();
@@ -1246,6 +1516,8 @@ async function boot() {
   $('app').hidden = false;
   await refreshIdentity();
   await tick();
+  await refreshRoutines();
+  render();
   startLive();
   startSlow();
   startPolling();

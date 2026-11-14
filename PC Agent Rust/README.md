@@ -14,6 +14,7 @@ Die frühere Python-Version ist archiviert und wird nicht mehr gepflegt.
 | Datenordner | `%LOCALAPPDATA%\PC Steuerung` (`PC_AGENT_DATA` optional) |
 | Zugangsdaten | `credentials.json` im Datenordner |
 | Log | `agent.log` (+Rotation `.log.1`) im Datenordner |
+| Routinen | `routines.json` im Datenordner |
 | PBKDF2 | sha256, 200000 Iterationen |
 | Web-Oberfläche | `src/page.html` |
 | Tray | gemeinsame Tray-Steuerung im Projektstamm |
@@ -28,7 +29,9 @@ Alte Daten aus `PC App/` oder neben der EXE werden beim Start einmalig
 `GET /status`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
 `POST /power-plan?name=`, `POST /wake?mac=&port=`, `POST /ping`,
 `GET /events`, `GET /events/stream`, `GET /log?lines=`,
-`GET /users`, `POST /users`, `DELETE /users/{user}`.
+`GET /users`, `POST /users`, `DELETE /users/{user}`,
+`GET /routines`, `POST /routines`, `DELETE /routines/{id}`,
+`POST /routines/{id}/run`.
 
 `GET /events/stream` ist ein Server-Sent-Events-Strom: alle zwei Sekunden ein
 `state`-Ereignis (Status, Messwerte, letzte Ereignisse), neue Log-Einträge sofort
@@ -51,6 +54,23 @@ eine Liste weiterer Benutzer. Rollen:
 Alte Dateien ohne `role`/`users` bleiben gueltig (Hauptbenutzer = `admin`).
 Benutzer anlegen/entfernen ueber `POST /users` bzw. `DELETE /users/{user}`
 oder in der Web-UI (Kachel „Benutzer & Rechte“).
+
+## Routinen (Phase 4)
+
+Routinen liegen in `routines.json` und werden in der Web-UI (Kachel
+„Routinen“) verwaltet. Ein Auslöser ist entweder eine Uhrzeit (`HH:MM`,
+optional mit Wochentagen Mo–So) oder „nur manuell“.
+
+Aktionen: Herunterfahren (mit Verzögerung), Ruhezustand, Energieplan – bis zu
+drei je Routine, hoechstens 20 Routinen. Der Agent prueft alle 10 s, ob eine
+Routine faellig ist, und speichert `last_run` **vor** dem Ausfuehren: dadurch
+feuert eine Shutdown-Routine nach einem Neustart nicht erneut. Verpasste
+Zeiten (PC war aus) werden bewusst nicht nachgeholt.
+
+`admin` darf Routinen anlegen, ausfuehren und loeschen; `viewer` sieht sie nur.
+Im Simulationsmodus wird auch bei Routinen nur geloggt. Ein „Einschalten“ per
+Routine gibt es nicht: Der Agent laeuft nur, wenn der PC an ist (WoL braeuchte
+ein zweites Geraet oder einen RTC-Wake-Timer).
 
 ## Mehrere PCs (CORS)
 
@@ -164,3 +184,9 @@ powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 -WithTray
 - Phase 3 geprueft: `/events/stream` liefert `state` alle 2 s und `event`
   sofort; `viewer` bekommt 403 auf `/shutdown`, `/users` und DELETE, `admin`
   200; CORS-Preflight und -Kopfzeilen nur fuer erlaubte Origins.
+- Phase 4 geprueft: neun Unit-Tests fuer Zeitparsing, Wochentage, `last_run`,
+  `next_run`, Validierung und die Ausfuehrung (Simulation/Journal); Live-Test auf
+  Port 8123: Routine in der aktuellen
+  Minute feuert innerhalb von 10 s (Ereignis `routine`), `next_in` zeigt den
+  Folgetag, `POST /routines/{id}/run` fuehrt manuell aus, ungueltige Zeit -> 422,
+  Loeschen -> 200, zweites Loeschen -> 404, POST ohne CSRF-Kopfzeile -> 403.

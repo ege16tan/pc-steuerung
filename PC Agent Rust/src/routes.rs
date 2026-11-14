@@ -24,7 +24,7 @@ use serde_json::json;
 
 use crate::app::{parse_role, remaining_seconds, App, Credentials, DeviceSettings, TokenCredentials, UserEntry};
 use crate::auth::{create_credentials, Auth, WriteAuth};
-use crate::commands::{detect_active_plan, run, PLANS};
+use crate::commands::{detect_active_plan, run};
 use crate::journal::{log_event, tail_lines};
 use crate::live::LiveMessage;
 use crate::page::{APP_CSS, APP_JS, PAGE};
@@ -634,44 +634,10 @@ pub async fn shutdown_ep(
         Ok(delay) => delay,
         Err(message) => return error_response(StatusCode::UNPROCESSABLE_ENTITY, message),
     };
-    let simulate = snapshot(&app).simulate;
-    let (code, out) = tokio::task::spawn_blocking(move || {
-        let delay_text = delay.to_string();
-        run(&["shutdown", "/s", "/t", &delay_text], simulate, false)
-    })
-    .await
-    .unwrap_or((-1, String::new()));
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
-    if code != 0 {
-        let problem = if out.is_empty() {
-            "Fehler".to_string()
-        } else {
-            out.clone()
-        };
-        log_event(&app, &mut guard, "shutdown", &problem, false);
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            if out.is_empty() {
-                "shutdown fehlgeschlagen".to_string()
-            } else {
-                out
-            },
-        );
+    match crate::actions::perform_shutdown(&app, delay).await {
+        Ok(detail) => Json(json!({ "ok": true, "detail": detail })).into_response(),
+        Err(detail) => error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
     }
-    guard.pending_at = Some(now_epoch() + delay as f64);
-    guard.pending_seconds = delay as i64;
-    let info = if delay == 0 {
-        "sofort".to_string()
-    } else {
-        format!("in {delay}s")
-    };
-    log_event(&app, &mut guard, "shutdown", &info, true);
-    let detail = if out.is_empty() {
-        format!("Herunterfahren in {delay}s")
-    } else {
-        out
-    };
-    Json(json!({ "ok": true, "detail": detail })).into_response()
 }
 
 /// POST /abort — laufendes Herunterfahren abbrechen; pending immer zurueck.
@@ -699,34 +665,10 @@ pub async fn abort_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Respons
 
 /// POST /hibernate — Windows in den Ruhezustand versetzen.
 pub async fn hibernate_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Response {
-    let simulate = snapshot(&app).simulate;
-    let (code, out) =
-        tokio::task::spawn_blocking(move || run(&["shutdown", "/h"], simulate, false))
-            .await
-            .unwrap_or((-1, String::new()));
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
-    let state_text = if out.is_empty() {
-        "Ruhezustand".to_string()
-    } else {
-        out.clone()
-    };
-    log_event(&app, &mut guard, "hibernate", &state_text, code == 0);
-    if code != 0 {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            if out.is_empty() {
-                "Ruhezustand fehlgeschlagen".to_string()
-            } else {
-                out
-            },
-        );
+    match crate::actions::perform_hibernate(&app).await {
+        Ok(detail) => Json(json!({ "ok": true, "detail": detail })).into_response(),
+        Err(detail) => error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
     }
-    let detail = if out.is_empty() {
-        "Ruhezustand".to_string()
-    } else {
-        out
-    };
-    Json(json!({ "ok": true, "detail": detail })).into_response()
 }
 
 /// POST /power-plan?name=high|balanced|saver — Energieplan waehlen.
@@ -739,40 +681,16 @@ pub async fn power_plan_ep(
         Some(name) => name.to_string(),
         None => return error_response(StatusCode::UNPROCESSABLE_ENTITY, "Name fehlt".to_string()),
     };
-    let Some(plan_guid) = PLANS.iter().find(|(key, _)| *key == name).map(|(_, guid)| *guid) else {
+    if !crate::actions::plan_known(&name) {
         return error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "Ungueltiger Energieplan".to_string(),
         );
-    };
-    let simulate = snapshot(&app).simulate;
-    let (code, out) = tokio::task::spawn_blocking(move || {
-        run(&["powercfg", "/setactive", plan_guid], simulate, false)
-    })
-    .await
-    .unwrap_or((-1, String::new()));
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
-    log_event(
-        &app,
-        &mut guard,
-        "power-plan",
-        format!("{name} {out}").trim(),
-        code == 0,
-    );
-    if code != 0 {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            if out.is_empty() {
-                "powercfg fehlgeschlagen".to_string()
-            } else {
-                out
-            },
-        );
     }
-    if simulate {
-        guard.sim_plan = Some(name.clone());
+    match crate::actions::perform_power_plan(&app, &name).await {
+        Ok(detail) => Json(json!({ "ok": true, "plan": name, "detail": detail })).into_response(),
+        Err(detail) => error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
     }
-    Json(json!({ "ok": true, "plan": name, "detail": out })).into_response()
 }
 
 /// Port-Pruefung wie FastAPI: fehlend -> 9, sonst 1..=65535, alles uebige -> 422.
@@ -1243,6 +1161,141 @@ pub async fn user_delete(
         true,
     );
     Json(json!({ "ok": true, "removed": user })).into_response()
+}
+
+// ---------------- Routinen (Phase 4) ----------------
+
+/// GET /routines — alle Routinen inklusive naechstem Lauf (nur lesen fuer viewer).
+pub async fn routines_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let now = chrono::Local::now().naive_local();
+    let guard = app.routines.lock().expect("Routinen-Sperre");
+    let routines = guard
+        .routines
+        .iter()
+        .map(|routine| {
+            let mut value = serde_json::to_value(routine).unwrap_or_else(|_| json!({}));
+            match crate::routines::next_run(routine, &now) {
+                Some(next) => {
+                    value["next_run"] = json!(next.format("%Y-%m-%dT%H:%M:%S").to_string());
+                    value["next_in"] = json!((next - now).num_seconds().max(0));
+                }
+                None => {
+                    value["next_run"] = serde_json::Value::Null;
+                    value["next_in"] = serde_json::Value::Null;
+                }
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    Json(json!({
+        "now": now.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        "routines": routines,
+    }))
+    .into_response()
+}
+
+/// POST /routines — Routine anlegen oder ersetzen (nur Administratoren).
+pub async fn routine_save(
+    State(app): State<SharedApp>,
+    _auth: WriteAuth,
+    Json(mut routine): Json<crate::routines::Routine>,
+) -> Response {
+    if routine.id.trim().is_empty() {
+        routine.id = crate::routines::new_id();
+    }
+    crate::routines::normalize(&mut routine);
+    if let Err(message) = crate::routines::validate(&routine) {
+        return error_response(StatusCode::UNPROCESSABLE_ENTITY, message);
+    }
+
+    let mut guard = app.routines.lock().expect("Routinen-Sperre");
+    match guard.routines.iter_mut().find(|entry| entry.id == routine.id) {
+        Some(existing) => {
+            // `last_run` bleibt erhalten: ein erneutes Speichern soll die
+            // Routine nicht in derselben Minute noch einmal ausloesen.
+            routine.last_run = existing.last_run.clone();
+            *existing = routine.clone();
+        }
+        None => {
+            if guard.routines.len() >= crate::routines::MAX_ROUTINES {
+                return error_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("Hoechstens {} Routinen sind erlaubt", crate::routines::MAX_ROUTINES),
+                );
+            }
+            routine.last_run.clear();
+            guard.routines.push(routine.clone());
+        }
+    }
+    let snapshot = guard.routines.clone();
+    drop(guard);
+
+    if let Err(error) = crate::routines::save(&app.routines_file, &snapshot) {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Speichern fehlgeschlagen: {error}"),
+        );
+    }
+    let mut inner = app.inner.lock().expect("Zustands-Sperre");
+    log_event(
+        &app,
+        &mut inner,
+        "routine",
+        &format!("{} gespeichert", routine.name),
+        true,
+    );
+    Json(json!({ "ok": true, "routine": routine })).into_response()
+}
+
+/// DELETE /routines/{id} — Routine entfernen.
+pub async fn routine_delete(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: WriteAuth,
+) -> Response {
+    let mut guard = app.routines.lock().expect("Routinen-Sperre");
+    let before = guard.routines.len();
+    guard.routines.retain(|routine| routine.id != id);
+    if guard.routines.len() == before {
+        return error_response(StatusCode::NOT_FOUND, format!("Routine '{id}' nicht gefunden"));
+    }
+    let snapshot = guard.routines.clone();
+    drop(guard);
+
+    if let Err(error) = crate::routines::save(&app.routines_file, &snapshot) {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Speichern fehlgeschlagen: {error}"),
+        );
+    }
+    let mut inner = app.inner.lock().expect("Zustands-Sperre");
+    log_event(
+        &app,
+        &mut inner,
+        "routine",
+        &format!("{id} entfernt"),
+        true,
+    );
+    Json(json!({ "ok": true, "removed": id })).into_response()
+}
+
+/// POST /routines/{id}/run — Routine sofort ausfuehren (auch wenn sie aus ist).
+pub async fn routine_run(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: WriteAuth,
+) -> Response {
+    let routine = {
+        let guard = app.routines.lock().expect("Routinen-Sperre");
+        guard.routines.iter().find(|routine| routine.id == id).cloned()
+    };
+    let Some(routine) = routine else {
+        return error_response(StatusCode::NOT_FOUND, format!("Routine '{id}' nicht gefunden"));
+    };
+    match crate::routines::execute(&app, &routine).await {
+        Ok(detail) => Json(json!({ "ok": true, "detail": detail })).into_response(),
+        Err(detail) => error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
+    }
 }
 
 #[cfg(test)]

@@ -128,6 +128,43 @@
     </div>
 
     <div class="tile w2">
+      <div class="lab">Routinen</div>
+      <div class="mut">Uhrzeit oder Knopf. Der PC muss wach sein – verpasste Zeiten werden nicht nachgeholt.</div>
+      <div class="devlist" id="routineList"></div>
+      <div id="routineForm" hidden>
+        <div class="row">
+          <input id="routineName" placeholder="Name (z. B. Abend)" maxlength="64"
+                 autocomplete="off" aria-label="Name der Routine">
+          <input id="routineTime" type="time" value="23:30" aria-label="Uhrzeit der Routine">
+        </div>
+        <div class="days" id="routineDays" role="group" aria-label="Wochentage">
+          <button type="button" data-day="1" aria-pressed="false">Mo</button>
+          <button type="button" data-day="2" aria-pressed="false">Di</button>
+          <button type="button" data-day="3" aria-pressed="false">Mi</button>
+          <button type="button" data-day="4" aria-pressed="false">Do</button>
+          <button type="button" data-day="5" aria-pressed="false">Fr</button>
+          <button type="button" data-day="6" aria-pressed="false">Sa</button>
+          <button type="button" data-day="7" aria-pressed="false">So</button>
+        </div>
+        <p class="mut" style="margin:6px 0 0">Kein Tag ausgewählt = täglich.</p>
+        <div class="row">
+          <select id="routineAction" aria-label="Aktion der Routine">
+            <option value="shutdown">Herunterfahren</option>
+            <option value="hibernate">Ruhezustand</option>
+            <option value="power_plan">Energieplan</option>
+          </select>
+          <input id="routineDelay" type="number" min="0" max="86400" step="10" value="60"
+                 aria-label="Sekunden bis zum Herunterfahren">
+          <select id="routinePlan" aria-label="Energieplan der Routine" hidden></select>
+        </div>
+        <div class="btns" style="margin-top:10px">
+          <button type="button" class="ghost" id="btnAddRoutine">Hinzufügen</button>
+        </div>
+      </div>
+      <p class="mut" id="routineHint" style="margin:8px 0 0"></p>
+    </div>
+
+    <div class="tile w2">
       <div class="lab">Game Optimization</div>
       <div class="mut">Energieplan hoch, Hintergrund-Apps zu, RAM frei – nur auf Knopfdruck.</div>
       <div class="field" style="margin-top:10px">
@@ -188,8 +225,17 @@
     </div>
   </div>
 
-  <p class="foot">PC Steuerung · Dashboard (Phase 3: Live-Updates, Geräte, Rollen)</p>
+  <p class="foot">PC Steuerung · Dashboard (Phase 4: Routinen, Dialoge, Live-Updates)</p>
 </div>
+
+<dialog id="dialog" class="dlg" aria-labelledby="dlgTitle">
+  <h2 id="dlgTitle">Bestätigen</h2>
+  <p id="dlgText"></p>
+  <div class="btns">
+    <button type="button" class="ghost" id="dlgCancel">Abbrechen</button>
+    <button type="button" class="go" id="dlgOk">OK</button>
+  </div>
+</dialog>
 
 </body>
 </html>

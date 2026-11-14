@@ -13,8 +13,11 @@
 //!          - PC_AGENT_CORS (optional): Origins fuer die Geraeteliste im
 //!            Browser, komma-getrennt; leer = kein CORS.
 //!          - Rollen: admin (alles) und viewer (nur lesen) in credentials.json.
+//!          - Routinen (Phase 4): Uhrzeit/manuel in routines.json, Aktionen
+//!            Herunterfahren/Ruhezustand/Energieplan.
 
 mod app;
+mod actions;
 mod auth;
 mod commands;
 mod games;
@@ -24,6 +27,7 @@ mod metrics;
 mod page;
 mod pairing;
 mod plugins;
+mod routines;
 mod routes;
 mod wol;
 
@@ -166,6 +170,12 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
             axum::routing::get(routes::users_ep).post(routes::user_add),
         )
         .route("/users/{user}", axum::routing::delete(routes::user_delete))
+        .route(
+            "/routines",
+            axum::routing::get(routes::routines_ep).post(routes::routine_save),
+        )
+        .route("/routines/{id}", axum::routing::delete(routes::routine_delete))
+        .route("/routines/{id}/run", axum::routing::post(routes::routine_run))
         .route("/plugins", axum::routing::get(routes::plugins_ep))
         .route("/plugins/{id}/start", axum::routing::post(routes::plugin_start))
         .route("/plugins/{id}/stop", axum::routing::post(routes::plugin_stop))
@@ -190,7 +200,9 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .with_state(shared);
 
     // Live-Rundruf fuer `/events/stream` (schickt nur, wenn jemand zuhoert).
-    tokio::spawn(crate::live::run_loop(app));
+    tokio::spawn(crate::live::run_loop(app.clone()));
+    // Routinen: prueft alle 10 s, ob eine Uhrzeit-Routine faellig ist.
+    tokio::spawn(crate::routines::run_loop(app));
 
     // Bindung an 0.0.0.0:8000, damit das Handy im LAN zugreifen kann;
     // die Windows-Firewall fragt beim ersten Start einmalig nach.

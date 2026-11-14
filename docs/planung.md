@@ -190,5 +190,48 @@ Game-Kachel mit Spielauswahl/Start/Stop/Scan, Fehlerzustand bei 401/Timeout.
 
 
 
+## 10. Web-Oberfläche Phase 4: Routinen (14.11.2026)
+
+**Ziel:** Auslöser + Aktionen im Agenten statt eines externen Zeitplans, dazu
+ein eigener Bestätigungsdialog (letzter offener Punkt aus dem Phase-3-Konzept).
+
+**Entschieden:**
+
+- **Auslöser:** Uhrzeit (`HH:MM`, optional Wochentage Mo–So) oder „nur manuell“.
+  Ereignis-Auslöser („PC startet“, „Plugin endet“) sind bewusst zurückgestellt.
+- **Aktionen:** Herunterfahren (Verzögerung), Ruhezustand, Energieplan; bis zu
+  drei je Routine, höchstens 20 Routinen.
+- **Einschalten entfällt:** Der Agent läuft nur bei eingeschaltetem PC; WoL
+  bräuchte ein zweites Gerät oder einen RTC-Wake-Timer.
+- **Verpasste Zeiten werden nicht nachgeholt** (kein Überraschungs-Shutdown
+  nach dem Aufwachen).
+- **Rechte:** `admin` verwaltet/startet, `viewer` liest nur.
+- **Simulation:** Routinen nutzen dieselbe Aktionsschicht (`src/actions.rs`),
+  im Simulationsmodus wird nur geloggt.
+
+**Technik:**
+
+- `src/routines.rs`: Modell (`routines.json`), Validierung, `parse_time`,
+  `matches_day`, `is_due`, `next_run`, Ausführung, Schleife alle 10 s.
+  `last_run` (Minute) wird **vor** der Aktion gespeichert und verhindert
+  Doppelauslösung auch nach einem Neustart.
+- `src/actions.rs`: `perform_shutdown`/`perform_hibernate`/`perform_power_plan`
+  – von HTTP-Handlern und Routinen gemeinsam genutzt.
+- Endpunkte: `GET /routines`, `POST /routines` (Upsert), `DELETE /routines/{id}`,
+  `POST /routines/{id}/run`; `GET` liefert zusätzlich `next_run`/`next_in`.
+- Web-UI: Kachel „Routinen“ (Liste, An/Aus, „Jetzt“, Löschen, Formular) und
+  `<dialog>`-Bestätigung statt `window.confirm()` für alle destruktiven Aktionen.
+
+**Verifiziert:** `cargo test` 56 grün (9 neue Routine-Tests, 1 Aktions-Test);
+`node --check` sauber; Live-Test auf Port 8123: Routine feuert in der aktuellen
+Minute innerhalb von 10 s, `last_run` gesetzt, `next_in` zeigt den Folgetag,
+manueller Lauf, 422 bei ungültiger Zeit, 200/404 beim Löschen, 403 ohne
+CSRF-Kopfzeile.
+
+**Offen:** Ereignis-Auslöser, mehrere Aktionen in der UI (API kann bis zu drei),
+Routinen in der Android-App.
+
+---
+
 - Verbindung nur im Heimnetz, VPN aus dem Plan entfernt.
 - Weboberfläche auf dem PC verworfen.

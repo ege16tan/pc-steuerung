@@ -170,6 +170,9 @@ pub struct App {
     pub games_cache_file: PathBuf,
     /// Einstellungen der Spiel-Optimierung (`game-config.json`).
     pub game_config_file: PathBuf,
+    /// Routinen (Phase 4) im Speicher und ihre Datei (`routines.json`).
+    pub routines_file: PathBuf,
+    pub routines: Mutex<crate::routines::RoutineState>,
     /// Live-Updates (SSE) und CORS-Allowlist fuer die Geraeteliste.
     pub live: crate::live::LiveHub,
 }
@@ -183,6 +186,8 @@ impl App {
         let token_credentials = load_token_credentials(&token_file);
         let device_file = base_dir.join("device.json");
         let device_settings = load_device_settings(&device_file);
+        let routines_file = base_dir.join("routines.json");
+        let routines = crate::routines::load(&routines_file);
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|path| path.parent().map(PathBuf::from))
@@ -210,6 +215,8 @@ impl App {
             metrics: Mutex::new(crate::metrics::MetricsState::default()),
             games_cache_file: base_dir.join("games.json"),
             game_config_file: base_dir.join("game-config.json"),
+            routines_file,
+            routines: Mutex::new(routines),
             live: crate::live::LiveHub::new(crate::live::cors_origins_from_env()),
         }
     }

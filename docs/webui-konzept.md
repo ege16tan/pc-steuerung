@@ -1,6 +1,6 @@
 # Web-UI-Konzept „Dashboard" – Abgleich mit dem Agenten
 
-**Stand:** 2026-11-13 · **Status:** geprüft · **Phase 1 umgesetzt** (siehe §8)
+**Stand:** 2026-11-14 · **Status:** geprüft · **Phasen 1–4 umgesetzt** (siehe §8–§11)
 **Vorlage:** `docs/webui-konzept.html` (das gelieferte Mockup, reines HTML/CSS/JS)
 
 ## 1. Was das Konzept zeigt
@@ -200,5 +200,35 @@ Live-Test gegen Port 8123: `/events/stream` liefert `state` im 2-s-Takt und
 DELETE 403, `/status` 200 (`role: viewer`); `admin` → 200; CORS-Preflight und
 Kopfzeilen nur für erlaubte Origins, `OPTIONS` von fremder Origin 405;
 `/`, `/app.css`, `/app.js` liefern 200 mit korrekten Typen.
+
+## 11. Umsetzung Phase 4 (14.11.2026)
+
+**Erledigt:**
+
+- **Routinen** (`src/routines.rs`, `routines.json`): Auslöser `time`
+  (`HH:MM`, Wochentage 1–7, leer = täglich) oder `manual`; Aktionen
+  `shutdown`/`hibernate`/`power_plan` (max. 3, max. 20 Routinen). Die Schleife
+  prüft alle 10 s. `last_run` wird vor dem Ausführen gespeichert; verpasste
+  Zeiten werden nicht nachgeholt.
+- **Gemeinsame Aktionsschicht** (`src/actions.rs`): HTTP-Handler und Routinen
+  rufen dieselben Funktionen auf – Simulation, Journal und `pending_*` bleiben
+  identisch.
+- **Endpunkte:** `GET /routines` (mit `next_run`/`next_in`), `POST /routines`
+  (Upsert, `id` leer = neu), `DELETE /routines/{id}`,
+  `POST /routines/{id}/run`. Schreiben nur `admin` (`WriteAuth`), `viewer` liest.
+- **Kachel „Routinen“:** Liste mit An/Aus-Punkt, Trigger-Text, nächstem Lauf,
+  „Jetzt“/„Entfernen“; Formular mit Name, `type="time"`, Wochentag-Chips,
+  Aktion und abhängigem Feld (Sekunden bzw. Plan). Formular nur für `admin`.
+- **Dialog:** `askConfirm()` als `<dialog>` mit ESC/Backdrop ersetzt alle fünf
+  `window.confirm()`-Aufrufe (Shutdown, Ruhezustand, Echt-Modus, Optimieren,
+  Benutzer löschen); `white-space: pre-line` für mehrzeilige Texte.
+
+**Verifiziert:** `cargo test` 56 grün (9 Routinen-, 1 Aktions-Test);
+`node --check src/app.js` sauber; Live-Test (Port 8123, Simulation): Routine
+feuert in der aktuellen Minute, `last_run` gesetzt, `next_in` = Folgetag,
+manueller Lauf, 422 bei `25:00`, Löschen 200/404, POST ohne CSRF-Header 403.
+
+**Offen:** Ereignis-Auslöser, mehrere Aktionen in der UI, Routinen in der
+Android-App.
 
 

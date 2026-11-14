@@ -168,6 +168,28 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
 .qrbox img { width: 168px; height: 168px; background: #fff; padding: 8px; border-radius: 12px; }
 .qrbox code { font-size: 13px; color: var(--teal); }
 
+/* Routinen (Phase 4) */
+.days { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.days button { flex: 0 0 auto; padding: 7px 11px; font-size: 12px; border-radius: 99px; }
+.days button.on { background: var(--teal); border-color: var(--teal); color: #04231f; font-weight: 700; }
+@media (max-width: 520px) {
+  .devrow { flex-wrap: wrap; }
+  .devrow .grow { flex-basis: 100%; }
+}
+
+/* Eigener Bestätigungsdialog statt window.confirm() */
+.dlg {
+  border: 1px solid var(--line); border-radius: 18px; background: var(--card);
+  color: var(--text); padding: 20px; max-width: 420px; width: calc(100% - 32px);
+  box-shadow: 0 20px 50px #0008;
+}
+.dlg::backdrop { background: #000a; }
+.dlg h2 { margin: 0 0 8px; font-size: 19px; }
+.dlg p { margin: 0; color: var(--mut); font-size: 14px; white-space: pre-line; }
+.dlg .btns { margin-top: 16px; }
+:root[data-theme="light"] .days button.on { color: #ffffff; }
+:root[data-theme="light"] .dlg { background: #ffffff; }
+
 /* Barrierefreiheit */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
