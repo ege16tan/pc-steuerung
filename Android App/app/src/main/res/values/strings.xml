@@ -10,7 +10,6 @@
 
     <!-- Navigation -->
     <string name="tab_control">Steuerung</string>
-    <string name="tab_market">Markt+</string>
     <string name="tab_energy">Energie</string>
     <string name="tab_settings">Einstellungen</string>
 
