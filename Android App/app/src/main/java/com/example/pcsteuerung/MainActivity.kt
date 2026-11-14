@@ -58,7 +58,6 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -1051,45 +1050,6 @@ fun MainApp(
         }.getOrNull() ?: "?"
     }
 
-    // Marktplatz-Zustand: installierte Module sind persistent, der Katalog
-    // startet lokal und wird beim ersten Start vom GitHub-Repo aufgefrischt.
-    var installedModules by remember { mutableStateOf(ModuleStore.load(context)) }
-    var catalogModules by remember { mutableStateOf(defaultCatalog()) }
-    var catalogSource by remember { mutableStateOf("Lokal (Fallback)") }
-    var catalogRefresh by remember { mutableStateOf(0) }
-
-    fun installModule(module: CatalogModule) {
-        val next = installedModules + module.id
-        ModuleStore.save(context, next)
-        installedModules = next
-        message = "${module.name} installiert"
-    }
-
-    fun uninstallModule(module: CatalogModule) {
-        val next = installedModules - module.id
-        ModuleStore.save(context, next)
-        installedModules = next
-        message = "${module.name} deinstalliert"
-    }
-
-    LaunchedEffect(catalogRefresh) {
-        val remote = withContext(Dispatchers.IO) {
-            try {
-                fetchRemoteCatalog()
-            } catch (e: Exception) {
-                Log.e(TAG, "Katalog nicht erreichbar", e)
-                null
-            }
-        }
-        if (remote.isNullOrEmpty()) {
-            if (catalogModules.isEmpty()) catalogModules = defaultCatalog()
-            catalogSource = if (remote == null) "Lokal (offline)" else "Lokal"
-        } else {
-            catalogModules = mergeCatalog(defaultCatalog(), remote)
-            catalogSource = "GitHub (remote)"
-        }
-    }
-
     LaunchedEffect(message) {
         message?.let {
             snackbarHostState.showSnackbar(it)
@@ -1305,18 +1265,12 @@ fun MainApp(
                 NavigationBarItem(
                     selected = tab == 1,
                     onClick = { tab = 1 },
-                    icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_market)) }
-                )
-                NavigationBarItem(
-                    selected = tab == 2,
-                    onClick = { tab = 2 },
                     icon = { Icon(Icons.Default.Star, contentDescription = null) },
                     label = { Text(stringResource(R.string.tab_energy)) }
                 )
                 NavigationBarItem(
-                    selected = tab == 3,
-                    onClick = { tab = 3 },
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     label = { Text(stringResource(R.string.tab_settings)) }
                 )
@@ -1340,7 +1294,6 @@ fun MainApp(
                         active = active,
                         state = state,
                         busy = busy,
-                        installed = installedModules,
                         pendingLeft = pendingLeft,
                         wakePending = wakePending,
                         lastUpdated = lastUpdatedText,
@@ -1361,19 +1314,9 @@ fun MainApp(
                         onHibernate = { runAction("/hibernate", "Ruhezustand ausgelöst") },
                         onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
                         onShowLog = ::loadLog,
-                        onOpenMarket = { tab = 1 },
-                        onOpenSettings = { tab = 3 },
+                        onOpenSettings = { tab = 2 },
                     )
-                    1 -> MarketplaceTab(
-                        modules = catalogModules,
-                        installed = installedModules,
-                        source = catalogSource,
-                        busy = busy,
-                        onRefresh = { catalogRefresh++ },
-                        onInstall = ::installModule,
-                        onUninstall = ::uninstallModule,
-                    )
-                    2 -> PlanTab(
+                    1 -> PlanTab(
                         activePlan = state.plan,
                         busy = busy,
                         onSelect = { key, label ->
@@ -1593,7 +1536,6 @@ private fun ControlTab(
     active: Profile,
     state: AgentState,
     busy: Boolean,
-    installed: Set<String>,
     pendingLeft: Int,
     wakePending: Boolean,
     lastUpdated: String,
@@ -1607,7 +1549,6 @@ private fun ControlTab(
     onHibernate: () -> Unit,
     onAbort: () -> Unit,
     onShowLog: () -> Unit,
-    onOpenMarket: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -1790,16 +1731,13 @@ private fun ControlTab(
                             ) {
                                 Text("PC herunterfahren", fontSize = 18.sp)
                             }
-                            // Timer nur als installiertes Marktplatz-Modul.
-                            if (MODULE_TIMER in installed) {
-                                OutlinedButton(
-                                    onClick = onTimer,
-                                    enabled = !busy,
-                                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                                    shape = RoundedCornerShape(14.dp)
-                                ) {
-                                    Text("Timer...", fontSize = 15.sp)
-                                }
+                            OutlinedButton(
+                                onClick = onTimer,
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("Timer...", fontSize = 15.sp)
                             }
 
                             // Countdown-Karte bleibt immer da: Eine laufende
@@ -1827,48 +1765,25 @@ private fun ControlTab(
                                 }
                             }
 
-                            if (MODULE_LOG in installed) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onHibernate()
-                                        },
-                                        enabled = !busy,
-                                        modifier = Modifier.weight(1f).height(52.dp),
-                                        shape = RoundedCornerShape(14.dp)
-                                    ) { Text("Ruhezustand", fontSize = 14.sp) }
-                                    OutlinedButton(
-                                        onClick = onShowLog,
-                                        enabled = !busy,
-                                        modifier = Modifier.weight(1f).height(52.dp),
-                                        shape = RoundedCornerShape(14.dp)
-                                    ) { Text("Verlauf", fontSize = 14.sp) }
-                                }
-                            } else {
-                                // Ohne Verlauf-Modul hat Ruhezustand die volle Breite.
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
                                 OutlinedButton(
                                     onClick = {
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onHibernate()
                                     },
                                     enabled = !busy,
-                                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                                    modifier = Modifier.weight(1f).height(52.dp),
                                     shape = RoundedCornerShape(14.dp)
                                 ) { Text("Ruhezustand", fontSize = 14.sp) }
-                            }
-
-                            // Entdecker-Hinweis: Basis ist da, Zusaetze gibt es im Markt.
-                            if (MODULE_TIMER !in installed && MODULE_LOG !in installed) {
-                                TextButton(
-                                    onClick = onOpenMarket,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("Mehr Funktionen im Markt+ …", fontSize = 14.sp)
-                                }
+                                OutlinedButton(
+                                    onClick = onShowLog,
+                                    enabled = !busy,
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) { Text("Verlauf", fontSize = 14.sp) }
                             }
                         }
                     }
@@ -1919,215 +1834,6 @@ private fun ControlTab(
                 }
             }
 
-        }
-    }
-}
-
-/**
- * Marktplatz: An/Aus, Status, Ruhezustand und Energieplan sind Basis und
- * immer gratis dabei. Zusaetze (Module) werden hier installiert; der Katalog
- * stammt aus dem GitHub-Repo, offline greift ein lokaler Fallback.
- */
-@Composable
-private fun MarketplaceTab(
-    modules: List<CatalogModule>,
-    installed: Set<String>,
-    source: String,
-    busy: Boolean,
-    onRefresh: () -> Unit,
-    onInstall: (CatalogModule) -> Unit,
-    onUninstall: (CatalogModule) -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Markt+",
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "Erweiterungen für deine PC-Steuerung",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-            IconButton(onClick = onRefresh, enabled = !busy) {
-                Icon(Icons.Default.Refresh, contentDescription = "Katalog aktualisieren")
-            }
-        }
-
-        // Ehrlich statt Fake-Markt: Die Module stecken bereits in der App.
-        // Der GitHub-Katalog bestimmt nur, welche Erweiterungen hier angeboten werden.
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = "Kein Download nötig: Diese Erweiterungen sind bereits in der App " +
-                    "enthalten. Der Katalog auf GitHub legt nur fest, was hier angeboten wird.",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(14.dp)
-            )
-        }
-
-        // Basis-Funktionen: immer enthalten und nicht abhaengig vom Katalog.
-        Text(
-            text = "IMMER DABEI",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.outline
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf("An/Aus", "Status", "Ruhezustand", "Energieplan").forEach { label ->
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh
-                ) {
-                    Text(
-                        text = label,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        }
-
-        Text(
-            text = "ERWEITERUNGEN",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.outline
-        )
-        Text(
-            text = "Katalog: $source · ${modules.size} Module",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
-
-        if (modules.isEmpty()) {
-            Text(
-                text = "Katalog ist leer – bitte oben aktualisieren oder später erneut versuchen.",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.outline
-            )
-        }
-
-        modules.forEachIndexed { index, module ->
-            ModuleCard(
-                module = module,
-                isInstalled = module.id in installed,
-                index = index,
-                busy = busy,
-                onInstall = { onInstall(module) },
-                onUninstall = { onUninstall(module) }
-            )
-        }
-
-        Text(
-            text = "Neue Module erscheinen automatisch im Katalog (per GitHub).",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.outline
-        )
-    }
-}
-
-/**
- * Karte fuer ein Markt-Modul: erscheint gestaffelt (Kascade) und animiert
- * die Auswahl-Farbe wie die Profil-Karten. Module, deren Feature-Code die
- * App noch nicht kennt (SUPPORTED_MODULES), zeigen einen Update-Hinweis
- * statt Buttons.
- */
-@Composable
-private fun ModuleCard(
-    module: CatalogModule,
-    isInstalled: Boolean,
-    index: Int,
-    busy: Boolean,
-    onInstall: () -> Unit,
-    onUninstall: () -> Unit,
-) {
-    Appearing(index = index) {
-        val containerColor by animateColorAsState(
-            targetValue = if (isInstalled) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-            animationSpec = tween(320, easing = FastOutSlowInEasing),
-            label = "moduleCardColor"
-        )
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = containerColor)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = module.name,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        if (module.version > 1 || isInstalled) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest
-                            ) {
-                                Text(
-                                    text = if (isInstalled) "installiert" else "v${module.version}",
-                                    fontSize = 10.sp,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        text = module.description.ifBlank { "Zusaetzliches PC-Modul." },
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                    if (module.id !in SUPPORTED_MODULES) {
-                        Text(
-                            text = "Kommt mit dem naechsten App-Update",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
-                }
-                when {
-                    module.id !in SUPPORTED_MODULES -> Unit // Hinweis genuegt
-                    isInstalled -> TextButton(enabled = !busy, onClick = onUninstall) {
-                        Text("Deinstallieren")
-                    }
-                    else -> TextButton(enabled = !busy, onClick = onInstall) {
-                        Text("Installieren")
-                    }
-                }
-            }
         }
     }
 }
