@@ -46,12 +46,32 @@ Status).
   `POST /setup`, `POST /mode?simulate=`, `GET /` (Web-UI-Gerüst),
   `GET /app.css`, `GET /app.js`,
   `GET /plugins`, `POST /plugins/{id}/start?game=&auto=`, `POST /plugins/{id}/stop`,
-  `GET /plugins/{id}/output?lines=`,
+  `GET /plugins/{id}/output?lines=`, `GET /plugins/{id}/bundle`,
+  `GET /plugin-catalog`, `POST /plugins/{id}/install`, `DELETE /plugins/{id}`,
   `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`.
-- **Plugins:** `src/plugins.rs` startet Hilfsprogramme nur auf Anforderung (kein
-  24/7-Dienst) und beendet sie wieder. Manifeste liegen in `<EXE>\plugins\*.json`
-  oder `<Datenordner>\plugins\*.json`; ohne Manifest gilt die eingebaute
-  Definition fuer `game-optimizer`.
+- **Plugins (neu, 15.11.2026):** `src/jsplugins.rs` betreibt JavaScript-Plugins mit
+  der eingebetteten Engine **Boa** (reines Rust, kein C-Toolchain nötig). Ein Plugin
+  ist ein Ordner im Datenordner: `<Datenordner>\plugins\<id>\plugin.json` (Manifest:
+  `id`, `name`, `entry`, `permissions`, `interval_ms`, `builtin`) plus `main.js`.
+  Der Agent startet Plugins nur auf Anforderung, jeder Thread bekommt eine eigene
+  `boa_engine::Context` und die freigegebenen Host-Funktionen (`pc.log`, `pc.metrics`,
+  `pc.status`, `pc.powerPlan`/`setPowerPlan`, `pc.shutdown`/`abort`/`hibernate`,
+  `pc.games`/`scanGames`/`gameConfig`, `pc.killProcesses`/`boost`/`cleanMemory`,
+  `pc.setStatus`, `pc.now`, `pc.isAdmin`) als `pc.*`; Dateien, Netzwerk und Prozesse
+  bleiben unzugänglich. Aufrufe sind JSON über die Brücke `__pc_host(name, json)`.
+  Lebenszyklus: `activate()` beim Start, `tick()` alle `interval_ms`, `stop()` beim
+  Beenden; der vorherige Energieplan wird von `game-optimizer` zurückgesetzt.
+  Verzeichnis: `<Datenordner>\plugins\<id>` (Datenordner hat Vorrang vor `<EXE>\plugins`).
+  Eingebaute Plugins (`game-optimizer`, `system-monitor`) werden beim ersten Start
+  in den Datenordner geschrieben und sind danach normal bearbeitbar/deinstallierbar.
+  Pakete für den Marktplatz sind JSON (`plugin.json` + Dateien), Katalog:
+  `plugin-catalog/plugins.json` im Repo (URL `CATALOG_URL` in `jsplugins.rs`),
+  Download per `curl.exe`. Ausgabe-Ringpuffer 300 Zeilen, Ergebniszeilen mit `>`
+  landen zusätzlich im Journal.
+- **Plugins (alt):** `src/plugins.rs` startet weiter EXE-Hilfsprogramme nur auf
+  Anforderung (Manifeste `<EXE>\plugins\*.json` oder `<Datenordner>\plugins\*.json`,
+  `bin` + `args`). Das frühere eingebaute `game-optimizer.exe` ist ersatzlos
+  entfallen – die Logik liegt jetzt im JavaScript-Plugin.
 - **Web-UI (Phase 1+2, 13.11.2026; Phase 3, 14.11.2026; Phase 4, 14.11.2026):** `src/page.html` (Gerüst),
   `src/app.css`, `src/app.js` – per `include_str!` im Binary, ohne Login unter `/`,
   `/app.css`, `/app.js`. **Phase 3:** SSE unter `GET /events/stream` (Rundruf alle 2 s
@@ -74,12 +94,14 @@ Status).
   `<dialog>`-Bestätigungsdialog statt `window.confirm()`.
 - **Einschalten per Routine gibt es bewusst nicht:** Der Agent läuft nur, wenn der
   PC an ist; WoL bräuchte ein zweites Gerät oder einen RTC-Wake-Timer.
-- **Game Optimization:** Plugin-Binary `game-optimizer.exe` (neben `pc-agent.exe`),
-  Quellcode `src/bin/game-optimizer.rs`. Macht Energieplan -> Hoechstleistung,
-  schliesst die Kill-Liste, bereinigt Arbeitsspeicher (Working Sets + Standby-Liste
-  ueber Windows-API, Admin fuer Standby) und setzt die Spiel-Prioritaet; auf `stop`
-  wird der vorherige Energieplan zurueckgesetzt. Web-UI-Tab „Game Optimization“.
-  Spiele-Scan (`src/games.rs`) liest Steam, Epic, GOG und eigene Ordner.
+- **Game Optimization:** JavaScript-Plugin `game-optimizer` (siehe oben), Quelltext
+  im Agenten (`GAME_OPTIMIZER_JS` in `jsplugins.rs`), Windows-Helfer in
+  `src/optimize.rs`. Energieplan -> Hoechstleistung, Kill-Liste schliessen,
+  Arbeitsspeicher bereinigen (Working Sets + Standby-Liste, Admin fuer Standby),
+  Spiel-Prioritaet; auf `stop` wird der vorherige Energieplan zurueckgesetzt.
+  Das alte EXE-Programm `src/bin/game-optimizer.rs` bleibt als Referenz/Notfall.
+  Web-UI-Tab „Game Optimization“. Spiele-Scan (`src/games.rs`) liest Steam, Epic,
+  GOG und eigene Ordner.
 - Datenordner: `%LOCALAPPDATA%\PC Steuerung` (per `PC_AGENT_DATA` überschreibbar).
   Dort liegen `credentials.json`, `token.json`, `device.json`, `routines.json`,
   `agent.log`, `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE
@@ -133,6 +155,12 @@ Status).
 
 - Agent per `curl` testen (`/status`, `/shutdown?delay=60`, `/abort`, `/power-plan`,
   `/wake?mac=AA:BB:CC:DD:EE:FF&port=9`, …); Simulationsmodus ist Default.
+- **Plugins:** `curl http://127.0.0.1:8000/plugins`,
+  `curl -X POST -H "X-PC-Steuerung: 1" http://127.0.0.1:8000/plugins/system-monitor/start`,
+  danach `curl "http://127.0.0.1:8000/plugins/system-monitor/output?lines=20"`;
+  `GET /plugins/{id}/bundle` liefert das Paket, `DELETE /plugins/{id}` entfernt es.
+  Eigene Plugins: Ordner im Datenordner anlegen, Manifest schreiben, Agent neu starten
+  (das Manifest wird beim Start gelesen, der Code erst beim Start des Plugins).
 - **CSRF:** schreibende Aufrufe von `localhost` brauchen die Kopfzeile
   `X-PC-Steuerung: 1`, sonst antwortet der Agent mit 403 (Schutz gegen fremde
   Webseiten, weil localhost ohne Login erreichbar ist):

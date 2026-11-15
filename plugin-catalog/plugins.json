@@ -1,0 +1,21 @@
+{
+  "catalogVersion": 1,
+  "source": "github:ege16tan/pc-steuerung",
+  "description": "Plugin-Katalog fuer den PC-Agenten. Jedes Paket ist eine JSON-Datei mit Manifest und Dateien (siehe README).",
+  "plugins": [
+    {
+      "id": "game-optimizer",
+      "name": "Game Optimization",
+      "description": "Optimiert den PC fuer ein Spiel: Energieplan, Hintergrund-Apps, Arbeitsspeicher.",
+      "version": "1",
+      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/game-optimizer.json"
+    },
+    {
+      "id": "system-monitor",
+      "name": "System-Monitor",
+      "description": "Meldet CPU- und RAM-Auslastung im Plugin-Log (alle 5 s).",
+      "version": "1",
+      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/system-monitor.json"
+    }
+  ]
+}

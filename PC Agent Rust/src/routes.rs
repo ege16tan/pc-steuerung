@@ -20,7 +20,7 @@ use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Json, Response};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::app::{parse_role, remaining_seconds, App, Credentials, DeviceSettings, TokenCredentials, UserEntry};
 use crate::auth::{create_credentials, Auth, WriteAuth};
@@ -825,7 +825,119 @@ pub async fn log_ep(
 
 /// GET /plugins — alle bekannten Plugins mit Laufzeitstatus.
 pub async fn plugins_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
-    Json(json!({ "plugins": crate::plugins::describe(&app) })).into_response()
+    let mut list = crate::plugins::describe(&app);
+    list.extend(crate::jsplugins::describe(&app));
+    list.sort_by_key(|entry| {
+        entry
+            .get("name")
+            .and_then(|name| name.as_str())
+            .unwrap_or_default()
+            .to_lowercase()
+    });
+    Json(json!({ "plugins": list })).into_response()
+}
+
+/// Installiert das JavaScript-Plugin mit dieser ID, sonst None.
+fn js_manifest(app: &App, id: &str) -> Option<crate::jsplugins::Manifest> {
+    crate::jsplugins::manifests(app)
+        .into_iter()
+        .find(|manifest| manifest.id == id)
+}
+
+/// POST /plugins/{id}/install — Plugin aus dem Katalog nachladen.
+pub async fn plugin_install(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: WriteAuth,
+) -> Response {
+    let worker = Arc::clone(&app);
+    let wanted = id.clone();
+    let result = tokio::task::spawn_blocking(move || crate::jsplugins::install_from_catalog(&worker, &wanted))
+        .await
+        .unwrap_or_else(|error| Err(format!("Abbruch: {error}")));
+    match result {
+        Ok(manifest) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(
+                &app,
+                &mut guard,
+                "plugin",
+                &format!("{} installiert", manifest.name),
+                true,
+            );
+            Json(json!({
+                "ok": true,
+                "id": manifest.id,
+                "name": manifest.name,
+                "version": manifest.version,
+            }))
+            .into_response()
+        }
+        Err(message) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(&app, &mut guard, "plugin", &message, false);
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+    }
+}
+
+/// DELETE /plugins/{id} — installiertes Plugin entfernen.
+pub async fn plugin_delete(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: WriteAuth,
+) -> Response {
+    match crate::jsplugins::uninstall(&app, &id) {
+        Ok(()) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(&app, &mut guard, "plugin", &format!("{id} entfernt"), true);
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(message) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(&app, &mut guard, "plugin", &message, false);
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+    }
+}
+
+/// GET /plugins/{id}/bundle — installiertes Plugin als Paket (JSON).
+///
+/// Damit kann ein Plugin vom PC in den Katalog uebernommen oder auf ein
+/// anderes Geraet uebertragen werden.
+pub async fn plugin_bundle(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: Auth,
+) -> Response {
+    match crate::jsplugins::bundle_of(&app, &id) {
+        Ok(bundle) => Json(bundle).into_response(),
+        Err(message) => error_response(StatusCode::NOT_FOUND, message),
+    }
+}
+
+/// GET /plugin-catalog — was der Marktplatz anbietet.
+pub async fn plugin_catalog_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let catalog = crate::jsplugins::catalog(&app);
+    let installed: Vec<String> = crate::jsplugins::manifests(&app)
+        .into_iter()
+        .map(|manifest| manifest.id)
+        .collect();
+    let list: Vec<Value> = catalog
+        .into_iter()
+        .map(|entry| {
+            let installed_flag = installed.contains(&entry.id);
+            json!({
+                "id": entry.id,
+                "name": entry.name,
+                "description": entry.description,
+                "version": entry.version,
+                "installed": installed_flag,
+                "kind": "javascript",
+            })
+        })
+        .collect();
+    Json(json!({ "catalogVersion": 1, "plugins": list })).into_response()
 }
 
 /// POST /plugins/{id}/start?game=&auto= — Plugin starten (nur auf Knopfdruck).
@@ -867,6 +979,18 @@ pub async fn plugin_start(
         }
     }
 
+    // JavaScript-Plugin? Dann laeuft es im Agenten, nicht als EXE.
+    if js_manifest(&app, &id).is_some() {
+        return match crate::jsplugins::start(&app, &id, game, auto) {
+            Ok(value) => Json(value).into_response(),
+            Err(message) => {
+                let mut guard = app.inner.lock().expect("Zustands-Sperre");
+                log_event(&app, &mut guard, "plugin", &message, false);
+                error_response(StatusCode::BAD_REQUEST, message)
+            }
+        };
+    }
+
     match crate::plugins::start(&app, &id, game, auto, simulate) {
         Ok(value) => Json(value).into_response(),
         Err(message) => {
@@ -883,6 +1007,18 @@ pub async fn plugin_stop(
     Path(id): Path<String>,
     _auth: WriteAuth,
 ) -> Response {
+    if js_manifest(&app, &id).is_some() {
+        let worker = Arc::clone(&app);
+        let wanted = id.clone();
+        let result = tokio::task::spawn_blocking(move || crate::jsplugins::stop(&worker, &wanted))
+            .await
+            .unwrap_or_else(|_| Err("Abbruch fehlgeschlagen".to_string()));
+        return match result {
+            Ok(detail) => Json(json!({ "ok": true, "id": id, "detail": detail })).into_response(),
+            Err(message) => error_response(StatusCode::CONFLICT, message),
+        };
+    }
+
     let run = match crate::plugins::take_run(&app, &id) {
         Ok(run) => run,
         Err(message) => return error_response(StatusCode::CONFLICT, message),
@@ -906,6 +1042,9 @@ pub async fn plugin_output(
         Ok(lines) => lines,
         Err(message) => return error_response(StatusCode::UNPROCESSABLE_ENTITY, message),
     };
+    if js_manifest(&app, &id).is_some() {
+        return crate::jsplugins::output(&app, &id, lines).into_response();
+    }
     crate::plugins::output(&app, &id, lines).into_response()
 }
 

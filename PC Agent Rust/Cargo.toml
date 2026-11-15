@@ -20,6 +20,7 @@ subtle = "2"
 getrandom = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+boa_engine = "0.22"
 
 [patch.crates-io]
 windows-link = { path = "patches/windows-link" }

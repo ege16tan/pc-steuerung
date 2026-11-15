@@ -22,8 +22,10 @@ mod auth;
 mod commands;
 mod games;
 mod journal;
+mod jsplugins;
 mod live;
 mod metrics;
+mod optimize;
 mod page;
 mod pairing;
 mod plugins;
@@ -65,6 +67,8 @@ fn main() {
     // Spiel-Optimierung: Standardprofil einmal anlegen, damit Plugin und
     // Web-Oberflaeche dieselbe Kill-Liste sehen.
     games::ensure_config(shared.as_ref());
+    // JavaScript-Plugins beim ersten Start in den Datenordner schreiben.
+    jsplugins::ensure_builtins(shared.as_ref());
 
     let credentials_missing = {
         let guard = shared.inner.lock().expect("Zustands-Sperre");
@@ -177,9 +181,13 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/routines/{id}", axum::routing::delete(routes::routine_delete))
         .route("/routines/{id}/run", axum::routing::post(routes::routine_run))
         .route("/plugins", axum::routing::get(routes::plugins_ep))
+        .route("/plugin-catalog", axum::routing::get(routes::plugin_catalog_ep))
+        .route("/plugins/{id}/install", axum::routing::post(routes::plugin_install))
+        .route("/plugins/{id}", axum::routing::delete(routes::plugin_delete))
         .route("/plugins/{id}/start", axum::routing::post(routes::plugin_start))
         .route("/plugins/{id}/stop", axum::routing::post(routes::plugin_stop))
         .route("/plugins/{id}/output", axum::routing::get(routes::plugin_output))
+        .route("/plugins/{id}/bundle", axum::routing::get(routes::plugin_bundle))
         .route("/games", axum::routing::get(routes::games_ep))
         .route("/games/scan", axum::routing::post(routes::games_scan_ep))
         .route(

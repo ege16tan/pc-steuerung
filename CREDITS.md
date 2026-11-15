@@ -33,7 +33,8 @@ MIT, Lizenztext in `.agents/skills/LICENSE-obsidian-skills.txt`).
 | [base64](https://crates.io/crates/base64) | Token-/Hash-Kodierung |
 | [getrandom](https://crates.io/crates/getrandom) | Zufall für Salt/Tokens |
 | [chrono](https://crates.io/crates/chrono) | Zeitstempel im Log |
-| [patches/windows-link](patches/windows-link) (eigenes Patch-Crate) | Bauen mit GNU-Toolchain ohne `dlltool` |
+| [boa_engine](https://crates.io/crates/boa_engine) | Eingebettete JavaScript-Engine (reines Rust) für die Plugins |
+| [patches/windows-link](patches/windows-link) (eigenes Patch-Crate) | Bauen mit GNU-Toolchain ohne `dlltool`; das Build-Skript legt Alias-Importbibliotheken an, damit auch `cdylib`-Abhängigkeiten (boa_engine) linken |
 
 ## Android-App
 

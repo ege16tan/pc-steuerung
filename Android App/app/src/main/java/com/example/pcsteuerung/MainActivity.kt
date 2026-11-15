@@ -1058,6 +1058,12 @@ fun MainApp(
     var catalogSource by remember { mutableStateOf("Lokal (Fallback)") }
     var catalogRefresh by remember { mutableStateOf(0) }
 
+    // Plugins des PC-Agenten: Liste und Katalog kommen vom laufenden Agenten,
+    // nicht aus der App selbst. Nachgeladen, sobald der Markt+ sichtbar wird.
+    var plugins by remember { mutableStateOf<List<PluginInfo>>(emptyList()) }
+    var pluginCatalog by remember { mutableStateOf<List<PluginCatalogEntry>>(emptyList()) }
+    var pluginRefresh by remember { mutableIntStateOf(0) }
+
     fun installModule(module: CatalogModule) {
         val next = installedModules + module.id
         ModuleStore.save(context, next)
@@ -1071,6 +1077,45 @@ fun MainApp(
         installedModules = next
         message = "${module.name} deinstalliert"
     }
+
+    // ---------------- Plugins des Agenten ----------------
+
+    fun pluginAction(path: String, method: String, success: String) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(active.base, path, active.authHeader(), method)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Plugin-Aktion fehlgeschlagen: $path", e)
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
+                }
+                message = if (result.startsWith("HTTP ") || result.startsWith("Nicht")) {
+                    result
+                } else {
+                    success
+                }
+                pluginRefresh++
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun startPlugin(plugin: PluginInfo) =
+        pluginAction("/plugins/${plugin.id}/start", "POST", "${plugin.name} gestartet")
+
+    fun stopPlugin(plugin: PluginInfo) =
+        pluginAction("/plugins/${plugin.id}/stop", "POST", "${plugin.name} beendet")
+
+    fun removePlugin(plugin: PluginInfo) =
+        pluginAction("/plugins/${plugin.id}", "DELETE", "${plugin.name} entfernt")
+
+    fun installPlugin(entry: PluginCatalogEntry) =
+        pluginAction("/plugins/${entry.id}/install", "POST", "${entry.name} installiert")
 
     LaunchedEffect(catalogRefresh) {
         val remote = withContext(Dispatchers.IO) {
@@ -1095,6 +1140,26 @@ fun MainApp(
             snackbarHostState.showSnackbar(it)
             message = null
         }
+    }
+
+    // Plugins immer frisch laden, wenn der Markt+ nach vorn kommt.
+    LaunchedEffect(active, pluginRefresh, tab) {
+        if (tab != 1) return@LaunchedEffect
+        val snapshot = withContext(Dispatchers.IO) {
+            try {
+                PluginSnapshot(
+                    plugins = parsePlugins(httpCall(active.base, "/plugins", active.authHeader())),
+                    catalog = parsePluginCatalog(
+                        httpCall(active.base, "/plugin-catalog", active.authHeader())
+                    ),
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Plugins konnten nicht geladen werden", e)
+                null
+            }
+        }
+        plugins = snapshot?.plugins.orEmpty()
+        pluginCatalog = snapshot?.catalog.orEmpty()
     }
 
     LaunchedEffect(startWithShutdownConfirm) {
@@ -1372,6 +1437,13 @@ fun MainApp(
                         onRefresh = { catalogRefresh++ },
                         onInstall = ::installModule,
                         onUninstall = ::uninstallModule,
+                        plugins = plugins,
+                        pluginCatalog = pluginCatalog,
+                        onPluginRefresh = { pluginRefresh++ },
+                        onPluginStart = ::startPlugin,
+                        onPluginStop = ::stopPlugin,
+                        onPluginRemove = ::removePlugin,
+                        onPluginInstall = ::installPlugin,
                     )
                     2 -> PlanTab(
                         activePlan = state.plan,
@@ -1937,6 +2009,13 @@ private fun MarketplaceTab(
     onRefresh: () -> Unit,
     onInstall: (CatalogModule) -> Unit,
     onUninstall: (CatalogModule) -> Unit,
+    plugins: List<PluginInfo>,
+    pluginCatalog: List<PluginCatalogEntry>,
+    onPluginRefresh: () -> Unit,
+    onPluginStart: (PluginInfo) -> Unit,
+    onPluginStop: (PluginInfo) -> Unit,
+    onPluginRemove: (PluginInfo) -> Unit,
+    onPluginInstall: (PluginCatalogEntry) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -2044,6 +2123,199 @@ private fun MarketplaceTab(
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.outline
         )
+
+        // ---------------- Plugins des PC-Agenten ----------------
+        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.plugins_section_title),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                Text(
+                    text = stringResource(R.string.plugins_section_subtitle),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+            IconButton(onClick = onPluginRefresh, enabled = !busy) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.plugins_refresh)
+                )
+            }
+        }
+
+        if (plugins.isEmpty()) {
+            Text(
+                text = stringResource(R.string.plugins_empty),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+
+        plugins.forEachIndexed { index, plugin ->
+            PluginCard(
+                plugin = plugin,
+                index = index,
+                busy = busy,
+                onStart = { onPluginStart(plugin) },
+                onStop = { onPluginStop(plugin) },
+                onRemove = { onPluginRemove(plugin) },
+            )
+        }
+
+        if (pluginCatalog.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.plugins_catalog_title),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline
+            )
+            pluginCatalog.forEach { entry ->
+                PluginCatalogRow(
+                    entry = entry,
+                    busy = busy,
+                    onInstall = { onPluginInstall(entry) },
+                )
+            }
+        }
+    }
+}
+
+/** Karte fuer ein Plugin des Agenten: Zustand, letzte Zeilen, Aktionen. */
+@Composable
+private fun PluginCard(
+    plugin: PluginInfo,
+    index: Int,
+    busy: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Appearing(index = index) {
+        val containerColor by animateColorAsState(
+            targetValue = if (plugin.running) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            },
+            animationSpec = tween(320, easing = FastOutSlowInEasing),
+            label = "pluginCardColor"
+        )
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = containerColor)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = plugin.name,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest
+                    ) {
+                        Text(
+                            text = if (plugin.kind == "javascript") "JS" else "EXE",
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = pluginStateLabel(plugin),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (plugin.description.isNotBlank()) {
+                    Text(
+                        text = plugin.description,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                if (plugin.tail.isNotEmpty()) {
+                    Text(
+                        text = plugin.tail.takeLast(3).joinToString("\n"),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (plugin.running) {
+                        TextButton(
+                            enabled = !busy,
+                            onClick = onStop
+                        ) { Text(stringResource(R.string.plugins_stop)) }
+                    } else {
+                        TextButton(
+                            enabled = !busy && plugin.installed,
+                            onClick = onStart
+                        ) { Text(stringResource(R.string.plugins_start)) }
+                    }
+                    if (plugin.installed && !plugin.builtin) {
+                        TextButton(
+                            enabled = !busy,
+                            onClick = onRemove
+                        ) { Text(stringResource(R.string.plugins_remove)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Zeile im Plugin-Katalog: Name, Beschreibung, Installieren-Knopf. */
+@Composable
+private fun PluginCatalogRow(
+    entry: PluginCatalogEntry,
+    busy: Boolean,
+    onInstall: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = entry.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(
+                text = entry.description.ifBlank { "Plugin fuer den PC-Agenten." },
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+        if (entry.installed) {
+            Text(
+                text = stringResource(R.string.plugins_installed),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+        } else {
+            TextButton(
+                enabled = !busy,
+                onClick = onInstall
+            ) { Text(stringResource(R.string.plugins_install)) }
+        }
     }
 }
 

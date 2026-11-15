@@ -5,15 +5,15 @@
 //! Nichts laeuft dauerhaft mit – der Agent gibt das Signal, das Plugin arbeitet.
 //!
 //! Aufbau: `<EXE-Ordner>\plugins\*.json` (oder `<Datenordner>\plugins\*.json`)
-//! beschreibt ein Plugin:
+//! beschreibt ein eigenstaendiges Hilfsprogramm:
 //!
 //! ```json
-//! { "id": "game-optimizer", "name": "Game Optimization",
-//!   "description": "...", "version": "1", "bin": "game-optimizer.exe", "args": [] }
+//! { "id": "helper", "name": "Helfer",
+//!   "description": "...", "version": "1", "bin": "helper.exe", "args": [] }
 //! ```
 //!
-//! Fehlt das Manifest, greift fuer `game-optimizer` eine eingebaute Definition,
-//! die `game-optimizer.exe` neben der Agenten-EXE sucht.
+//! Neuere Plugins laufen als JavaScript direkt im Agenten (`jsplugins.rs`);
+//! dieses Modul ist fuer alte EXE-Plugins weiter da.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -37,9 +37,6 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// So viele Ausgabezeilen werden je Plugin aufbewahrt.
 pub const OUTPUT_MAX: usize = 300;
-
-/// ID des eingebauten Plugins (Game Optimization).
-pub const BUILTIN_GAME_OPTIMIZER: &str = "game-optimizer";
 
 /// Manifest eines Plugins.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -84,7 +81,8 @@ fn now_epoch() -> f64 {
 }
 
 /// Sucht Manifeste: erst neben der EXE, dann im Datenordner. Der erste Treffer
-/// je ID gewinnt; ohne Manifest gibt es die eingebaute Game-Optimization-Definition.
+/// je ID gewinnt. Das frühere eingebaute `game-optimizer`-Laufzeitprogramm
+/// wurde durch das JavaScript-Plugin in `jsplugins.rs` ersetzt.
 pub fn manifests(app: &App) -> Vec<Manifest> {
     let mut out: Vec<Manifest> = Vec::new();
     for dir in [app.exe_dir.join("plugins"), app.data_dir.join("plugins")] {
@@ -107,18 +105,6 @@ pub fn manifests(app: &App) -> Vec<Manifest> {
             }
             out.push(manifest);
         }
-    }
-    if !out.iter().any(|known| known.id == BUILTIN_GAME_OPTIMIZER) {
-        out.push(Manifest {
-            id: BUILTIN_GAME_OPTIMIZER.to_string(),
-            name: "Game Optimization".to_string(),
-            description:
-                "Optimiert den PC fuer ein Spiel: Energieplan, Hintergrund-Apps, Arbeitsspeicher."
-                    .to_string(),
-            version: "1".to_string(),
-            bin: "game-optimizer.exe".to_string(),
-            args: Vec::new(),
-        });
     }
     out.sort_by_key(|manifest| manifest.name.to_lowercase());
     out
@@ -400,10 +386,11 @@ mod tests {
     }
 
     #[test]
-    fn eingebautes_plugin_ist_immer_bekannt() {
+    fn ohne_manifeste_gibt_es_keine_laufzeitprogramme() {
         let (app, dir) = test_app("plugins-builtin");
-        let list = manifests(&app);
-        assert!(list.iter().any(|m| m.id == BUILTIN_GAME_OPTIMIZER));
+        // Das frühere eingebaute `game-optimizer.exe` ist durch das
+        // JavaScript-Plugin ersetzt; ohne Manifeste bleibt die Liste leer.
+        assert!(manifests(&app).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -418,11 +405,8 @@ mod tests {
         )
         .unwrap();
         let list = manifests(&app);
-        let found = list
-            .iter()
-            .filter(|m| m.id == BUILTIN_GAME_OPTIMIZER)
-            .count();
-        assert_eq!(found, 1, "eingebaute Definition darf das Manifest nicht doppeln");
+        assert_eq!(list.len(), 1, "das Manifest darf nicht doppeln");
+        assert_eq!(list[0].id, "game-optimizer");
         assert_eq!(list[0].version, "1");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -438,7 +422,14 @@ mod tests {
     #[test]
     fn start_ohne_datei_meldet_fehlendes_programm() {
         let (app, dir) = test_app("plugins-missing-bin");
-        let error = start(&app, BUILTIN_GAME_OPTIMIZER, None, false, true).unwrap_err();
+        let plugin_dir = dir.join("plugins");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("demo.json"),
+            r#"{"id":"demo","name":"Demo","bin":"gibtsnicht.exe"}"#,
+        )
+        .unwrap();
+        let error = start(&app, "demo", None, false, true).unwrap_err();
         assert!(error.contains("nicht gefunden"), "unerwartet: {error}");
         std::fs::remove_dir_all(&dir).unwrap();
     }

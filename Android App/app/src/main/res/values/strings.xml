@@ -43,4 +43,16 @@
     <string name="settings_simulation_off">Aus – Aktionen werden wirklich ausgeführt</string>
     <string name="settings_simulation_unknown">Modus kann gerade nicht ermittelt werden</string>
     <string name="settings_webui">PC-Weboberfläche</string>
+
+    <!-- Plugins des PC-Agenten (Markt+) -->
+    <string name="plugins_section_title">PLUGINS AUF DEM PC</string>
+    <string name="plugins_section_subtitle">Lokale Plugins im Agenten – laden, starten, entfernen</string>
+    <string name="plugins_empty">Keine Plugins gefunden – läuft der Agent gerade?</string>
+    <string name="plugins_catalog_title">KATALOG</string>
+    <string name="plugins_refresh">Plugins aktualisieren</string>
+    <string name="plugins_start">Start</string>
+    <string name="plugins_stop">Stopp</string>
+    <string name="plugins_remove">Entfernen</string>
+    <string name="plugins_install">Installieren</string>
+    <string name="plugins_installed">installiert</string>
 </resources>

@@ -43,13 +43,16 @@
 - [x] **v0.9.5 (11.11.2026):** Homescreen-Widget entfernt (war nie gewollt), GUI-Launcher ersetzt (Agent läuft rein im Hintergrund), Tray startet automatisch mit dem Agenten, Debug-Konsole `start-agent-debug.bat`, Simulationsmodus ist jetzt die Ausnahme (Banner zeigt Simulation, Echt ist Standard), Statuspunkt bei „PC aus" rot, Setup lässt sich verlassen (Zurück-Button), Markt+ mit Basis-Chips und Versions-Badges, Energieplan mit animierter Aktiv-Leiste, weicher Theme-Wechsel, UI-Texte nach `strings.xml`, `CREDITS.md`
 - [x] **v0.9.6 (12.11.2026):** Setup ohne Schritt 0 (Einstieg direkt bei „Verbindung" inkl. QR-Scan, Felder werden automatisch gefüllt), echter Theme-Crossfade (alle Farben animiert) statt Abblend-Hack, Markt+ ist ehrlich (kein Fake-Download: Module sind enthalten, Katalog steuert nur das Angebot), Agent läuft dauerhaft (Autostart-Aufgaben + Tray-Watchdog), Echtbetrieb ist Default (`PC_AGENT_SIMULATE=0`)
 - [x] **Web-UI Phase 4 (14.11.2026):** Routinen (Uhrzeit/Wochentage oder manuell, Herunterfahren/Ruhezustand/Energieplan, `routines.json`, Scheduler alle 10 s) inkl. Kachel „Routinen"; eigener Bestätigungsdialog statt `window.confirm()`; gemeinsame Aktionsschicht `actions.rs`
+- [x] **Plugin-System neu (15.11.2026):** JavaScript-Plugins laufen direkt im Agenten (Engine Boa, reines Rust – kein C-Toolchain nötig). Manifest + `main.js` im Datenordner, Freigaben pro Plugin (`log`, `status`, `metrics`, `power`, `games`, `process`), Host-API `pc.*`, `activate()`/`tick()`/`stop()`, Ausgabe im UI. Endpunkte `/plugins`, `/plugin-catalog`, `/plugins/{id}/install`, `DELETE /plugins/{id}`, `/plugins/{id}/bundle`. Eingebaute Plugins `game-optimizer` und `system-monitor`, Markt+ zeigt sie in der Android-App
+- [x] **Build-Härtung (15.11.2026):** `windows-link`-Patch erzeugt Alias-Importbibliotheken (`lib*.dll.a`), damit GNU-Toolchain und `cdylib` (boa_engine) ohne `dlltool` linken; `getrandom` fährt den Legacy-Backend (`advapi32`)
 
 ## Geplant
 
 - [x] Routinen (ersetzt den Zeitplan): Auslöser (Uhrzeit, App-Knopf) + Aktionen
   (Herunterfahren, Ruhezustand, Energieplan); PC muss dafür wach/entsperrt bleiben
 - [ ] Routinen erweitern: Ereignis-Auslöser, Android-Kachel
-- [ ] Module: Katalog künftig per Release erweitern (z. B. Screenshots, Dateien)
+- [ ] Plugin-Katalog per GitHub Release befüllen (Pakete liegen unter `plugin-catalog/`)
+- [ ] Web-UI: Plugin-Liste für alle Plugins (statt nur Game-Optimization-Kachel)
 
 - [ ] Finales Design (Restpolitur)
 - [ ] Automatisierte Tests für den Rust-Agenten (HTTP-Endpunkte)

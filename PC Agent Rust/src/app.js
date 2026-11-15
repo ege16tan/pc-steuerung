@@ -30,6 +30,7 @@ const state = {
   games: [],
   scannedAt: null,
   plugin: null,
+  plugins: [],
   pairing: null,
   simulate: true,
   connected: false,
@@ -345,6 +346,17 @@ function mount() {
   $('btnAuto').onclick = () => runAction(autoOptimize);
   $('btnStopGame').onclick = () => runAction(stopOptimize);
   $('btnScan').onclick = () => runAction(scanGames);
+  $('pluginList').onclick = (event) => {
+    const button = event.target.closest('button');
+    if (!button || !guardWrite()) return;
+    const start = button.dataset.pluginStart;
+    const stop = button.dataset.pluginStop;
+    if (start) {
+      runAction(() => api('/plugins/' + encodeURIComponent(start) + '/start', { method: 'POST' }));
+    } else if (stop) {
+      runAction(() => api('/plugins/' + encodeURIComponent(stop) + '/stop', { method: 'POST' }));
+    }
+  };
   $('gameSelect').onchange = () => {
     state.selectedGame = $('gameSelect').value;
     renderPlugin();
@@ -656,17 +668,56 @@ function renderPlugin() {
   if (!plugin) {
     line.textContent = 'Plugin wird geladen …';
   } else if (!plugin.available) {
-    line.textContent = 'Plugin-Datei fehlt (game-optimizer.exe neben dem Agenten).';
+    line.textContent = 'Plugin ist nicht installiert.';
   } else if (running) {
     const game = plugin.game ? plugin.game.split('\\').pop() : 'ohne Spiel';
     line.innerHTML = '<span class="chip">aktiv</span> ' + esc(game) + ' · seit ' +
-      fmtUptime(plugin.uptime) + (plugin.auto ? ' · automatisch' : '');
+      fmtUptime(plugin.uptime) + (plugin.auto ? ' · automatisch' : '') +
+      (plugin.status ? ' · ' + esc(plugin.status) : '');
   } else {
     line.textContent = state.games.length
       ? 'Plugin ist nicht aktiv. ' + state.games.length + ' Spiele gefunden.'
       : 'Plugin ist nicht aktiv. Noch keine Spiele gescannt.';
   }
   $('pluginLog').textContent = plugin && plugin.tail ? plugin.tail.join('\n') : '';
+  renderPluginList();
+}
+
+function pluginStateText(item) {
+  if (!item.available) return 'fehlt';
+  return item.running ? 'aktiv' : 'bereit';
+}
+
+/// Liste aller Plugins (Game Optimization hat oben eine eigene Kachel).
+function renderPluginList() {
+  const host = $('pluginList');
+  if (!host) return;
+  const list = state.plugins || [];
+  if (!list.length) {
+    host.innerHTML = '<div class="mut">Keine Plugins installiert.</div>';
+    return;
+  }
+  host.innerHTML = list.map((item) => {
+    const running = !!item.running;
+    const kind = item.kind === 'javascript' ? 'JS' : 'EXE';
+    const tail = (item.tail || []).slice(-3);
+    return '<div class="pluginRow">' +
+      '<div class="row" style="gap:8px">' +
+      '<b>' + esc(item.name || item.id) + '</b>' +
+      '<span class="chip">' + pluginStateText(item) + '</span>' +
+      '<span class="mut">' + kind + ' · v' + esc(item.version || '1') + '</span>' +
+      (running && item.status ? '<span class="mut">' + esc(item.status) + '</span>' : '') +
+      '</div>' +
+      (item.description ? '<div class="mut">' + esc(item.description) + '</div>' : '') +
+      '<div class="btns" style="margin-top:6px">' +
+      (running
+        ? '<button type="button" class="ghost" data-plugin-stop="' + esc(item.id) + '">Beenden</button>'
+        : '<button type="button" class="go" data-plugin-start="' + esc(item.id) + '"' +
+        (canWrite() && item.available ? '' : ' disabled') + '>Starten</button>') +
+      '</div>' +
+      (tail.length ? '<div class="gamestate">' + tail.map(esc).join('<br>') + '</div>' : '') +
+      '</div>';
+  }).join('');
 }
 
 /* ---------------- Aktionen ---------------- */
@@ -811,11 +862,13 @@ async function refreshMetrics() {
 async function refreshPlugin() {
   if (!state.connected) {
     state.plugin = null;
+    state.plugins = [];
     return;
   }
   try {
     const data = await api('/plugins');
-    state.plugin = (data.plugins || []).find((item) => item.id === 'game-optimizer') || null;
+    state.plugins = data.plugins || [];
+    state.plugin = state.plugins.find((item) => item.id === 'game-optimizer') || null;
   } catch (error) {
     // Anzeige bleibt stehen; der nächste Durchlauf versucht es erneut.
   }

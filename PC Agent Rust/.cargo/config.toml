@@ -1,0 +1,9 @@
+# Die GNU-Toolchain (x86_64-pc-windows-gnu) bringt kein `dlltool` mit.
+# `getrandom 0.4` (ueber `boa_engine` -> `rand`) bindet `bcryptprimitives.dll`
+# per raw-dylib, was genau dieses Werkzeug braucht. Der Legacy-Backend nimmt
+# stattdessen `RtlGenRandom` aus `advapi32` (klassische Import-Bibliothek).
+[build]
+rustflags = [
+    "--cfg",
+    'getrandom_backend="windows_legacy"',
+]
