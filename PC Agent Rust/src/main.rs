@@ -31,6 +31,7 @@ mod pairing;
 mod plugins;
 mod routines;
 mod routes;
+mod steam;
 mod wol;
 
 use std::net::SocketAddr;
@@ -194,6 +195,9 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
             "/game-config",
             axum::routing::get(routes::game_config_get).post(routes::game_config_set),
         )
+        // Steam-Erkennung (nur Lesen): Status fuer Plugin und App.
+        .route("/steam", axum::routing::get(routes::steam_ep))
+        .route("/downloads", axum::routing::get(routes::downloads_ep))
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
         // CSRF: schreibende Anfragen von localhost brauchen die Kopfzeile

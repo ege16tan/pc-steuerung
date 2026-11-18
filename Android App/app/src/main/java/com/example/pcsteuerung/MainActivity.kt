@@ -45,6 +45,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -52,10 +56,14 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
@@ -68,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -79,6 +88,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -96,7 +106,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONArray
+import org.json.JSONObject
 
 const val EXTRA_CONFIRM_SHUTDOWN = "confirm_shutdown"
 const val ACTION_SHORTCUT_SHUTDOWN = "com.example.pcsteuerung.action.SHORTCUT_SHUTDOWN"
@@ -106,8 +119,26 @@ class MainActivity : ComponentActivity() {
     private val confirmShutdownRequest = mutableStateOf(false)
     private val wakeRequest = mutableStateOf(false)
 
+    // Live-Benachrichtigung (Now Bar): ab Android 13 muss die Berechtigung
+    // erfragt werden, sonst zeigt der Dienst nichts an.
+    private val liveNotificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
+    private fun ensureLiveNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        runCatching { liveNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Live-Benachrichtigung einmal anstossen; der Dienst beendet sich
+        // selbst, wenn es nichts anzuzeigen gibt (Download/Countdown/Start).
+        ensureLiveNotificationPermission()
+        if (ProfileStore.active(this)?.isComplete == true) LiveStatusService.startSync(this)
         // Bei einer Neuerstellung (z. B. Drehung) den alten Shortcut-Intent
         // nicht erneut ausloesen - sonst wuerde der PC erneut geweckt.
         if (savedInstanceState == null) {
@@ -177,8 +208,17 @@ class MainActivity : ComponentActivity() {
 
 private const val TAG = "PCSteuerung"
 
-/** Blockierender HTTP-Aufruf, immer aus Dispatchers.IO heraus verwenden. */
-fun httpCall(base: String, path: String, auth: AuthHeader?, method: String = "GET"): String {
+/**
+ * Blockierender HTTP-Aufruf, immer aus Dispatchers.IO heraus verwenden.
+ * [body] wird als JSON mitgeschickt (nur fuer POST/PUT noetig, z. B. Routinen).
+ */
+fun httpCall(
+    base: String,
+    path: String,
+    auth: AuthHeader?,
+    method: String = "GET",
+    body: String? = null,
+): String {
     Log.d(TAG, "HTTP $method ${base + path}")
     val conn = URL(base + path).openConnection() as HttpURLConnection
     try {
@@ -186,11 +226,16 @@ fun httpCall(base: String, path: String, auth: AuthHeader?, method: String = "GE
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
         if (auth != null) conn.setRequestProperty(auth.name, auth.value)
+        if (body != null) {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        val answer = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         Log.d(TAG, "HTTP $method ${base + path} -> $code")
-        return if (code in 200..299) body else "HTTP $code: $body"
+        return if (code in 200..299) answer else "HTTP $code: $answer"
     } finally {
         conn.disconnect()
     }
@@ -202,6 +247,251 @@ private fun statusColor(status: PcStatus): Color = when (status) {
     // PC aus: rot statt grau, damit "aus" auf einen Blick erkennbar ist.
     PcStatus.OFFLINE -> Color(0xFFE53935)
     PcStatus.UNKNOWN -> Color(0xFF9E9E9E)
+}
+
+// ---------------------------------------------------------------------------
+// Daten der Kacheln: Steam, Routinen und Ereignisse werden absichtlich
+// tolerant gelesen (optJSON*). Ein Agent ohne die neue Route /steam antwortet
+// mit 404 - die Kachel zeigt dann "nicht verfuegbar" statt abzustuerzen.
+// ---------------------------------------------------------------------------
+
+/** Ein Download aus `GET /steam` bzw. `GET /downloads`. */
+data class SteamDownload(
+    val appId: String = "",
+    val name: String = "",
+    val percent: Double = 0.0,
+    val downloaded: Long = 0L,
+    val total: Long = 0L,
+)
+
+/**
+ * Antwort von `GET /steam` (Vertrag: docs/steam-plugin-und-kacheln.md).
+ * Alles optional, damit auch ein halbfertiger Agent die App nicht stoert.
+ */
+data class SteamStatus(
+    val detected: Boolean = false,
+    val millennium: Boolean = false,
+    val running: Boolean = false,
+    val downloading: Boolean = false,
+    val progressPercent: Double = 0.0,
+    val speedBps: Long = 0L,
+    val appName: String = "",
+    val downloads: List<SteamDownload> = emptyList(),
+)
+
+private fun JSONObject.optText(name: String, fallback: String = ""): String {
+    val value = optString(name, fallback).trim()
+    return value.ifBlank { fallback }
+}
+
+private fun parseDownloadArray(array: JSONArray?): List<SteamDownload> {
+    if (array == null) return emptyList()
+    val out = ArrayList<SteamDownload>(array.length())
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
+        val name = item.optText("name").ifBlank { item.optText("app_name") }
+        if (name.isBlank()) continue
+        out.add(
+            SteamDownload(
+                appId = item.optString("app_id"),
+                name = name,
+                percent = item.optDouble("percent", 0.0),
+                downloaded = item.optLong("bytes_downloaded", 0L),
+                total = item.optLong("bytes_total", 0L),
+            )
+        )
+    }
+    return out
+}
+
+/** `GET /steam` auswerten; null, wenn die Route fehlt oder die Antwort unlesbar ist. */
+fun parseSteam(body: String): SteamStatus? {
+    if (body.startsWith("HTTP ")) return null
+    return runCatching {
+        val json = JSONObject(body)
+        val downloads = parseDownloadArray(json.optJSONArray("downloads"))
+        SteamStatus(
+            detected = json.optBoolean("detected", false),
+            millennium = json.optBoolean("millennium", false),
+            running = json.optBoolean("running", false),
+            downloading = json.optBoolean("downloading", downloads.isNotEmpty()),
+            progressPercent = json.optDouble(
+                "progress_percent",
+                downloads.firstOrNull()?.percent ?: 0.0
+            ),
+            speedBps = json.optLong("speed_bps", 0L),
+            appName = json.optText("app_name").ifBlank { downloads.firstOrNull()?.name.orEmpty() },
+            downloads = downloads,
+        )
+    }.getOrNull()
+}
+
+/** `GET /downloads` auswerten: Liste oder `{"downloads": [...]}`. */
+fun parseDownloads(body: String): List<SteamDownload> {
+    val text = body.trim()
+    if (text.isEmpty() || text.startsWith("HTTP ")) return emptyList()
+    return runCatching {
+        if (text.startsWith("[")) {
+            parseDownloadArray(JSONArray(text))
+        } else {
+            parseDownloadArray(JSONObject(text).optJSONArray("downloads"))
+        }
+    }.getOrDefault(emptyList())
+}
+
+/** Eine Aktion innerhalb einer Routine (`shutdown`, `hibernate`, `power_plan`). */
+data class RoutineActionInfo(
+    val type: String = "",
+    val delay: Int = 0,
+    val plan: String = "",
+) {
+    val label: String get() = when (type) {
+        "shutdown" -> "Herunterfahren in ${delay}s"
+        "hibernate" -> "Ruhezustand"
+        "power_plan" -> "Energieplan ${planLabel(plan)}"
+        else -> type
+    }
+}
+
+/** Wochentage 1 = Mo ... 7 = So (wie im Agenten). */
+private val ROUTINE_DAYS = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+/** Eine Routine des Agenten (Feldnamen aus `routines.rs`). */
+data class RoutineInfo(
+    val id: String = "",
+    val name: String = "",
+    val enabled: Boolean = true,
+    val triggerType: String = "manual",
+    val triggerAt: String = "",
+    val triggerDays: List<Int> = emptyList(),
+    val actions: List<RoutineActionInfo> = emptyList(),
+    val lastRun: String = "",
+    val nextRun: String = "",
+) {
+    /** Kurztext des Ausloesers fuer Liste und Kachel. */
+    val triggerText: String
+        get() = when {
+            triggerType != "time" -> "Nur manuell"
+            triggerDays.isEmpty() -> "Täglich $triggerAt"
+            else -> "$triggerAt · " + triggerDays
+                .mapNotNull { ROUTINE_DAYS.getOrNull(it - 1) }
+                .joinToString(", ")
+        }
+
+    val actionTexts: List<String> get() = actions.map { it.label }
+}
+
+/** `GET /routines` auswerten. */
+fun parseRoutines(body: String): List<RoutineInfo> {
+    if (body.startsWith("HTTP ")) return emptyList()
+    return runCatching {
+        val array = JSONObject(body).optJSONArray("routines") ?: JSONArray()
+        val out = ArrayList<RoutineInfo>(array.length())
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val id = item.optString("id").trim()
+            if (id.isEmpty()) continue
+            val trigger = item.optJSONObject("trigger")
+            val days = ArrayList<Int>()
+            val daysJson = trigger?.optJSONArray("days")
+            if (daysJson != null) {
+                for (day in 0 until daysJson.length()) days.add(daysJson.optInt(day))
+            }
+            val actions = ArrayList<RoutineActionInfo>()
+            val actionsJson = item.optJSONArray("actions")
+            if (actionsJson != null) {
+                for (a in 0 until actionsJson.length()) {
+                    val action = actionsJson.optJSONObject(a) ?: continue
+                    actions.add(
+                        RoutineActionInfo(
+                            type = action.optString("type"),
+                            delay = action.optInt("delay", 0),
+                            plan = action.optString("plan"),
+                        )
+                    )
+                }
+            }
+            out.add(
+                RoutineInfo(
+                    id = id,
+                    name = item.optText("name", id),
+                    enabled = item.optBoolean("enabled", true),
+                    triggerType = trigger?.optString("type", "manual") ?: "manual",
+                    triggerAt = trigger?.optString("at").orEmpty(),
+                    triggerDays = days,
+                    actions = actions,
+                    lastRun = item.optString("last_run"),
+                    nextRun = item.optString("next_run"),
+                )
+            )
+        }
+        out
+    }.getOrDefault(emptyList())
+}
+
+/** Routine als JSON fuer `POST /routines` (An/Aus umschalten, `id` bleibt gleich). */
+private fun routineJson(routine: RoutineInfo, enabled: Boolean): String {
+    val rawDays = JSONArray()
+    routine.triggerDays.forEach { rawDays.put(it) }
+    val rawActions = JSONArray()
+    routine.actions.forEach { action ->
+        rawActions.put(
+            JSONObject()
+                .put("type", action.type)
+                .put("delay", action.delay)
+                .put("plan", action.plan)
+        )
+    }
+    val trigger = JSONObject()
+        .put("type", routine.triggerType)
+        .put("at", routine.triggerAt)
+        .put("days", rawDays)
+    return JSONObject()
+        .put("id", routine.id)
+        .put("name", routine.name)
+        .put("enabled", enabled)
+        .put("trigger", trigger)
+        .put("actions", rawActions)
+        .put("last_run", routine.lastRun)
+        .toString()
+}
+
+/** Ein Ereignis aus `GET /events` (Ringpuffer, neueste zuerst). */
+data class AgentEvent(
+    val time: String = "",
+    val action: String = "",
+    val detail: String = "",
+    val ok: Boolean = true,
+)
+
+/** `GET /events` auswerten. */
+fun parseEvents(body: String): List<AgentEvent> {
+    if (body.startsWith("HTTP ")) return emptyList()
+    return runCatching {
+        val array = JSONObject(body).optJSONArray("events") ?: JSONArray()
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            AgentEvent(
+                time = item.optString("time"),
+                action = item.optString("action"),
+                detail = item.optString("detail"),
+                ok = item.optBoolean("ok", true),
+            )
+        }
+    }.getOrDefault(emptyList())
+}
+
+/** Prozentwert ohne Nachkommastellen ("43"). */
+private fun fmtPercent(value: Double): String =
+    String.format(Locale.GERMANY, "%.0f", value.coerceIn(0.0, 100.0))
+
+/** Grobe Groesse in B/KB/MB/GB fuer Download-Zeilen. */
+private fun fmtBytes(bytes: Long): String = when {
+    bytes <= 0L -> "0 MB"
+    bytes >= 1_000_000_000L -> String.format(Locale.GERMANY, "%.1f GB", bytes / 1_000_000_000.0)
+    bytes >= 1_000_000L -> String.format(Locale.GERMANY, "%.0f MB", bytes / 1_000_000.0)
+    bytes >= 1_000L -> String.format(Locale.GERMANY, "%.0f KB", bytes / 1_000.0)
+    else -> "$bytes B"
 }
 
 /**
@@ -1024,7 +1314,9 @@ fun MainApp(
 ) {
     val active = profiles.firstOrNull { it.id == activeId } ?: profiles.first()
 
-    var tab by remember { mutableStateOf(0) }
+    // Eigener, kleiner Navigations-State (keine Bibliothek): die Startseite ist
+    // das Kachel-Raster, jede Kachel oeffnet genau eine Aktionsseite.
+    var route by remember { mutableStateOf<Route>(Route.Home) }
     var state by remember { mutableStateOf(AgentState()) }
     var message by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableStateOf(0) }
@@ -1059,10 +1351,19 @@ fun MainApp(
     var catalogRefresh by remember { mutableStateOf(0) }
 
     // Plugins des PC-Agenten: Liste und Katalog kommen vom laufenden Agenten,
-    // nicht aus der App selbst. Nachgeladen, sobald der Markt+ sichtbar wird.
+    // nicht aus der App selbst. Nachgeladen, sobald die Startseite oder die
+    // Plugins-Seite sichtbar wird.
     var plugins by remember { mutableStateOf<List<PluginInfo>>(emptyList()) }
     var pluginCatalog by remember { mutableStateOf<List<PluginCatalogEntry>>(emptyList()) }
     var pluginRefresh by remember { mutableIntStateOf(0) }
+
+    // Kachel-Kurzstatus: Steam, Routinen und Ereignisse. Alles tolerant, weil
+    // /steam und /downloads erst mit einem neuen Agenten kommen (404 -> null).
+    var steam by remember { mutableStateOf<SteamStatus?>(null) }
+    var steamLoading by remember { mutableStateOf(true) }
+    var routines by remember { mutableStateOf<List<RoutineInfo>>(emptyList()) }
+    var routinesLoading by remember { mutableStateOf(true) }
+    var events by remember { mutableStateOf<List<AgentEvent>>(emptyList()) }
 
     fun installModule(module: CatalogModule) {
         val next = installedModules + module.id
@@ -1142,9 +1443,9 @@ fun MainApp(
         }
     }
 
-    // Plugins immer frisch laden, wenn der Markt+ nach vorn kommt.
-    LaunchedEffect(active, pluginRefresh, tab) {
-        if (tab != 1) return@LaunchedEffect
+    // Plugins immer frisch laden, wenn die Startseite oder die Plugins-Seite
+    // sichtbar ist (Kachel-Kurzstatus bzw. volle Liste).
+    suspend fun loadPlugins() {
         val snapshot = withContext(Dispatchers.IO) {
             try {
                 PluginSnapshot(
@@ -1162,9 +1463,147 @@ fun MainApp(
         pluginCatalog = snapshot?.catalog.orEmpty()
     }
 
+    /**
+     * Steam-Status: zuerst `GET /steam`, sonst die reine Download-Liste von
+     * `GET /downloads`. Fehlt beides (alter Agent, 404), bleibt [steam] null -
+     * Kachel und Seite zeigen dann "nicht verfuegbar".
+     */
+    suspend fun loadSteam() {
+        steamLoading = true
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val primary = parseSteam(httpCall(active.base, "/steam", active.authHeader()))
+                if (primary != null) {
+                    primary
+                } else {
+                    val raw = httpCall(active.base, "/downloads", active.authHeader())
+                    if (raw.startsWith("HTTP ")) {
+                        null
+                    } else {
+                        val list = parseDownloads(raw)
+                        SteamStatus(
+                            detected = true,
+                            millennium = false,
+                            running = list.isNotEmpty(),
+                            downloading = list.isNotEmpty(),
+                            progressPercent = list.firstOrNull()?.percent ?: 0.0,
+                            speedBps = 0L,
+                            appName = list.firstOrNull()?.name.orEmpty(),
+                            downloads = list,
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Steam-Status nicht verfuegbar", e)
+                null
+            }
+        }
+        steam = result
+        steamLoading = false
+    }
+
+    /** Routinen des Agenten (`GET /routines`). */
+    suspend fun loadRoutines() {
+        val list = withContext(Dispatchers.IO) {
+            try {
+                parseRoutines(httpCall(active.base, "/routines", active.authHeader()))
+            } catch (e: Exception) {
+                Log.e(TAG, "Routinen nicht erreichbar", e)
+                emptyList()
+            }
+        }
+        routines = list
+        routinesLoading = false
+    }
+
+    /** Ereignisse des Agenten (`GET /events`, neueste zuerst). */
+    suspend fun loadEvents() {
+        val list = withContext(Dispatchers.IO) {
+            try {
+                parseEvents(httpCall(active.base, "/events", active.authHeader()))
+            } catch (e: Exception) {
+                Log.e(TAG, "Ereignisse nicht erreichbar", e)
+                emptyList()
+            }
+        }
+        events = list
+    }
+
+    /** Log-Text des Agenten laden (`GET /log`, blockierend -> immer im IO-Kontext). */
+    suspend fun fetchLogText(): String = withContext(Dispatchers.IO) {
+        try {
+            httpCall(active.base, "/log?lines=200", active.authHeader())
+        } catch (e: Exception) {
+            "Nicht erreichbar: ${e.message ?: "Fehler"}"
+        }
+    }
+
+    /** Routinen-Aktion (Jetzt/An-Aus/Loeschen) inklusive Neuladen der Liste. */
+    fun routineAction(path: String, method: String, success: String, body: String? = null) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(active.base, path, active.authHeader(), method, body)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Routine-Aktion fehlgeschlagen: $path", e)
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
+                }
+                message = if (result.startsWith("HTTP ") || result.startsWith("Nicht")) {
+                    result
+                } else {
+                    success
+                }
+                loadRoutines()
+                refresh++
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    // Nachladen abhaengig von der sichtbaren Seite. Die Startseite braucht die
+    // Kurzstatus, die Aktionsseiten ihre vollen Listen.
+    LaunchedEffect(active, route, pluginRefresh, refresh) {
+        when (route) {
+            Route.Home -> {
+                loadPlugins()
+                loadRoutines()
+                loadSteam()
+            }
+
+            Route.Plugins -> loadPlugins()
+            Route.Steam -> loadSteam()
+            Route.Routines -> loadRoutines()
+            Route.History -> {
+                loadEvents()
+                logText = fetchLogText().trim().ifBlank { "Noch keine Einträge." }
+            }
+
+            else -> Unit
+        }
+    }
+
+    // Kacheln der Startseite regelmaessig auffrischen (Plugins, Steam, Routinen),
+    // aber nur solange die Seite sichtbar ist - kein Funkverkehr im Hintergrund.
+    LaunchedEffect(active, route, refresh, pluginRefresh) {
+        if (route != Route.Home) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(15_000)
+                loadPlugins()
+                loadRoutines()
+                loadSteam()
+            }
+        }
+    }
+
     LaunchedEffect(startWithShutdownConfirm) {
         if (startWithShutdownConfirm) {
-            tab = 0
+            route = Route.Control
             showShutdownConfirm = true
             onConfirmConsumed()
         }
@@ -1218,24 +1657,28 @@ fun MainApp(
         }
     }
 
-    fun loadLog() {
+    /**
+     * Log des Agenten laden. Mit [showDialog] = true erscheint wie bisher der
+     * Dialog (Steuerungs-Seite), sonst nur der Text auf der Verlauf-Seite.
+     */
+    fun loadLog(showDialog: Boolean = true) {
         if (busy) return
         scope.launch {
             busy = true
             try {
-                val text = withContext(Dispatchers.IO) {
-                    try {
-                        httpCall(active.base, "/log?lines=200", active.authHeader())
-                    } catch (e: Exception) {
-                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
-                    }
-                }
-                logText = text.trim().ifBlank { "Noch keine Einträge." }
-                showLog = true
+                logText = fetchLogText().trim().ifBlank { "Noch keine Einträge." }
+                if (showDialog) showLog = true
             } finally {
                 busy = false
             }
         }
+    }
+
+    /** Zwischenablage: Log kopieren (wie im Verlauf-Dialog). */
+    fun copyLog() {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("PC-Agent-Verlauf", logText))
+        message = "Verlauf kopiert"
     }
 
     fun testConnection() {
@@ -1289,9 +1732,9 @@ fun MainApp(
         }
     }
 
-    // Zurueck-Taste: aus einem anderen Tab zurueck zur Steuerung statt die App
-    // zu schliessen (typisches Android-Verhalten bei Bottom-Navigation).
-    BackHandler(enabled = tab != 0) { tab = 0 }
+    // Zurueck-Taste: von jeder Aktionsseite zurueck zur Kachel-Startseite statt
+    // die App zu schliessen (typisches Android-Verhalten).
+    BackHandler(enabled = route != Route.Home) { route = Route.Home }
 
     // Sekundentakt fuer Countdown und "zuletzt geprueft"-Anzeige. Nur im
     // Vordergrund aktiv, damit im Hintergrund keine Recomposition laeuft.
@@ -1326,7 +1769,7 @@ fun MainApp(
 
     LaunchedEffect(startWithWake) {
         if (startWithWake) {
-            tab = 0
+            route = Route.Control
             doWake()
             onWakeConsumed()
         }
@@ -1359,123 +1802,231 @@ fun MainApp(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = tab == 0,
-                    onClick = { tab = 0 },
-                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_control)) }
-                )
-                NavigationBarItem(
-                    selected = tab == 1,
-                    onClick = { tab = 1 },
-                    icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_market)) }
-                )
-                NavigationBarItem(
-                    selected = tab == 2,
-                    onClick = { tab = 2 },
-                    icon = { Icon(Icons.Default.Star, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_energy)) }
-                )
-                NavigationBarItem(
-                    selected = tab == 3,
-                    onClick = { tab = 3 },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_settings)) }
-                )
-            }
-        }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        // Die Aktionsseiten bringen ihr eigenes Scaffold mit; die Insets sind hier
+        // bereits verbraucht, damit Status-/Navigationsleiste nicht doppelt polstern.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .consumeWindowInsets(padding)
+        ) {
             AnimatedContent(
-                targetState = tab,
+                targetState = route,
                 modifier = Modifier.fillMaxSize(),
                 transitionSpec = {
                     (fadeIn(tween(220, easing = FastOutSlowInEasing)) +
                         slideInVertically(tween(220, easing = FastOutSlowInEasing)) { it / 40 }) togetherWith
                         fadeOut(tween(150))
                 },
-                label = "tabContent"
-            ) { page ->
-                when (page) {
-                    0 -> ControlTab(
-                        profiles = profiles,
+                label = "routeContent"
+            ) { screen ->
+                when (screen) {
+                    Route.Home -> HomeScreen(
                         active = active,
                         state = state,
                         busy = busy,
-                        installed = installedModules,
                         pendingLeft = pendingLeft,
-                        wakePending = wakePending,
                         lastUpdated = lastUpdatedText,
                         refreshSeconds = settings.refreshSeconds,
                         refreshing = refreshing,
+                        plugins = plugins,
+                        installedModules = installedModules,
+                        moduleCount = catalogModules.size,
+                        routines = routines,
+                        events = events,
+                        steam = steam,
+                        steamLoading = steamLoading,
                         onRefresh = {
                             refreshing = true
                             refresh++
                         },
-                        onSwitchProfile = ::switchProfile,
-                        onShutdown = { showShutdownConfirm = true },
-                        onTimer = {
-                            timerHours = ""
-                            timerMinutes = ""
-                            showTimer = true
-                        },
-                        onWake = ::doWake,
-                        onHibernate = { runAction("/hibernate", "Ruhezustand ausgelöst") },
-                        onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
-                        onShowLog = ::loadLog,
-                        onOpenMarket = { tab = 1 },
-                        onOpenSettings = { tab = 3 },
+                        onOpen = { route = it },
                     )
-                    1 -> MarketplaceTab(
-                        modules = catalogModules,
-                        installed = installedModules,
-                        source = catalogSource,
-                        busy = busy,
-                        onRefresh = { catalogRefresh++ },
-                        onInstall = ::installModule,
-                        onUninstall = ::uninstallModule,
-                        plugins = plugins,
-                        pluginCatalog = pluginCatalog,
-                        onPluginRefresh = { pluginRefresh++ },
-                        onPluginStart = ::startPlugin,
-                        onPluginStop = ::stopPlugin,
-                        onPluginRemove = ::removePlugin,
-                        onPluginInstall = ::installPlugin,
-                    )
-                    2 -> PlanTab(
-                        activePlan = state.plan,
-                        busy = busy,
-                        onSelect = { key, label ->
-                            state = state.copy(plan = key)
-                            runAction("/power-plan?name=$key", "Energieplan: $label")
-                        },
-                    )
-                    else -> SettingsTab(
-                        profiles = profiles,
-                        active = active,
-                        simulate = state.simulate,
-                        busy = busy,
-                        settings = settings,
-                        onSettingsChange = onSettingsChange,
-                        onOpenWeb = ::openWebInterface,
-                        versionName = versionName,
-                        onSwitch = ::switchProfile,
-                        onAdd = ::addProfile,
-                        onDelete = ::deleteProfile,
-                        onSave = ::saveProfile,
-                        onTestConnection = ::testConnection,
-                        onModeChange = { simulation ->
-                            if (simulation) {
-                                state = state.copy(simulate = true)
-                                runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
-                            } else {
-                                showRealModeConfirm = true
-                            }
-                        },
-                    )
+
+                    Route.Control -> ActionPage(
+                        title = stringResource(R.string.page_control_title),
+                        subtitle = active.name,
+                        onBack = { route = Route.Home },
+                    ) {
+                        ControlTab(
+                            profiles = profiles,
+                            active = active,
+                            state = state,
+                            busy = busy,
+                            installed = installedModules,
+                            pendingLeft = pendingLeft,
+                            wakePending = wakePending,
+                            lastUpdated = lastUpdatedText,
+                            refreshSeconds = settings.refreshSeconds,
+                            refreshing = refreshing,
+                            onRefresh = {
+                                refreshing = true
+                                refresh++
+                            },
+                            onSwitchProfile = ::switchProfile,
+                            onShutdown = { showShutdownConfirm = true },
+                            onTimer = {
+                                timerHours = ""
+                                timerMinutes = ""
+                                showTimer = true
+                            },
+                            onWake = ::doWake,
+                            onHibernate = { runAction("/hibernate", "Ruhezustand ausgelöst") },
+                            onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
+                            onShowLog = ::loadLog,
+                            onOpenMarket = { route = Route.Market },
+                            onOpenSettings = { route = Route.Settings },
+                        )
+                    }
+
+                    Route.Steam -> ActionPage(
+                        title = stringResource(R.string.page_steam_title),
+                        subtitle = stringResource(R.string.page_steam_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        SteamPage(
+                            steam = steam,
+                            loading = steamLoading,
+                            busy = busy,
+                            onRefresh = { refresh++ },
+                        )
+                    }
+
+                    Route.Plugins -> ActionPage(
+                        title = stringResource(R.string.page_plugins_title),
+                        subtitle = stringResource(R.string.page_plugins_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        PluginsPage(
+                            plugins = plugins,
+                            pluginCatalog = pluginCatalog,
+                            busy = busy,
+                            onRefresh = { pluginRefresh++ },
+                            onStart = ::startPlugin,
+                            onStop = ::stopPlugin,
+                            onRemove = ::removePlugin,
+                            onInstall = ::installPlugin,
+                        )
+                    }
+
+                    Route.Market -> ActionPage(
+                        title = stringResource(R.string.page_market_title),
+                        subtitle = stringResource(R.string.page_market_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        MarketPage(
+                            modules = catalogModules,
+                            installed = installedModules,
+                            source = catalogSource,
+                            busy = busy,
+                            onRefresh = { catalogRefresh++ },
+                            onInstall = ::installModule,
+                            onUninstall = ::uninstallModule,
+                            pluginCount = plugins.size,
+                            onOpenPlugins = { route = Route.Plugins },
+                        )
+                    }
+                    Route.Energy -> ActionPage(
+                        title = stringResource(R.string.page_energy_title),
+                        subtitle = stringResource(R.string.page_energy_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        PlanTab(
+                            activePlan = state.plan,
+                            busy = busy,
+                            onSelect = { key, label ->
+                                state = state.copy(plan = key)
+                                runAction("/power-plan?name=$key", "Energieplan: $label")
+                            },
+                        )
+                    }
+
+                    Route.Routines -> ActionPage(
+                        title = stringResource(R.string.page_routines_title),
+                        subtitle = stringResource(R.string.page_routines_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        RoutinesPage(
+                            routines = routines,
+                            loading = routinesLoading,
+                            busy = busy,
+                            onRefresh = { refresh++ },
+                            onRun = { routine ->
+                                routineAction(
+                                    "/routines/${routine.id}/run",
+                                    "POST",
+                                    "${routine.name} ausgeführt",
+                                )
+                            },
+                            onToggle = { routine ->
+                                routineAction(
+                                    "/routines",
+                                    "POST",
+                                    if (routine.enabled) {
+                                        "${routine.name} ausgeschaltet"
+                                    } else {
+                                        "${routine.name} eingeschaltet"
+                                    },
+                                    routineJson(routine, enabled = !routine.enabled),
+                                )
+                            },
+                            onDelete = { routine ->
+                                routineAction(
+                                    "/routines/${routine.id}",
+                                    "DELETE",
+                                    "${routine.name} gelöscht",
+                                )
+                            },
+                        )
+                    }
+
+                    Route.History -> ActionPage(
+                        title = stringResource(R.string.page_history_title),
+                        subtitle = stringResource(R.string.page_history_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        HistoryPage(
+                            events = events,
+                            logText = logText,
+                            busy = busy,
+                            onRefresh = {
+                                // Laedt Ereignisse und Log neu (siehe LaunchedEffect oben).
+                                refresh++
+                            },
+                            onCopy = ::copyLog,
+                        )
+                    }
+
+                    Route.Settings -> ActionPage(
+                        title = stringResource(R.string.settings_title),
+                        subtitle = stringResource(R.string.page_settings_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        SettingsTab(
+                            profiles = profiles,
+                            active = active,
+                            simulate = state.simulate,
+                            busy = busy,
+                            settings = settings,
+                            onSettingsChange = onSettingsChange,
+                            onOpenWeb = ::openWebInterface,
+                            versionName = versionName,
+                            onSwitch = ::switchProfile,
+                            onAdd = ::addProfile,
+                            onDelete = ::deleteProfile,
+                            onSave = ::saveProfile,
+                            onTestConnection = ::testConnection,
+                            onModeChange = { simulation ->
+                                if (simulation) {
+                                    state = state.copy(simulate = true)
+                                    runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
+                                } else {
+                                    showRealModeConfirm = true
+                                }
+                            },
+                        )
+                    }
                 }
             }
 
@@ -1507,7 +2058,7 @@ fun MainApp(
                         "Der PC ${active.name} fährt sofort herunter."
                     } else {
                         "Der PC ${active.name} fährt in $delay Sekunden herunter."
-                    }) + "\n\nAbbrechen ist danach im Steuerungs-Tab möglich."
+                    }) + "\n\nAbbrechen ist danach auf der Aktionsseite Steuerung möglich."
                 )
             },
             confirmButton = {
@@ -1996,12 +2547,13 @@ private fun ControlTab(
 }
 
 /**
- * Marktplatz: An/Aus, Status, Ruhezustand und Energieplan sind Basis und
- * immer gratis dabei. Zusaetze (Module) werden hier installiert; der Katalog
- * stammt aus dem GitHub-Repo, offline greift ein lokaler Fallback.
+ * Markt+: An/Aus, Status, Ruhezustand und Energieplan sind Basis und immer
+ * gratis dabei. Zusaetze (Module) werden hier installiert; der Katalog stammt
+ * aus dem GitHub-Repo, offline greift ein lokaler Fallback. Die Plugins des
+ * Agenten haben eine eigene Aktionsseite (Kachel "Plugins").
  */
 @Composable
-private fun MarketplaceTab(
+private fun MarketPage(
     modules: List<CatalogModule>,
     installed: Set<String>,
     source: String,
@@ -2009,13 +2561,8 @@ private fun MarketplaceTab(
     onRefresh: () -> Unit,
     onInstall: (CatalogModule) -> Unit,
     onUninstall: (CatalogModule) -> Unit,
-    plugins: List<PluginInfo>,
-    pluginCatalog: List<PluginCatalogEntry>,
-    onPluginRefresh: () -> Unit,
-    onPluginStart: (PluginInfo) -> Unit,
-    onPluginStop: (PluginInfo) -> Unit,
-    onPluginRemove: (PluginInfo) -> Unit,
-    onPluginInstall: (PluginCatalogEntry) -> Unit,
+    pluginCount: Int,
+    onOpenPlugins: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -2028,19 +2575,12 @@ private fun MarketplaceTab(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Markt+",
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "Erweiterungen für deine PC-Steuerung",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
+            Text(
+                text = "Erweiterungen für deine PC-Steuerung",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.weight(1f)
+            )
             IconButton(onClick = onRefresh, enabled = !busy) {
                 Icon(Icons.Default.Refresh, contentDescription = "Katalog aktualisieren")
             }
@@ -2125,7 +2665,50 @@ private fun MarketplaceTab(
         )
 
         // ---------------- Plugins des PC-Agenten ----------------
+        // Die Plugin-Liste selbst liegt auf der eigenen Aktionsseite "Plugins"
+        // (Kachel im Start-Raster), damit der Markt+ uebersichtlich bleibt.
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+        Text(
+            text = stringResource(R.string.plugins_section_title),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline
+        )
+        OutlinedButton(
+            onClick = onOpenPlugins,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Icon(Icons.Default.Build, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.market_open_plugins, pluginCount))
+        }
+    }
+}
+
+/**
+ * Aktionsseite Plugins: lokale Plugins des Agenten (starten, stoppen,
+ * entfernen) plus Katalogeintraege zum Nachinstallieren.
+ */
+@Composable
+private fun PluginsPage(
+    plugins: List<PluginInfo>,
+    pluginCatalog: List<PluginCatalogEntry>,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onStart: (PluginInfo) -> Unit,
+    onStop: (PluginInfo) -> Unit,
+    onRemove: (PluginInfo) -> Unit,
+    onInstall: (PluginCatalogEntry) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -2143,7 +2726,7 @@ private fun MarketplaceTab(
                     color = MaterialTheme.colorScheme.outline
                 )
             }
-            IconButton(onClick = onPluginRefresh, enabled = !busy) {
+            IconButton(onClick = onRefresh, enabled = !busy) {
                 Icon(
                     Icons.Default.Refresh,
                     contentDescription = stringResource(R.string.plugins_refresh)
@@ -2164,9 +2747,9 @@ private fun MarketplaceTab(
                 plugin = plugin,
                 index = index,
                 busy = busy,
-                onStart = { onPluginStart(plugin) },
-                onStop = { onPluginStop(plugin) },
-                onRemove = { onPluginRemove(plugin) },
+                onStart = { onStart(plugin) },
+                onStop = { onStop(plugin) },
+                onRemove = { onRemove(plugin) },
             )
         }
 
@@ -2181,7 +2764,7 @@ private fun MarketplaceTab(
                 PluginCatalogRow(
                     entry = entry,
                     busy = busy,
-                    onInstall = { onPluginInstall(entry) },
+                    onInstall = { onInstall(entry) },
                 )
             }
         }
@@ -3309,3 +3892,791 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
     ThemeMode.LIGHT -> "Hell"
     ThemeMode.DARK -> "Dunkel"
 }
+
+// ---------------------------------------------------------------------------
+// Kachel-Startbildschirm und Aktionsseiten
+//
+// Bewusst ein eigener, kleiner Navigations-State statt einer Bibliothek: die
+// Startseite ist ein Kachel-Raster, jede Kachel oeffnet genau eine Aktionsseite
+// (Zurueck-Pfeil im TopAppBar, System-Zurueck ueber BackHandler).
+// ---------------------------------------------------------------------------
+
+/** Ziele der App: die Startseite plus je eine Aktionsseite pro Kachel. */
+sealed interface Route {
+    data object Home : Route
+    data object Control : Route
+    data object Steam : Route
+    data object Plugins : Route
+    data object Market : Route
+    data object Routines : Route
+    data object History : Route
+    data object Energy : Route
+    data object Settings : Route
+}
+
+/** Gemeinsamer Rahmen einer Aktionsseite: Zurueck-Pfeil, Titel, Untertitel. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActionPage(
+    title: String,
+    subtitle: String? = null,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(text = title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                        if (subtitle != null) {
+                            Text(
+                                text = subtitle,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            )
+        },
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) { content() }
+    }
+}
+
+/** Eine Kachel: Ziel, Titel, Kurzstatus, Symbol und optionaler Statuspunkt. */
+private data class HomeTileSpec(
+    val route: Route,
+    val title: String,
+    val status: String,
+    val icon: ImageVector,
+    val dotColor: Color? = null,
+    val pulsing: Boolean = false,
+)
+
+/** Kachel im Raster: grosse Touch-Flaeche, Material-3-Farben, abgerundet. */
+@Composable
+private fun HomeTile(tile: HomeTileSpec, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 132.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "${tile.title}: ${tile.status}" },
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = tile.icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                if (tile.dotColor != null) {
+                    StatusDot(color = tile.dotColor, pulsing = tile.pulsing)
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = tile.title,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = tile.status,
+                fontSize = 12.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Startseite: 2-Spalten-Raster mit Kurzstatus je Kachel. Die Inhalte selbst
+ * liegen auf den Aktionsseiten; hier bleibt bewusst nur der Ueberblick.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeScreen(
+    active: Profile,
+    state: AgentState,
+    busy: Boolean,
+    pendingLeft: Int,
+    lastUpdated: String,
+    refreshSeconds: Int,
+    refreshing: Boolean,
+    plugins: List<PluginInfo>,
+    installedModules: Set<String>,
+    moduleCount: Int,
+    routines: List<RoutineInfo>,
+    events: List<AgentEvent>,
+    steam: SteamStatus?,
+    steamLoading: Boolean,
+    onRefresh: () -> Unit,
+    onOpen: (Route) -> Unit,
+) {
+    val runningPlugins = plugins.count { it.running }
+    val pluginStatus = when {
+        plugins.isEmpty() -> stringResource(R.string.tile_no_plugins)
+        runningPlugins > 0 ->
+            stringResource(R.string.tile_plugins_active, plugins.size, runningPlugins)
+        else -> stringResource(R.string.tile_plugins_count, plugins.size)
+    }
+    val marketStatus = if (moduleCount <= 0) {
+        stringResource(R.string.plugins_empty)
+    } else {
+        stringResource(R.string.tile_modules_installed, installedModules.size, moduleCount)
+    }
+    val steamStatus = when {
+        steam == null && steamLoading -> stringResource(R.string.tile_steam_checking)
+        steam == null -> stringResource(R.string.tile_steam_unavailable)
+        steam.downloading && steam.appName.isNotBlank() -> stringResource(
+            R.string.steam_progress,
+            "${fmtPercent(steam.progressPercent)} %",
+            steam.appName,
+        )
+        steam.downloading -> stringResource(R.string.tile_steam_download_count, steam.downloads.size)
+        !steam.detected -> stringResource(R.string.tile_steam_not_detected)
+        else -> stringResource(R.string.tile_steam_no_downloads)
+    }
+    val routineStatus = if (routines.isEmpty()) {
+        stringResource(R.string.tile_no_routines)
+    } else {
+        stringResource(R.string.tile_routines_count, routines.size)
+    }
+    val historyStatus = events.firstOrNull()
+        ?.let { listOf(it.action, it.time).filter(String::isNotBlank).joinToString(" · ") }
+        ?.takeIf { it.isNotBlank() }
+        ?: stringResource(R.string.tile_no_events)
+    val controlStatus = if (pendingLeft > 0) {
+        stringResource(R.string.tile_pending, fmtDuration(pendingLeft))
+    } else {
+        listOf(statusLabel(state.status), active.host)
+            .filter(String::isNotBlank)
+            .joinToString(" · ")
+    }
+
+    val tiles = listOf(
+        HomeTileSpec(
+            route = Route.Control,
+            title = stringResource(R.string.tile_control),
+            status = controlStatus,
+            icon = Icons.Default.Home,
+            dotColor = statusColor(state.status),
+            pulsing = state.status == PcStatus.ONLINE,
+        ),
+        HomeTileSpec(
+            route = Route.Steam,
+            title = stringResource(R.string.tile_steam),
+            status = steamStatus,
+            icon = Icons.Default.PlayArrow,
+        ),
+        HomeTileSpec(
+            route = Route.Plugins,
+            title = stringResource(R.string.tile_plugins),
+            status = pluginStatus,
+            icon = Icons.Default.Build,
+        ),
+        HomeTileSpec(
+            route = Route.Market,
+            title = stringResource(R.string.tile_market),
+            status = marketStatus,
+            icon = Icons.Default.ShoppingCart,
+        ),
+        HomeTileSpec(
+            route = Route.Routines,
+            title = stringResource(R.string.tile_routines),
+            status = routineStatus,
+            icon = Icons.Default.DateRange,
+        ),
+        HomeTileSpec(
+            route = Route.History,
+            title = stringResource(R.string.tile_history),
+            status = historyStatus,
+            icon = Icons.AutoMirrored.Filled.List,
+        ),
+        HomeTileSpec(
+            route = Route.Energy,
+            title = stringResource(R.string.tile_energy),
+            status = planLabel(state.plan),
+            icon = Icons.Default.Star,
+        ),
+        HomeTileSpec(
+            route = Route.Settings,
+            title = stringResource(R.string.tile_settings),
+            status = active.name,
+            icon = Icons.Default.Settings,
+        ),
+    )
+
+
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(20.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.home_title),
+                                fontSize = 30.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                            )
+                            Text(
+                                text = stringResource(R.string.home_subtitle),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                        IconButton(onClick = onRefresh, enabled = !busy) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = stringResource(R.string.home_refresh),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusDot(
+                            color = statusColor(state.status),
+                            pulsing = state.status == PcStatus.ONLINE,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${statusLabel(state.status)} · ${active.name}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.home_updated, lastUpdated) +
+                            " · alle $refreshSeconds s",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+            items(tiles) { tile ->
+                HomeTile(tile = tile, onClick = { onOpen(tile.route) })
+            }
+        }
+    }
+}
+
+/**
+ * Aktionsseite Steam. `GET /steam` ist neu im Agenten: Fehlt die Route (404)
+ * oder ist die Antwort unlesbar, zeigt die Seite "nicht verfuegbar" - sie
+ * stuerzt nie ab und blockiert keine andere Funktion.
+ */
+@Composable
+private fun SteamPage(
+    steam: SteamStatus?,
+    loading: Boolean,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        when {
+            steam == null && loading -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = stringResource(R.string.steam_loading),
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            steam == null -> {
+                Text(
+                    text = stringResource(R.string.steam_unavailable),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    text = stringResource(R.string.steam_unavailable_hint),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+
+            else -> SteamDetails(steam = steam)
+        }
+
+        OutlinedButton(
+            onClick = onRefresh,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.steam_refresh))
+        }
+    }
+}
+
+/** Erkannte Installation, Millennium und laufende Downloads als Liste. */
+@Composable
+private fun SteamDetails(steam: SteamStatus) {
+    val chipLabels = listOf(
+        if (steam.detected) {
+            stringResource(R.string.steam_detected)
+        } else {
+            stringResource(R.string.steam_not_detected)
+        },
+        if (steam.running) {
+            stringResource(R.string.steam_running)
+        } else {
+            stringResource(R.string.steam_not_running)
+        },
+        if (steam.millennium) {
+            stringResource(R.string.steam_millennium_on)
+        } else {
+            stringResource(R.string.steam_millennium_off)
+        },
+    )
+    val chipActive = listOf(steam.detected, steam.running, steam.millennium)
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        chipLabels.forEachIndexed { index, label ->
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = if (chipActive[index]) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                },
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+
+    if (steam.speedBps > 0L) {
+        Text(
+            text = stringResource(R.string.steam_speed, fmtBytes(steam.speedBps)),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    Text(
+        text = stringResource(R.string.steam_downloads_title),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.outline,
+    )
+
+    if (steam.downloads.isEmpty()) {
+        Text(
+            text = stringResource(R.string.steam_no_downloads),
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+
+    steam.downloads.forEach { download ->
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = download.name,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "${fmtPercent(download.percent)} %",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { (download.percent / 100.0).toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = stringResource(
+                        R.string.steam_of,
+                        fmtBytes(download.downloaded),
+                        fmtBytes(download.total),
+                    ),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Aktionsseite Routinen: Liste aus `GET /routines`. "Jetzt" loest
+ * `POST /routines/{id}/run` aus, An/Aus ersetzt die Routine per `POST /routines`
+ * (die Kennung bleibt gleich), "Loeschen" nutzt `DELETE /routines/{id}`.
+ */
+@Composable
+private fun RoutinesPage(
+    routines: List<RoutineInfo>,
+    loading: Boolean,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onRun: (RoutineInfo) -> Unit,
+    onToggle: (RoutineInfo) -> Unit,
+    onDelete: (RoutineInfo) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.routines_hint),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onRefresh, enabled = !busy) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.routines_refresh),
+                )
+            }
+        }
+
+        if (routines.isEmpty()) {
+            Text(
+                text = if (loading) {
+                    stringResource(R.string.routines_loading)
+                } else {
+                    stringResource(R.string.routines_empty)
+                },
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+
+        routines.forEach { routine ->
+            RoutineCard(
+                routine = routine,
+                busy = busy,
+                onRun = { onRun(routine) },
+                onToggle = { onToggle(routine) },
+                onDelete = { onDelete(routine) },
+            )
+        }
+    }
+}
+
+/** Eine Routine mit Ausloeser, Aktionen und den drei Bedienknoepfen. */
+@Composable
+private fun RoutineCard(
+    routine: RoutineInfo,
+    busy: Boolean,
+    onRun: () -> Unit,
+    onToggle: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = routine.name,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = if (routine.enabled) {
+                        stringResource(R.string.routines_on)
+                    } else {
+                        stringResource(R.string.routines_off)
+                    },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (routine.enabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                )
+            }
+            Text(
+                text = routine.triggerText,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (routine.actionTexts.isNotEmpty()) {
+                Text(
+                    text = stringResource(
+                        R.string.routines_actions,
+                        routine.actionTexts.joinToString(" · "),
+                    ),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = if (routine.lastRun.isBlank()) {
+                    stringResource(R.string.routines_never)
+                } else {
+                    stringResource(R.string.routines_last, routine.lastRun)
+                },
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            if (routine.nextRun.isNotBlank()) {
+                Text(
+                    text = stringResource(R.string.routines_next, routine.nextRun),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    onClick = onRun,
+                    enabled = !busy,
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text(stringResource(R.string.routines_run), fontSize = 13.sp) }
+                OutlinedButton(
+                    onClick = onToggle,
+                    enabled = !busy,
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(
+                        text = if (routine.enabled) {
+                            stringResource(R.string.routines_switch_off)
+                        } else {
+                            stringResource(R.string.routines_switch_on)
+                        },
+                        fontSize = 13.sp,
+                    )
+                }
+                TextButton(onClick = onDelete, enabled = !busy) {
+                    Text(
+                        text = stringResource(R.string.routines_delete),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Aktionsseite Verlauf: Ereignisse aus `GET /events` und das Log des Agenten
+ * (`GET /log`). Nur lesend; kopiert wird wie bisher ueber die Zwischenablage.
+ */
+@Composable
+private fun HistoryPage(
+    events: List<AgentEvent>,
+    logText: String,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onCopy: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.history_events_title),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onRefresh, enabled = !busy) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.history_refresh),
+                )
+            }
+        }
+
+        if (events.isEmpty()) {
+            Text(
+                text = stringResource(R.string.history_empty),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+
+        events.take(30).forEach { event ->
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = event.action,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (event.ok) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = event.time,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    if (event.detail.isNotBlank()) {
+                        Text(
+                            text = event.detail,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        Text(
+            text = stringResource(R.string.history_log_title),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            SelectionContainer {
+                Text(
+                    text = logText,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = onCopy,
+                enabled = !busy,
+                shape = RoundedCornerShape(14.dp),
+            ) { Text(stringResource(R.string.history_copy)) }
+            OutlinedButton(
+                onClick = onRefresh,
+                enabled = !busy,
+                shape = RoundedCornerShape(14.dp),
+            ) { Text(stringResource(R.string.history_refresh)) }
+        }
+    }
+}
+
+

@@ -48,6 +48,17 @@
 
 ## Geplant
 
+> **Neu ab 18.11.2026:** Steam-Plugin (Millennium), Kachel-Startbildschirm und
+> Now-Bar-Live-Benachrichtigungen. Verbindliche Checkliste:
+> [`docs/steam-plugin-und-kacheln.md`](docs/steam-plugin-und-kacheln.md)
+
+- [x] Steam-Plugin `steam-millennium`: Paket fertig, **Push nach GitHub nötig**
+      (Katalog kommt über `raw.githubusercontent.com`)
+- [x] Agent: `GET /steam` + `GET /downloads` (read-only), Plugin-Freigabe `steam`
+- [x] Katalog-Infrastruktur: `plugin-catalog/README.md` + `scripts/new-plugin.ps1`
+- [x] App: Home als Kachel-Raster mit eigenen Aktionsseiten
+- [x] Live-Notification/Now Bar: Steam-Download, Shutdown-Countdown, Startphase
+
 - [x] Routinen (ersetzt den Zeitplan): Auslöser (Uhrzeit, App-Knopf) + Aktionen
   (Herunterfahren, Ruhezustand, Energieplan); PC muss dafür wach/entsperrt bleiben
 - [ ] Routinen erweitern: Ereignis-Auslöser, Android-Kachel

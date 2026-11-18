@@ -59,7 +59,11 @@ pub struct Manifest {
     /// Datei im Plugin-Ordner (relativ), Standard `main.js`.
     pub entry: String,
     /// Freigegebene Host-Funktionen: `log`, `status`, `metrics`, `power`,
-    /// `games`, `process`.
+    /// `games`, `process`, `steam`.
+    ///
+    /// `steam` gibt `pc.steam()` frei (read-only: Steam-Pfad, Millennium,
+    /// laufende Downloads). Die Daten liest der Agent in `src/steam.rs`; das
+    /// Plugin selbst bekommt keinen Dateisystem-Zugriff.
     pub permissions: Vec<String>,
     /// Abstand der `tick()`-Aufrufe; 0 = kein Takt.
     pub interval_ms: u64,
@@ -787,6 +791,7 @@ const PRELUDE: &str = r#"
     games: function () { return call("games", []); },
     scanGames: function () { return call("scanGames", []); },
     gameConfig: function () { return call("gameConfig", []); },
+    steam: function () { return call("steam", []); },
     events: function () { return call("events", []); },
     killProcesses: function (names) { return call("killProcesses", [names]); },
     boost: function (exe) { return call("boost", [String(exe)]); },
@@ -874,6 +879,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         "metrics" => Some("metrics"),
         "powerPlan" | "setPowerPlan" | "shutdown" | "abort" | "hibernate" => Some("power"),
         "games" | "scanGames" => Some("games"),
+        "steam" => Some("steam"),
         "killProcesses" | "boost" | "cleanMemory" | "isAdmin" => Some("process"),
         _ => None,
     };
@@ -953,6 +959,8 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
             let config = crate::games::load_config(app);
             Ok(serde_json::to_value(config).unwrap_or(Value::Null))
         }
+        // Steam nur lesen: Pfad, Millennium, Downloads, Tempo (src/steam.rs).
+        "steam" => Ok(serde_json::to_value(crate::steam::status(app)).unwrap_or(Value::Null)),
         "events" => {
             let guard = app.inner.lock().expect("Zustands-Sperre");
             Ok(json!(guard.events.iter().collect::<Vec<_>>()))
@@ -1159,6 +1167,81 @@ mod tests {
         let bundle = bundle_of(&app, "system-monitor").unwrap();
         assert_eq!(bundle.id, "system-monitor");
         assert!(bundle.files.contains_key(DEFAULT_ENTRY));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Pfad zum Marktplatz-Paket `steam-millennium` im Repository.
+    fn steam_package() -> Bundle {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("plugin-catalog")
+            .join("steam-millennium.json");
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        serde_json::from_str(&text).expect("Paket ist kein gueltiges Plugin-JSON")
+    }
+
+    #[test]
+    fn katalogpaket_steam_millennium_ist_gueltig() {
+        let bundle = steam_package();
+        assert_eq!(bundle.id, "steam-millennium");
+        assert_eq!(bundle.interval_ms, 2000);
+        assert!(bundle.permissions.iter().any(|right| right == "steam"));
+        assert!(bundle.permissions.iter().any(|right| right == "log"));
+        let manifest = bundle.manifest();
+        assert!(manifest.is_valid());
+        let code = bundle.files.get(&bundle.entry).expect("main.js fehlt");
+        assert!(code.contains("function activate"));
+        assert!(code.contains("function tick"));
+        assert!(code.contains("pc.steam()"));
+    }
+
+    #[test]
+    fn katalogpaket_js_laesst_sich_in_boa_laden() {
+        let bundle = steam_package();
+        let code = bundle.files.get(&bundle.entry).unwrap().clone();
+        // Nur laden (kein activate/tick): dabei wird keine Host-Funktion gerufen.
+        let mut context = JsContext::default();
+        context
+            .eval(Source::from_bytes(PRELUDE.as_bytes()))
+            .expect("Vorspann laedt");
+        context
+            .eval(Source::from_bytes(code.as_bytes()))
+            .expect("Plugin-Code laedt");
+        let check = context
+            .eval(Source::from_bytes(b"typeof pc.steam === 'function'"))
+            .expect("Pruefung laeuft");
+        assert!(check.to_boolean(), "pc.steam() fehlt im Vorspann");
+    }
+
+    #[test]
+    fn steam_ohne_berechtigung_wird_abgelehnt() {
+        let (app, dir) = test_app("host-steam-deny");
+        let host = HostCtx {
+            app: Arc::clone(&app),
+            plugin_id: "x".to_string(),
+            permissions: HashSet::new(),
+        };
+        let error = host_call(&host, "steam", &Value::Null).unwrap_err();
+        assert!(error.contains("Berechtigung 'steam' fehlt"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn steam_mit_berechtigung_liefert_status() {
+        let (app, dir) = test_app("host-steam-ok");
+        let mut permissions = HashSet::new();
+        permissions.insert("steam".to_string());
+        let host = HostCtx {
+            app: Arc::clone(&app),
+            plugin_id: "x".to_string(),
+            permissions,
+        };
+        let value = host_call(&host, "steam", &Value::Null).unwrap();
+        // Auch ohne Steam-Installation kommt ein vollstaendiges JSON zurueck.
+        assert!(value.get("detected").is_some());
+        assert!(value.get("millennium").is_some());
+        assert!(value.get("downloads").is_some());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

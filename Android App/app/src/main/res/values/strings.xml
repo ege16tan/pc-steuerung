@@ -55,4 +55,91 @@
     <string name="plugins_remove">Entfernen</string>
     <string name="plugins_install">Installieren</string>
     <string name="plugins_installed">installiert</string>
+
+    <!-- Kachel-Startbildschirm (Home) -->
+    <string name="home_title">PC Steuerung</string>
+    <string name="home_subtitle">Was möchtest du steuern?</string>
+    <string name="home_updated">Zuletzt geprüft: %1$s</string>
+    <string name="home_refresh">Status aktualisieren</string>
+    <string name="action_back">Zurück</string>
+
+    <!-- Kacheln und ihre Kurzstatus -->
+    <string name="tile_control">Steuerung</string>
+    <string name="tile_steam">Steam</string>
+    <string name="tile_plugins">Plugins</string>
+    <string name="tile_market">Markt+</string>
+    <string name="tile_routines">Routinen</string>
+    <string name="tile_history">Verlauf</string>
+    <string name="tile_energy">Energie</string>
+    <string name="tile_settings">Einstellungen</string>
+    <string name="tile_pending">Herunterfahren in %1$s</string>
+    <string name="tile_no_plugins">Keine Plugins</string>
+    <string name="tile_plugins_count">%1$d Plugins</string>
+    <string name="tile_plugins_active">%1$d Plugins · %2$d aktiv</string>
+    <string name="tile_modules_installed">%1$d installiert · %2$d verfügbar</string>
+    <string name="tile_no_routines">Keine Routinen</string>
+    <string name="tile_routines_count">%1$d Routinen</string>
+    <string name="tile_no_events">Keine Einträge</string>
+    <string name="tile_steam_checking">Prüfe …</string>
+    <string name="tile_steam_unavailable">Nicht verfügbar</string>
+    <string name="tile_steam_not_detected">Nicht erkannt</string>
+    <string name="tile_steam_no_downloads">Keine Downloads</string>
+    <string name="tile_steam_download_count">%1$d Downloads</string>
+
+    <!-- Aktionsseiten: Kopfzeilen -->
+    <string name="page_control_title">Steuerung</string>
+    <string name="page_steam_title">Steam</string>
+    <string name="page_steam_subtitle">Downloads und Millennium auf dem PC</string>
+    <string name="page_plugins_title">Plugins</string>
+    <string name="page_plugins_subtitle">Lokale Plugins im Agenten</string>
+    <string name="page_market_title">Markt+</string>
+    <string name="page_market_subtitle">Erweiterungen für deine PC-Steuerung</string>
+    <string name="page_routines_title">Routinen</string>
+    <string name="page_routines_subtitle">Automatische Abläufe im Agenten</string>
+    <string name="page_history_title">Verlauf</string>
+    <string name="page_history_subtitle">Ereignisse und Log des Agenten</string>
+    <string name="page_energy_title">Energieplan</string>
+    <string name="page_energy_subtitle">Leistung des PCs</string>
+    <string name="page_settings_subtitle">PC Steuerung anpassen</string>
+    <string name="market_open_plugins">Plugins auf dem PC (%1$d)</string>
+
+    <!-- Aktionsseite Steam -->
+    <string name="steam_loading">Lade Steam-Status …</string>
+    <string name="steam_unavailable">Steam nicht verfügbar</string>
+    <string name="steam_unavailable_hint">Der Agent liefert keine Steam-Daten. Prüfe, ob der Agent aktuell ist (Route /steam).</string>
+    <string name="steam_refresh">Aktualisieren</string>
+    <string name="steam_detected">Steam erkannt</string>
+    <string name="steam_not_detected">Steam nicht erkannt</string>
+    <string name="steam_millennium_on">Millennium erkannt</string>
+    <string name="steam_millennium_off">Millennium nicht erkannt</string>
+    <string name="steam_running">Steam läuft</string>
+    <string name="steam_not_running">Steam ist aus</string>
+    <string name="steam_downloads_title">DOWNLOADS</string>
+    <string name="steam_no_downloads">Keine aktiven Downloads.</string>
+    <string name="steam_speed">%1$s pro Sekunde</string>
+    <string name="steam_of">%1$s von %2$s</string>
+    <string name="steam_progress">%1$s – %2$s</string>
+
+    <!-- Aktionsseite Routinen -->
+    <string name="routines_loading">Lade Routinen …</string>
+    <string name="routines_empty">Keine Routinen angelegt.</string>
+    <string name="routines_hint">Routinen liegen im Agenten und gelten für alle Geräte.</string>
+    <string name="routines_next">Nächster Lauf: %1$s</string>
+    <string name="routines_last">Zuletzt: %1$s</string>
+    <string name="routines_never">Noch nicht gelaufen</string>
+    <string name="routines_run">Jetzt</string>
+    <string name="routines_on">An</string>
+    <string name="routines_off">Aus</string>
+    <string name="routines_delete">Löschen</string>
+    <string name="routines_switch_on">Einschalten</string>
+    <string name="routines_switch_off">Ausschalten</string>
+    <string name="routines_refresh">Routinen aktualisieren</string>
+    <string name="routines_actions">Aktionen: %1$s</string>
+
+    <!-- Aktionsseite Verlauf -->
+    <string name="history_events_title">EREIGNISSE</string>
+    <string name="history_log_title">LOG</string>
+    <string name="history_empty">Noch keine Einträge.</string>
+    <string name="history_copy">Kopieren</string>
+    <string name="history_refresh">Aktualisieren</string>
 </resources>

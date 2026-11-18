@@ -16,6 +16,13 @@
       "description": "Meldet CPU- und RAM-Auslastung im Plugin-Log (alle 5 s).",
       "version": "1",
       "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/system-monitor.json"
+    },
+    {
+      "id": "steam-millennium",
+      "name": "Steam + Millennium",
+      "description": "Zeigt Steam-Installation, Millennium-Status und laufende Downloads in Status und Log (nur Lesen).",
+      "version": "1",
+      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/steam-millennium.json"
     }
   ]
 }

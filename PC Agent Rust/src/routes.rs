@@ -5,7 +5,8 @@
 //! POST /wake, POST /ping, GET /events, GET /log,
 //! GET /plugins, POST /plugins/{id}/start, POST /plugins/{id}/stop,
 //! GET /plugins/{id}/output,
-//! GET /games, POST /games/scan, GET/POST /game-config.
+//! GET /games, POST /games/scan, GET/POST /game-config,
+//! GET /steam, GET /downloads (Steam, nur Lesen).
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -1123,6 +1124,37 @@ pub async fn game_config_set(
         Err(message) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Speichern fehlgeschlagen: {message}"),
+        ),
+    }
+}
+
+// ---------------- Steam (nur Lesen) ----------------
+
+/// GET /steam — Steam-Status: Installation, Millennium, Downloads, Tempo.
+///
+/// Die Datei- und Prozessabfragen laufen in einem eigenen Thread
+/// (`spawn_blocking`), damit der HTTP-Dienst fluessig bleibt.
+pub async fn steam_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let worker = Arc::clone(&app);
+    match tokio::task::spawn_blocking(move || crate::steam::status(&worker)).await {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Steam-Status fehlgeschlagen: {error}"),
+        ),
+    }
+}
+
+/// GET /downloads — laufende Steam-Downloads (read-only, MVP).
+///
+/// Gleiche Datenquelle wie `downloads` in `GET /steam`.
+pub async fn downloads_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let worker = Arc::clone(&app);
+    match tokio::task::spawn_blocking(move || crate::steam::downloads(&worker)).await {
+        Ok(downloads) => Json(json!({ "downloads": downloads })).into_response(),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Downloads konnten nicht gelesen werden: {error}"),
         ),
     }
 }

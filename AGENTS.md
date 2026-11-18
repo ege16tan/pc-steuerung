@@ -48,7 +48,8 @@ Status).
   `GET /plugins`, `POST /plugins/{id}/start?game=&auto=`, `POST /plugins/{id}/stop`,
   `GET /plugins/{id}/output?lines=`, `GET /plugins/{id}/bundle`,
   `GET /plugin-catalog`, `POST /plugins/{id}/install`, `DELETE /plugins/{id}`,
-  `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`.
+  `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`,
+  `GET /steam`, `GET /downloads`.
 - **Plugins (neu, 15.11.2026):** `src/jsplugins.rs` betreibt JavaScript-Plugins mit
   der eingebetteten Engine **Boa** (reines Rust, kein C-Toolchain nötig). Ein Plugin
   ist ein Ordner im Datenordner: `<Datenordner>\plugins\<id>\plugin.json` (Manifest:
@@ -68,6 +69,22 @@ Status).
   `plugin-catalog/plugins.json` im Repo (URL `CATALOG_URL` in `jsplugins.rs`),
   Download per `curl.exe`. Ausgabe-Ringpuffer 300 Zeilen, Ergebniszeilen mit `>`
   landen zusätzlich im Journal.
+- **Steam + Millennium (18.11.2026):** `src/steam.rs` liest read-only die
+  Steam-Installation (Registry `HKCU\Software\Valve\Steam`, Fallback-Pfade),
+  `steamapps\libraryfolders.vdf` und `steamapps\appmanifest_*.acf`
+  (`StateFlags`, `BytesDownloaded`/`BytesToDownload`, Tempo aus zwei Messungen).
+  Millennium wird nur **erkannt** (`<Steam>\millennium` bzw. `<Steam>\plugins\*.json`),
+  nichts installiert. Neue Endpunkte `GET /steam`, `GET /downloads`; neue
+  Plugin-Freigabe `steam` → `pc.steam()`. Marktplatz-Paket
+  `plugin-catalog/steam-millennium.json` (bewusst nicht eingebaut), Doku
+  `plugin-catalog/README.md`, Vorlage `scripts/new-plugin.ps1`.
+- **Android-UI (18.11.2026):** Start ist ein Kachel-Raster (`HomeScreen`,
+  `LazyVerticalGrid` 2 Spalten), jede Kachel öffnet eine Aktionsseite (eigener
+  `Route`-State + `BackHandler`, keine Navigation-Bibliothek). `LiveStatus.kt`
+  bringt den Foreground-Service `LiveStatusService` (ONGOING-Progress-Notification
+  für Steam-Download, Shutdown-Countdown mit „Abbrechen“, Startphase); Texte in
+  `res/values/strings_live.xml`. Samsung Now Bar kann die Karte zeigen – abhängig
+  von One UI/„Live-Benachrichtigungen“, nicht erzwingbar.
 - **Plugins (alt):** `src/plugins.rs` startet weiter EXE-Hilfsprogramme nur auf
   Anforderung (Manifeste `<EXE>\plugins\*.json` oder `<Datenordner>\plugins\*.json`,
   `bin` + `args`). Das frühere eingebaute `game-optimizer.exe` ist ersatzlos

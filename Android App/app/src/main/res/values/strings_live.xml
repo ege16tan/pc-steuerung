@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Texte der Live-Benachrichtigung (Samsung "Now Bar").
+  Absichtlich eigene Datei, damit res/values/strings.xml frei bleibt.
+  Schreibweise ASCII-transliteriert (ae/oe/ue) wie im restlichen Projekt.
+-->
+<resources>
+
+    <!-- Kanal (IMPORTANCE_LOW: kein Ton, keine Vibration) -->
+    <string name="live_channel_name">PC Steuerung live</string>
+    <string name="live_channel_desc">Laufender Download, Shutdown-Countdown und Startphase</string>
+
+    <!-- Neutraler Zustand -->
+    <string name="live_title_checking">PC Steuerung live</string>
+    <string name="live_text_checking">Pruefe Zustand \u2026</string>
+
+    <!-- (a) Steam-Download -->
+    <string name="live_title_download_one">PC laedt %1$s</string>
+    <string name="live_title_download_plain">PC laedt</string>
+    <plurals name="live_title_download_many">
+        <item quantity="one">%1$d Download</item>
+        <item quantity="other">%1$d Downloads</item>
+    </plurals>
+    <string name="live_text_download">%1$s \u00b7 %2$s</string>
+    <string name="live_text_download_plain">%1$s</string>
+    <string name="live_text_download_overall">Gesamt %1$s \u00b7 %2$s</string>
+    <string name="live_text_download_overall_plain">Gesamt %1$s</string>
+    <string name="live_sizes">%1$s / %2$s %3$s</string>
+
+    <!-- (b) Shutdown-Countdown -->
+    <string name="live_title_shutdown">PC faehrt herunter</string>
+    <string name="live_text_shutdown">noch %1$d s</string>
+    <string name="live_text_abort_failed">Abbruch fehlgeschlagen - Countdown laeuft weiter</string>
+    <string name="live_action_abort">Abbrechen</string>
+
+    <!-- (c) Startphase (WoL) -->
+    <string name="live_title_starting">PC startet \u2026</string>
+    <string name="live_text_starting">warte auf %1$s</string>
+    <string name="live_text_starting_plain">warte auf PC</string>
+
+    <!-- Zustand unbekannt (PC nicht erreichbar, 401/404, kaputtes JSON) -->
+    <string name="live_title_unknown">PC Steuerung</string>
+    <string name="live_text_unknown">PC nicht erreichbar - Zustand unbekannt</string>
+
+</resources>
