@@ -141,9 +141,8 @@ GET /steam -> detected:true, steam_path:"c:\\steam", millennium:true,
 
 **Offen**
 
-- [ ] `git push` – `GET /plugin-catalog` liest `plugin-catalog/plugins.json`
-      ueber `raw.githubusercontent.com`; ohne Push zeigt Markt+ das neue Paket
-      noch nicht (der lokale Agent kennt nur die zwei eingebauten Plugins).
+- [x] `git push` + Release **v0.11.0** (18.11.2026): Katalog ist live,
+      `GET /plugin-catalog` listet `steam-millennium`, Markt+ findet es.
 - [ ] `speed_bps` beim ersten Aufruf 0 (zwei Messungen noetig) – erwartet.
 - [ ] Now Bar: Karte erscheint nur, wenn One UI „Live-Benachrichtigungen"
       erlaubt; technisch sind alle Voraussetzungen erfuellt (ongoing, silent,

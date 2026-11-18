@@ -52,8 +52,8 @@
 > Now-Bar-Live-Benachrichtigungen. Verbindliche Checkliste:
 > [`docs/steam-plugin-und-kacheln.md`](docs/steam-plugin-und-kacheln.md)
 
-- [x] Steam-Plugin `steam-millennium`: Paket fertig, **Push nach GitHub nötig**
-      (Katalog kommt über `raw.githubusercontent.com`)
+- [x] Steam-Plugin `steam-millennium`: Release **v0.11.0**, Katalog live
+      (Markt+ findet es)
 - [x] Agent: `GET /steam` + `GET /downloads` (read-only), Plugin-Freigabe `steam`
 - [x] Katalog-Infrastruktur: `plugin-catalog/README.md` + `scripts/new-plugin.ps1`
 - [x] App: Home als Kachel-Raster mit eigenen Aktionsseiten
