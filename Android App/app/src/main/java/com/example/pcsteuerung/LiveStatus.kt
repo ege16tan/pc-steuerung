@@ -12,8 +12,6 @@ import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -39,11 +37,18 @@ import kotlin.math.roundToInt
  * es etwas zu zeigen gibt:
  *
  *  a) Steam-Download  -> `GET /steam` (Fallback `GET /downloads`)
+ *                        Titel = Spiel, Text = Prozent, Tempo und Restzeit
  *  b) Herunterfahren  -> `pending_seconds` / `pending_shutdown` aus `GET /status`
  *  c) Startphase      -> "PC startet ...", bis `/status` antwortet
  *
- * Er pollt alle 2 s, laesst sich ueber die Service-Actions steuern und beendet
- * sich selbst, sobald nichts mehr anzuzeigen ist. Alle Netzaufrufe laufen in
+ * Auf Android 16 (API 36) wird die Karte als echtes "Live Update" mit
+ * `Notification.ProgressStyle` und Kurztext fuer den Statusleisten-Chip
+ * gebaut (`setShortCriticalText`). Aeltere Versionen bekommen denselben Inhalt
+ * als normale Fortschritts-Benachrichtigung.
+ *
+ * Der Countdown laeuft lokal im Sekundentakt weiter (der Agent wird nur alle
+ * [POLL_MS] gefragt), Downloads werden im ruhigen 3-s-Takt gelesen - Steam
+ * schreibt die `.acf` ohnehin nicht oefter. Alle Netzaufrufe laufen in
  * `Dispatchers.IO`; kaputte Antworten (401/404/JSON-Fehler, PC aus) fuehren
  * hoechstens zum Zustand "unbekannt" - nie zu einem Absturz.
  */
@@ -64,6 +69,17 @@ class LiveStatusService : Service() {
     /** Wurde der PC schon einmal nicht erreicht? (0 = nein) */
     private var unreachableSinceMs = 0L
 
+    /** Countdown aus `/status`: lokales Weiterzaehlen zwischen zwei Abfragen. */
+    private var countdownTotal = 0
+    private var countdownRemaining = 0
+    private var countdownSyncedAt = 0L
+
+    /** Zeitpunkt der letzten Netzabfrage (fuer den ruhigen Poll-Takt). */
+    private var lastPollAt = 0L
+
+    /** Diagnose fuer die Live-Updates-Freigabe nur einmal ins Log. */
+    private var promotionLogged = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -76,8 +92,9 @@ class LiveStatusService : Service() {
 
         // Zuerst eine Benachrichtigung setzen: ein per startForegroundService
         // gestarteter Dienst muss das innerhalb von 5 s tun (sonst stuerzt
-        // Android 14+ die App ab).
-        postForeground(notificationChecking())
+        // Android 14+ die App ab). Laeuft die Schleife schon, bleibt die
+        // aktuelle Karte stehen (kein Flackern bei jedem ACTION_SYNC).
+        if (loop?.isActive != true) postForeground(notificationChecking())
 
         profile = intent?.let { readProfile(it) } ?: ProfileStore.active(this)
         val active = profile
@@ -122,17 +139,30 @@ class LiveStatusService : Service() {
 
     private fun startLoop() {
         if (loop?.isActive == true) return
+        // Sofort eine Runde drehen (z. B. nach einem fehlgeschlagenen Abbruch),
+        // nicht erst nach dem naechsten Takt.
+        lastPollAt = 0L
         loop = scope.launch {
             while (isActive) {
-                val keepRunning = runCatching { poll() }.getOrElse { error ->
-                    Log.d(LIVE_TAG, "Live-Abfrage fehlgeschlagen: ${error.javaClass.simpleName}")
-                    false
+                val now = SystemClock.elapsedRealtime()
+                val pollDue = now - lastPollAt >= POLL_MS
+                val keepRunning = if (pollDue) {
+                    lastPollAt = now
+                    runCatching { poll() }.getOrElse { error ->
+                        Log.d(LIVE_TAG, "Live-Abfrage fehlgeschlagen: ${error.javaClass.simpleName}")
+                        false
+                    }
+                } else {
+                    // Zwischen zwei Abfragen zaehlt der Countdown lokal weiter,
+                    // damit die Karte nicht in 3-s-Spruengen springt.
+                    tickCountdown()
+                    true
                 }
                 if (!keepRunning) {
                     teardown()
                     return@launch
                 }
-                delay(POLL_MS)
+                delay(if (countdownRemaining > 0) COUNTDOWN_TICK_MS else POLL_MS)
             }
         }
     }
@@ -154,6 +184,9 @@ class LiveStatusService : Service() {
             null
         }
         val reachable = status != null
+        // Antwortet der PC, ist die Startphase vorbei - auch wenn sie vorher
+        // angefordert wurde.
+        if (reachable) waitOnline = false
 
         // Nur fragen, wenn der Agent ueberhaupt antwortet. 404 = Route fehlt
         // (aeltere Agent-Version) -> Steam-Zustand ehrlich ueberspringen.
@@ -166,20 +199,32 @@ class LiveStatusService : Service() {
         return when {
             remaining > 0 -> {
                 clearGrace()
-                postForeground(notificationCountdown(total, remaining))
+                countdownTotal = maxOf(total, remaining)
+                countdownRemaining = remaining
+                countdownSyncedAt = now
+                postForeground(notificationCountdown(countdownTotal, remaining))
                 true
             }
             running.isNotEmpty() -> {
                 clearGrace()
+                countdownTotal = 0
+                countdownRemaining = 0
                 postForeground(notificationDownload(running))
                 true
             }
             // Antwortet der Agent und laeuft nichts, gibt es nichts anzuzeigen
             // (auch nicht nach einem erledigten Download/Countdown oder am Ende
             // der Startphase) -> sofort beenden, kein Dauerlauf ohne Zweck.
-            reachable -> false
+            reachable -> {
+                countdownTotal = 0
+                countdownRemaining = 0
+                false
+            }
             else -> {
-                // PC nicht erreichbar: Gnadenfrist, dann aufgeben.
+                // PC nicht erreichbar: Gnadenfrist, dann aufgeben. Ein lokaler
+                // Countdown waere hier geraten - deshalb sofort auf "unbekannt".
+                countdownTotal = 0
+                countdownRemaining = 0
                 if (waitOnline) {
                     val keep = now < waitDeadlineMs
                     if (keep) postForeground(notificationStarting(active.name))
@@ -192,6 +237,14 @@ class LiveStatusService : Service() {
                 }
             }
         }
+    }
+
+    /** Countdown zwischen zwei Abfragen lokal weiterzaehlen. */
+    private fun tickCountdown() {
+        if (countdownRemaining <= 0) return
+        val elapsed = ((SystemClock.elapsedRealtime() - countdownSyncedAt) / 1000L).toInt()
+        val left = (countdownRemaining - elapsed).coerceAtLeast(0)
+        postForeground(notificationCountdown(countdownTotal, left))
     }
 
     /** Etwas laeuft: die Unerreichbar-Frist zuruecksetzen. */
@@ -261,24 +314,88 @@ class LiveStatusService : Service() {
     private fun teardown() {
         loop?.cancel()
         loop = null
-        runCatching { NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID) }
+        countdownTotal = 0
+        countdownRemaining = 0
+        runCatching { getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID) }
         runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
         stopSelf()
     }
 
-    private fun baseBuilder(): NotificationCompat.Builder =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    /**
+     * Inhalt einer Live-Karte. Alle Zustaende (Download, Countdown, Startphase)
+     * werden zuerst als [LiveCard] beschrieben und danach einmal gebaut - so
+     * sehen Android 16 (Live Updates) und aeltere Versionen denselben Inhalt.
+     */
+    private data class LiveCard(
+        val title: String,
+        val text: String,
+        /** Fortschritt in Promille (0..1000); null = unbestimmt. */
+        val permille: Int? = null,
+        /** Kurztext fuer den Chip der Statusleiste (Android 16 Live Updates). */
+        val shortCritical: String? = null,
+        val showAbort: Boolean = false,
+    )
+
+    private fun buildNotification(card: LiveCard): Notification {
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setColor(0xFF1565C0.toInt())
+            .setContentTitle(card.title)
+            .setContentText(card.text)
             .setOnlyAlertOnce(true)
-            .setSilent(true)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setCategory(Notification.CATEGORY_PROGRESS)
             .setShowWhen(false)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setContentIntent(openAppIntent())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+
+        val permille = card.permille?.coerceIn(0, 1000)
+        if (Build.VERSION.SDK_INT >= ANDROID_16) {
+            // Android 16 "Live Updates": Segment als Balken (Gewicht 1000 passt
+            // zu Promille) plus Kurztext, den Samsung in der Now Bar als Chip
+            // zeigt. Ohne Segment bliebe die Karte eine normale Notification.
+            val style = Notification.ProgressStyle()
+                .setProgressSegments(listOf(Notification.ProgressStyle.Segment(1000)))
+                .setProgress(permille ?: 0)
+                .setProgressIndeterminate(permille == null)
+            builder.setStyle(style)
+            val shortCritical = card.shortCritical
+            if (shortCritical != null) {
+                // Manche OEMs pruefen den Chip-Text streng - ein Fehler darf
+                // niemals die Benachrichtigung (und damit den Dienst) kippen.
+                runCatching { builder.setShortCriticalText(shortCritical) }
+                    .onFailure { Log.d(LIVE_TAG, "Kurztext abgelehnt: ${it.javaClass.simpleName}") }
+            }
+        } else if (permille != null) {
+            builder.setProgress(1000, permille, false)
+        } else {
+            builder.setProgress(0, 0, true)
+        }
+
+        if (card.showAbort) {
+            builder.addAction(0, getString(R.string.live_action_abort), abortIntent())
+        }
+        val notification = builder.build()
+        logPromotionOnce(notification)
+        return notification
+    }
+
+    /** Einmal ins Log, ob das System Live Updates fuer die App zulaesst. */
+    private fun logPromotionOnce(notification: Notification) {
+        if (Build.VERSION.SDK_INT < ANDROID_16 || promotionLogged) return
+        promotionLogged = true
+        runCatching {
+            val manager = getSystemService(NotificationManager::class.java)
+            Log.d(
+                LIVE_TAG,
+                "Live-Updates: erlaubt=${manager?.canPostPromotedNotifications()}, " +
+                    "geeignet=${notification.hasPromotableCharacteristics()}",
+            )
+        }
+    }
 
     private fun openAppIntent(): PendingIntent {
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -294,45 +411,60 @@ class LiveStatusService : Service() {
         return PendingIntent.getForegroundService(this, REQUEST_ABORT, intent, PENDING_FLAGS)
     }
 
-    private fun notificationChecking(): Notification = baseBuilder()
-        .setContentTitle(getString(R.string.live_title_checking))
-        .setContentText(getString(R.string.live_text_checking))
-        .setProgress(0, 0, true)
-        .build()
+    private fun notificationChecking(): Notification = buildNotification(
+        LiveCard(
+            title = getString(R.string.live_title_checking),
+            text = getString(R.string.live_text_checking),
+        )
+    )
 
-    private fun notificationUnknown(): Notification = baseBuilder()
-        .setContentTitle(getString(R.string.live_title_unknown))
-        .setContentText(getString(R.string.live_text_unknown))
-        .build()
+    private fun notificationUnknown(): Notification = buildNotification(
+        LiveCard(
+            title = getString(R.string.live_title_unknown),
+            text = getString(R.string.live_text_unknown),
+        )
+    )
 
-    private fun notificationAbortFailed(): Notification = baseBuilder()
-        .setContentTitle(getString(R.string.live_title_shutdown))
-        .setContentText(getString(R.string.live_text_abort_failed))
-        .addAction(0, getString(R.string.live_action_abort), abortIntent())
-        .build()
+    private fun notificationAbortFailed(): Notification = buildNotification(
+        LiveCard(
+            title = getString(R.string.live_title_shutdown),
+            text = getString(R.string.live_text_abort_failed),
+            // Nach dem Fehlschlag laeuft der Countdown weiter: Balken unbestimmt,
+            // Abbruch bleibt angeboten.
+            showAbort = true,
+        )
+    )
 
-    private fun notificationStarting(deviceName: String): Notification = baseBuilder()
-        .setContentTitle(getString(R.string.live_title_starting))
-        .setContentText(
-            if (deviceName.isBlank()) {
+    private fun notificationStarting(deviceName: String): Notification = buildNotification(
+        LiveCard(
+            title = getString(R.string.live_title_starting),
+            text = if (deviceName.isBlank()) {
                 getString(R.string.live_text_starting_plain)
             } else {
                 getString(R.string.live_text_starting, deviceName)
-            }
+            },
         )
-        .setProgress(0, 0, true)
-        .build()
+    )
 
-    /** Countdown: Fortschritt laeuft rueckwaerts (max = Startwert, progress = Rest). */
+    /**
+     * Countdown: der Balken fuellt sich (abgelaufene Zeit), der Text und der
+     * Chip zeigen die Restzeit.
+     */
     private fun notificationCountdown(totalSeconds: Int, remainingSeconds: Int): Notification {
         val max = maxOf(totalSeconds, remainingSeconds, 1)
         val remaining = remainingSeconds.coerceIn(0, max)
-        return baseBuilder()
-            .setContentTitle(getString(R.string.live_title_shutdown))
-            .setContentText(getString(R.string.live_text_shutdown, remaining))
-            .setProgress(max, remaining, false)
-            .addAction(0, getString(R.string.live_action_abort), abortIntent())
-            .build()
+        val permille = ((max - remaining) * 1000 / max).coerceIn(0, 1000)
+        val remainingText = getString(R.string.live_text_shutdown, remaining)
+        return buildNotification(
+            LiveCard(
+                title = getString(R.string.live_title_shutdown),
+                text = remainingText,
+                permille = permille,
+                // Chip bewusst knapp ("42 s"), der Fliesstext bleibt "noch 42 s".
+                shortCritical = getString(R.string.live_short_seconds, remaining),
+                showAbort = true,
+            )
+        )
     }
 
     private fun notificationDownload(running: List<LiveDownload>): Notification {
@@ -362,25 +494,41 @@ class LiveStatusService : Service() {
             )
         }
 
-        val percentText = String.format(Locale.US, "%.1f %%", percent)
-        val text = when {
-            total > 0L && single == null ->
-                getString(R.string.live_text_download_overall, percentText, sizesText(downloaded, total))
-            total > 0L ->
-                getString(R.string.live_text_download, percentText, sizesText(downloaded, total))
-            single == null ->
-                getString(R.string.live_text_download_overall_plain, percentText)
-            else ->
-                getString(R.string.live_text_download_plain, percentText)
+        // Tempo/Restzeit: bei einem Download direkt, bei mehreren als Summe.
+        val speedBps = if (single != null) single.speedBps else running.sumOf { it.speedBps }
+        val etaSeconds = if (single != null) {
+            single.etaSeconds
+        } else {
+            overallEta(running, speedBps)
         }
 
-        val promille = (percent * 10.0).roundToInt().coerceIn(0, 1000)
+        val percentText = String.format(Locale.US, "%.1f %%", percent)
+        val parts = ArrayList<String>(4)
+        parts.add(percentText)
+        if (speedBps > 0L) {
+            parts.add(speedText(speedBps))
+            if (etaSeconds > 0L) parts.add(etaText(etaSeconds))
+        } else if (total > 0L) {
+            parts.add(sizesText(downloaded, total))
+        }
+        val text = parts.joinToString(" \u00b7 ")
+
+        val permille = (percent * 10.0).roundToInt().coerceIn(0, 1000)
         val known = total > 0L || percent > 0.0
-        return baseBuilder()
-            .setContentTitle(title)
-            .setContentText(text)
-            .setProgress(1000, promille, !known)
-            .build()
+        return buildNotification(
+            LiveCard(
+                title = title,
+                text = text,
+                permille = if (known) permille else null,
+                // Chip nur mit echtem Wert - "0 %" waere bei unbekanntem
+                // Fortschritt eine Falschangabe.
+                shortCritical = if (known) {
+                    getString(R.string.live_short_percent, percent.roundToInt())
+                } else {
+                    null
+                },
+            )
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -404,6 +552,36 @@ class LiveStatusService : Service() {
         if (total > 0L) return (done.toDouble() / total.toDouble() * 100.0).coerceIn(0.0, 100.0)
         val average = downloads.map { it.percent.coerceIn(0.0, 100.0) }.average()
         return if (average.isNaN()) 0.0 else average
+    }
+
+    /** "4.2 MB/s" (KB/s und GB/s mit passender Einheit, dezimal wie Steam). */
+    private fun speedText(bps: Long): String = when {
+        bps >= 1_000_000_000L -> String.format(Locale.US, "%.1f GB/s", bps / 1_000_000_000.0)
+        bps >= 1_000_000L -> String.format(Locale.US, "%.1f MB/s", bps / 1_000_000.0)
+        bps >= 1_000L -> String.format(Locale.US, "%.0f KB/s", bps / 1_000.0)
+        else -> "$bps B/s"
+    }
+
+    /** "noch 12 Min." / "noch 40 s" / "noch 1 Std. 5 Min." */
+    private fun etaText(seconds: Long): String {
+        val value = seconds.coerceAtLeast(0L)
+        return when {
+            value < 60L -> getString(R.string.live_eta_seconds, value.toInt())
+            value < 3600L -> getString(R.string.live_eta_minutes, (value / 60L).toInt())
+            else -> getString(
+                R.string.live_eta_hours,
+                (value / 3600L).toInt(),
+                ((value % 3600L) / 60L).toInt(),
+            )
+        }
+    }
+
+    /** Restzeit fuer mehrere Downloads: Restbytes geteilt durch Summe der Tempi. */
+    private fun overallEta(downloads: List<LiveDownload>, speedBps: Long): Long {
+        if (speedBps <= 0L) return 0L
+        val remaining = downloads.sumOf { (it.total - it.downloaded).coerceAtLeast(0L) }
+        if (remaining <= 0L) return 0L
+        return remaining / speedBps
     }
 
     private fun readProfile(intent: Intent): Profile? {
@@ -442,7 +620,9 @@ class LiveStatusService : Service() {
         private const val REQUEST_OPEN = 1
         private const val REQUEST_ABORT = 2
 
-        private const val POLL_MS = 2_000L
+        private const val POLL_MS = 3_000L
+        /** Countdown lokal jede Sekunde neu zeichnen (ohne Netzabfrage). */
+        private const val COUNTDOWN_TICK_MS = 1_000L
         /** Antwortet der Agent nicht, nach 60 s aufgeben (kein Dauerlauf ohne Zweck). */
         private const val UNREACHABLE_GRACE_MS = 60_000L
 
@@ -489,7 +669,10 @@ class LiveStatusService : Service() {
 
 private const val LIVE_TAG = "PCSteuerungLive"
 
-/** Zeitlimit fuer eine einzelne Abfrage (der Dienst pollt alle 2 s). */
+/** Ab dieser API gibt es "Live Updates" (`Notification.ProgressStyle`). */
+private const val ANDROID_16 = 36
+
+/** Zeitlimit fuer eine einzelne Abfrage (der Dienst pollt alle 3 s). */
 private const val LIVE_TIMEOUT_MS = 2_500
 
 // ---------------------------------------------------------------------------
@@ -503,6 +686,10 @@ data class LiveDownload(
     val percent: Double = 0.0,
     val downloaded: Long = 0L,
     val total: Long = 0L,
+    /** Tempo aus zwei Messungen des Agenten (0 = noch unbekannt). */
+    val speedBps: Long = 0L,
+    /** Restzeit in Sekunden laut Agent (0 = unbekannt/fertig). */
+    val etaSeconds: Long = 0L,
 ) {
     val isFinished: Boolean
         get() = (total > 0L && downloaded >= total) || percent >= 100.0
@@ -559,6 +746,8 @@ fun parseLiveDownloads(body: String): List<LiveDownload>? {
                             percent = percent,
                             downloaded = json.optLong("bytes_downloaded", 0L),
                             total = total,
+                            speedBps = json.optLong("speed_bps", 0L),
+                            etaSeconds = json.optLong("eta_seconds", 0L),
                         )
                     )
                 } else {
@@ -581,6 +770,8 @@ private fun liveDownloadsFrom(array: JSONArray?): List<LiveDownload> {
                 percent = item.optDouble("percent", 0.0),
                 downloaded = item.optLong("bytes_downloaded", 0L),
                 total = item.optLong("bytes_total", 0L),
+                speedBps = item.optLong("speed_bps", 0L),
+                etaSeconds = item.optLong("eta_seconds", 0L),
             )
         )
     }

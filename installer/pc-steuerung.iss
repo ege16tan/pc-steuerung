@@ -1,5 +1,5 @@
 #define AppName "PC Steuerung"
-#define AppVersion "0.9.5"
+#define AppVersion "0.12.0"
 #define AppPublisher "PC Steuerung"
 #define AppExeName "PC Agent Rust\pc-agent.exe"
 

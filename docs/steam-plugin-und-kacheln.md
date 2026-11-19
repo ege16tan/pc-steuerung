@@ -46,14 +46,24 @@ GET /downloads                  -> Downloads-Liste (read-only, MVP)
   "bytes_downloaded": 12345678,
   "bytes_total": 29000000,
   "speed_bps": 4200000,
+  "eta_seconds": 300,
   "app_id": "730",
   "app_name": "Counter-Strike 2",
   "downloads": [
     { "app_id": "730", "name": "Counter-Strike 2", "percent": 42.5,
-      "bytes_downloaded": 12345678, "bytes_total": 29000000 }
+      "percent_staged": 55.0,
+      "bytes_downloaded": 12345678, "bytes_total": 29000000,
+      "bytes_staged": 15950000, "bytes_to_stage": 29000000,
+      "speed_bps": 4200000, "eta_seconds": 300 }
   ]
 }
 ```
+
+`percent` = `BytesDownloaded / BytesToDownload` (Download-Wert), `percent_staged`
+= `BytesStaged / BytesToStage` (Platte). Beide weichen bei Updates bewusst ab;
+`speed_bps`/`eta_seconds` sind beim ersten Aufruf 0 (zwei Messungen noetig).
+Die Kopfzeile (`app_*`, `progress_percent`, `speed_bps`, `eta_seconds`) beschreibt
+den **am weitesten fortgeschrittenen** Download.
 
 Neue Plugin-Freigabe: `steam` → `pc.steam()`. Neue Datei
 `PC Agent Rust/src/steam.rs`, Route in `routes.rs`, Host-Funktion in
@@ -148,3 +158,45 @@ GET /steam -> detected:true, steam_path:"c:\\steam", millennium:true,
       erlaubt; technisch sind alle Voraussetzungen erfuellt (ongoing, silent,
       Progress, `FOREGROUND_SERVICE_IMMEDIATE`).
 - [ ] Routinen-Formular (Anlegen) bleibt vorerst der Web-UI.
+
+## 9. Feinschliff 19.11.2026 (Benachrichtigung + Steam)
+
+**Agent (`src/steam.rs`)**
+
+- [x] `BytesStaged`/`BytesToStage` werden gelesen; `percent_staged` steht
+      getrennt neben `percent` (Download-Wert). Grund fuer die Differenz
+      29 %/33 %: Steam schreibt die `.acf` in Abstaenden und staged in Bloecken.
+- [x] Tempo **je Download** (`speed_bps`) aus zwei Messungen, dazu
+      `eta_seconds` (Restzeit). Der erste Aufruf liefert 0 – erwartet.
+- [x] `tasklist`-Pruefung (`steam_running`) 10 s gecacht: App, Plugin und
+      Benachrichtigung fragen im Sekundentakt, das sparte viele Prozessstarts.
+- [x] Kopfzeile von `GET /steam` ist der **am weitesten fortgeschrittene**
+      Download (vorher alphabetisch); `eta_seconds` auch auf oberster Ebene.
+- [x] Tests: Staging-Parsing, `percent_staged`, `eta_seconds`, Felder in
+      `downloads` (zusaetzlich zu den bisherigen 78 Tests).
+
+**Android (`LiveStatus.kt`, `MainActivity.kt`)**
+
+- [x] Textzeile: `42.5 % · 4.2 MB/s · noch 12 Min.` (Tempo dezimal wie Steam,
+      Restzeit gestaffelt s/min/Std.), Groesse nur solange kein Tempo bekannt ist.
+- [x] Android 16: `Notification.ProgressStyle` (Segment-Gewicht 1000 =
+      Promille), `setShortCriticalText("42 %")`, `canPostPromotedNotifications()`
+      einmal im Log; `POST_PROMOTED_NOTIFICATIONS` im Manifest.
+- [x] Aeltere Androids: derselbe Inhalt als normale Progress-Notification
+      (`setProgress(1000, …)`), keine zweite Textquelle.
+- [x] Countdown: Balken fuellt sich, Text/Chip zeigen die Restzeit, lokal jede
+      Sekunde neu gezeichnet; Netzabfrage alle 3 s (Akku).
+- [x] Mehrere Downloads: Prozent/Groesse/Tempo summiert, Restzeit aus
+      Restbytes ÷ Summe der Tempi.
+- [x] Kachel „Steam": Spiel + Prozent + Tempo und ein duenner Fortschrittsbalken;
+      Detailseite zeigt Tempo, Restzeit und (bei Updates) den Plattenstand.
+
+**Plugin `steam-millennium` (v2)**
+
+- [x] Kein Log-Spam: Statuszeile nur bei Aenderung, Fortschritt in
+      10-%-Schritten, Start/Fertig/Beendet als Ergebniszeile (`>`).
+- [x] Statuszeile mit Tempo und Restzeit, bei mehreren Downloads Anzahl +
+      fortgeschrittenster Download; Steam-Start/-Ende einmalig gemeldet.
+- [x] Marktplatz-Paket (`plugin-catalog/steam-millennium.json`, Version 2) und
+      `plugins.json` aktualisiert; Verhalten mit `node` gegen einen `pc`-Stub
+      geprueft.

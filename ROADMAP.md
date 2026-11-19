@@ -58,6 +58,11 @@
 - [x] Katalog-Infrastruktur: `plugin-catalog/README.md` + `scripts/new-plugin.ps1`
 - [x] App: Home als Kachel-Raster mit eigenen Aktionsseiten
 - [x] Live-Notification/Now Bar: Steam-Download, Shutdown-Countdown, Startphase
+- [x] **Live-Updates + Steam-Feinschliff (19.11.2026):** Tempo und Restzeit in
+      Benachrichtigung und Kachel (`speed_bps`/`eta_seconds` je Download),
+      Android-16-`Notification.ProgressStyle` mit Statusleisten-Chip
+      (`POST_PROMOTED_NOTIFICATIONS`), Countdown tickt lokal im Sekundentakt,
+      Steam-Plugin **v2** (Start-/Fortschritts-/Fertig-Meldungen statt Spam)
 
 - [x] Routinen (ersetzt den Zeitplan): Auslöser (Uhrzeit, App-Knopf) + Aktionen
   (Herunterfahren, Ruhezustand, Energieplan); PC muss dafür wach/entsperrt bleiben

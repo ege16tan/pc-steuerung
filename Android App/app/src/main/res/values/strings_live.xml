@@ -21,11 +21,13 @@
         <item quantity="one">%1$d Download</item>
         <item quantity="other">%1$d Downloads</item>
     </plurals>
-    <string name="live_text_download">%1$s \u00b7 %2$s</string>
-    <string name="live_text_download_plain">%1$s</string>
-    <string name="live_text_download_overall">Gesamt %1$s \u00b7 %2$s</string>
-    <string name="live_text_download_overall_plain">Gesamt %1$s</string>
     <string name="live_sizes">%1$s / %2$s %3$s</string>
+    <!-- Tempo und Restzeit (aus speed_bps/eta_seconds des Agenten) -->
+    <string name="live_short_percent">%1$d %%</string>
+    <string name="live_short_seconds">%1$d s</string>
+    <string name="live_eta_seconds">noch %1$d s</string>
+    <string name="live_eta_minutes">noch %1$d Min.</string>
+    <string name="live_eta_hours">noch %1$d Std. %2$d Min.</string>
 
     <!-- (b) Shutdown-Countdown -->
     <string name="live_title_shutdown">PC faehrt herunter</string>

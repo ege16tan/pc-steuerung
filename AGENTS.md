@@ -69,20 +69,26 @@ Status).
   `plugin-catalog/plugins.json` im Repo (URL `CATALOG_URL` in `jsplugins.rs`),
   Download per `curl.exe`. Ausgabe-Ringpuffer 300 Zeilen, Ergebniszeilen mit `>`
   landen zusätzlich im Journal.
-- **Steam + Millennium (18.11.2026):** `src/steam.rs` liest read-only die
-  Steam-Installation (Registry `HKCU\Software\Valve\Steam`, Fallback-Pfade),
+- **Steam + Millennium (18.11.2026, Feinschliff 19.11.2026):** `src/steam.rs` liest
+  read-only die Steam-Installation (Registry `HKCU\Software\Valve\Steam`, Fallback-Pfade),
   `steamapps\libraryfolders.vdf` und `steamapps\appmanifest_*.acf`
-  (`StateFlags`, `BytesDownloaded`/`BytesToDownload`, Tempo aus zwei Messungen).
+  (`StateFlags`, `BytesDownloaded`/`BytesToDownload`, `BytesStaged`/`BytesToStage`,
+  Tempo und Restzeit **je Download** aus zwei Messungen; `tasklist`-Prüfung 10 s
+  gecacht). `percent` bleibt der Download-Wert, `percent_staged` steht getrennt im JSON.
   Millennium wird nur **erkannt** (`<Steam>\millennium` bzw. `<Steam>\plugins\*.json`),
   nichts installiert. Neue Endpunkte `GET /steam`, `GET /downloads`; neue
   Plugin-Freigabe `steam` → `pc.steam()`. Marktplatz-Paket
-  `plugin-catalog/steam-millennium.json` (bewusst nicht eingebaut), Doku
+  `plugin-catalog/steam-millennium.json` (v2, bewusst nicht eingebaut), Doku
   `plugin-catalog/README.md`, Vorlage `scripts/new-plugin.ps1`.
 - **Android-UI (18.11.2026):** Start ist ein Kachel-Raster (`HomeScreen`,
   `LazyVerticalGrid` 2 Spalten), jede Kachel öffnet eine Aktionsseite (eigener
   `Route`-State + `BackHandler`, keine Navigation-Bibliothek). `LiveStatus.kt`
   bringt den Foreground-Service `LiveStatusService` (ONGOING-Progress-Notification
-  für Steam-Download, Shutdown-Countdown mit „Abbrechen“, Startphase); Texte in
+  für Steam-Download mit Tempo/Restzeit, Shutdown-Countdown mit „Abbrechen“,
+  Startphase); der Countdown tickt lokal im Sekundentakt, der Agent wird alle 3 s
+  gefragt. Android 16 nutzt `Notification.ProgressStyle` + `setShortCriticalText`
+  mit `POST_PROMOTED_NOTIFICATIONS` (Now Bar), ältere Versionen bekommen denselben
+  Inhalt als normale Progress-Notification. Texte in
   `res/values/strings_live.xml`. Samsung Now Bar kann die Karte zeigen – abhängig
   von One UI/„Live-Benachrichtigungen“, nicht erzwingbar.
 - **Plugins (alt):** `src/plugins.rs` startet weiter EXE-Hilfsprogramme nur auf

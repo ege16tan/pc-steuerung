@@ -262,6 +262,12 @@ data class SteamDownload(
     val percent: Double = 0.0,
     val downloaded: Long = 0L,
     val total: Long = 0L,
+    /** Tempo laut Agent (0 = noch unbekannt, der Agent braucht zwei Messungen). */
+    val speedBps: Long = 0L,
+    /** Restzeit in Sekunden laut Agent (0 = unbekannt/fertig). */
+    val etaSeconds: Long = 0L,
+    /** Fortschritt auf der Platte (`BytesStaged`), 0 ohne Staging-Angaben. */
+    val percentStaged: Double = 0.0,
 )
 
 /**
@@ -275,6 +281,7 @@ data class SteamStatus(
     val downloading: Boolean = false,
     val progressPercent: Double = 0.0,
     val speedBps: Long = 0L,
+    val etaSeconds: Long = 0L,
     val appName: String = "",
     val downloads: List<SteamDownload> = emptyList(),
 )
@@ -298,6 +305,9 @@ private fun parseDownloadArray(array: JSONArray?): List<SteamDownload> {
                 percent = item.optDouble("percent", 0.0),
                 downloaded = item.optLong("bytes_downloaded", 0L),
                 total = item.optLong("bytes_total", 0L),
+                speedBps = item.optLong("speed_bps", 0L),
+                etaSeconds = item.optLong("eta_seconds", 0L),
+                percentStaged = item.optDouble("percent_staged", 0.0),
             )
         )
     }
@@ -320,6 +330,7 @@ fun parseSteam(body: String): SteamStatus? {
                 downloads.firstOrNull()?.percent ?: 0.0
             ),
             speedBps = json.optLong("speed_bps", 0L),
+            etaSeconds = json.optLong("eta_seconds", downloads.firstOrNull()?.etaSeconds ?: 0L),
             appName = json.optText("app_name").ifBlank { downloads.firstOrNull()?.name.orEmpty() },
             downloads = downloads,
         )
@@ -1487,7 +1498,8 @@ fun MainApp(
                             running = list.isNotEmpty(),
                             downloading = list.isNotEmpty(),
                             progressPercent = list.firstOrNull()?.percent ?: 0.0,
-                            speedBps = 0L,
+                            speedBps = list.firstOrNull()?.speedBps ?: 0L,
+                            etaSeconds = list.firstOrNull()?.etaSeconds ?: 0L,
                             appName = list.firstOrNull()?.name.orEmpty(),
                             downloads = list,
                         )
@@ -3967,6 +3979,8 @@ private data class HomeTileSpec(
     val icon: ImageVector,
     val dotColor: Color? = null,
     val pulsing: Boolean = false,
+    /** Optionaler Fortschritt 0..1 (z. B. laufender Steam-Download). */
+    val progress: Float? = null,
 )
 
 /** Kachel im Raster: grosse Touch-Flaeche, Material-3-Farben, abgerundet. */
@@ -4024,6 +4038,16 @@ private fun HomeTile(tile: HomeTileSpec, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            tile.progress?.let { progress ->
+                Spacer(modifier = Modifier.height(2.dp))
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                )
+            }
         }
     }
 }
@@ -4067,11 +4091,19 @@ private fun HomeScreen(
     val steamStatus = when {
         steam == null && steamLoading -> stringResource(R.string.tile_steam_checking)
         steam == null -> stringResource(R.string.tile_steam_unavailable)
-        steam.downloading && steam.appName.isNotBlank() -> stringResource(
-            R.string.steam_progress,
-            "${fmtPercent(steam.progressPercent)} %",
-            steam.appName,
-        )
+        steam.downloading && steam.appName.isNotBlank() -> {
+            val percent = "${fmtPercent(steam.progressPercent)} %"
+            if (steam.speedBps > 0L) {
+                stringResource(
+                    R.string.steam_progress_speed,
+                    percent,
+                    steam.appName,
+                    "${fmtBytes(steam.speedBps)}/s",
+                )
+            } else {
+                stringResource(R.string.steam_progress, percent, steam.appName)
+            }
+        }
         steam.downloading -> stringResource(R.string.tile_steam_download_count, steam.downloads.size)
         !steam.detected -> stringResource(R.string.tile_steam_not_detected)
         else -> stringResource(R.string.tile_steam_no_downloads)
@@ -4107,6 +4139,10 @@ private fun HomeScreen(
             title = stringResource(R.string.tile_steam),
             status = steamStatus,
             icon = Icons.Default.PlayArrow,
+            // Laufender Download: duenner Balken auf der Kachel (wie Live-Karte).
+            progress = steam?.let {
+                if (it.downloading) (it.progressPercent / 100.0).toFloat() else null
+            },
         ),
         HomeTileSpec(
             route = Route.Plugins,
@@ -4322,9 +4358,16 @@ private fun SteamDetails(steam: SteamStatus) {
         }
     }
 
-    if (steam.speedBps > 0L) {
+    if (steam.speedBps > 0L || steam.etaSeconds > 0L) {
+        val parts = ArrayList<String>(2)
+        if (steam.speedBps > 0L) {
+            parts.add(stringResource(R.string.steam_speed, fmtBytes(steam.speedBps)))
+        }
+        if (steam.etaSeconds > 0L) {
+            parts.add(etaLabel(steam.etaSeconds))
+        }
         Text(
-            text = stringResource(R.string.steam_speed, fmtBytes(steam.speedBps)),
+            text = parts.joinToString(" · "),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -4375,17 +4418,49 @@ private fun SteamDetails(steam: SteamStatus) {
                     progress = { (download.percent / 100.0).toFloat().coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text(
-                    text = stringResource(
+                val details = ArrayList<String>(4)
+                details.add(
+                    stringResource(
                         R.string.steam_of,
                         fmtBytes(download.downloaded),
                         fmtBytes(download.total),
-                    ),
+                    )
+                )
+                if (download.speedBps > 0L) {
+                    details.add("${fmtBytes(download.speedBps)}/s")
+                }
+                if (download.etaSeconds > 0L) {
+                    details.add(etaLabel(download.etaSeconds))
+                }
+                // Updates: der Plattenstand weicht vom Download ab (Steam staged
+                // in Bloecken) - nur zeigen, wenn der Unterschied sichtbar ist.
+                if (download.percentStaged > 0.0 &&
+                    kotlin.math.abs(download.percentStaged - download.percent) >= 1.0
+                ) {
+                    details.add(stringResource(R.string.steam_staged, fmtPercent(download.percentStaged)))
+                }
+                Text(
+                    text = details.joinToString(" · "),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.outline,
                 )
             }
         }
+    }
+}
+
+/** "noch 12 Min." fuer Download-Restzeiten (0 = unbekannt). */
+@Composable
+private fun etaLabel(seconds: Long): String {
+    val value = seconds.coerceAtLeast(0L)
+    return when {
+        value < 60L -> stringResource(R.string.steam_eta_seconds, value.toInt())
+        value < 3600L -> stringResource(R.string.steam_eta_minutes, (value / 60L).toInt())
+        else -> stringResource(
+            R.string.steam_eta_hours,
+            (value / 3600L).toInt(),
+            ((value % 3600L) / 60L).toInt(),
+        )
     }
 }
 

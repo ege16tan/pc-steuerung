@@ -118,6 +118,12 @@
     <string name="steam_no_downloads">Keine aktiven Downloads.</string>
     <string name="steam_speed">%1$s pro Sekunde</string>
     <string name="steam_of">%1$s von %2$s</string>
+    <!-- Download-Kachel: Prozent, Spiel und Tempo in einer Zeile. -->
+    <string name="steam_progress_speed">%1$s – %2$s · %3$s</string>
+    <string name="steam_staged">Platte %1$s %%</string>
+    <string name="steam_eta_seconds">noch %1$d s</string>
+    <string name="steam_eta_minutes">noch %1$d Min.</string>
+    <string name="steam_eta_hours">noch %1$d Std. %2$d Min.</string>
     <string name="steam_progress">%1$s – %2$s</string>
 
     <!-- Aktionsseite Routinen -->

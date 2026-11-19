@@ -22,9 +22,9 @@
 | ⏱️ **Timer** | Herunterfahren in 1, 2, 4 oder 8 Stunden – oder eigene Zeit |
 | 🎮 **Game Optimization** | Plugin auf Knopfdruck: Spiele scannen, Energieplan hoch, Hintergrund-Apps zu, RAM frei (läuft nicht dauerhaft) |
 | 🧩 **Plugins** | JavaScript-Plugins laufen direkt im Agenten (Boa-Engine): `game-optimizer` und `system-monitor` sind dabei, weitere lassen sich aus dem Katalog installieren – auch aus der App heraus |
-| 🎮 **Steam + Millennium** | Steam-Downloads im Blick: Fortschritt, Tempo, Spiel und Millennium-Erkennung über den Agenten (`GET /steam`) – Steam selbst wird dabei nicht angefasst |
+| 🎮 **Steam + Millennium** | Steam-Downloads im Blick: Fortschritt, Tempo, Restzeit, Spiel und Millennium-Erkennung über den Agenten (`GET /steam`) – Steam selbst wird dabei nicht angefasst |
 | 🧱 **Kachel-Start** | Startbildschirm als Kachel-Raster mit Kurzstatus: jede Kachel öffnet ihre eigene Aktionsseite |
-| 🔔 **Live-Benachrichtigung** | Laufender Steam-Download, Shutdown-Countdown mit „Abbrechen“ und Startphase als Fortschritts-Karte (Samsung Now Bar) |
+| 🔔 **Live-Benachrichtigung** | Laufender Steam-Download mit Prozent, Tempo und Restzeit, Shutdown-Countdown mit „Abbrechen“ und Startphase – auf Android 16 als echtes Live Update mit Statusleisten-Chip, sonst als laufende Fortschritts-Karte (Samsung Now Bar) |
 | 🚀 **App-Shortcuts** | Einschalten/Herunterfahren per Long-Press aufs App-Symbol |
 | Darstellung | Hell, Dunkel oder System – Farben blenden weich über (Crossfade) |
 | ⬆️ **App-Update** | Neue Version in den Einstellungen über GitHub Releases laden und per Android oder Shizuku installieren |

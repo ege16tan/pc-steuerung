@@ -8,12 +8,19 @@
 //! - der Steam-Pfad aus `HKCU\Software\Valve\Steam` (`SteamPath`), sonst aus
 //!   einer Liste ueblicher Installationsorte,
 //! - `steamapps\libraryfolders.vdf` (Valve KeyValues) fuer alle Bibliotheken,
-//! - `steamapps\appmanifest_<appid>.acf` fuer die Downloads.
+//! - `steamapps\appmanifest_<appid>.acf` fuer die Downloads
+//!   (`StateFlags`, `BytesDownloaded`/`BytesToDownload`, `BytesStaged`/`BytesToStage`).
+//!
+//! Tempo (`speed_bps`) und Restzeit (`eta_seconds`) entstehen aus zwei Messungen
+//! von `BytesDownloaded` - **je Download**, weil zwei Spiele gleichzeitig laden
+//! koennen. Steam schreibt die `.acf` nur in Abstaenden; bleibt der Wert stehen,
+//! gilt das letzte Tempo kurz weiter und faellt dann ehrlich auf 0.
 //!
 //! Millennium (Steam-Client-Modding) wird nur **erkannt**: `<Steam>\millennium`
 //! existiert oder `<Steam>\plugins` enthaelt `*.json`-Dateien. Es wird nichts
 //! installiert, nichts geschrieben und kein Prozess beendet.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -33,15 +40,28 @@ pub const FALLBACK_PATHS: [&str; 5] = [
 ];
 
 /// Ein laufender Steam-Download (eine Zeile der `downloads`-Liste).
+///
+/// `percent` bleibt bewusst `BytesDownloaded / BytesToDownload` (so rechnet der
+/// Steam-Client seine Download-Anzeige). `percent_staged` beschreibt zusaetzlich
+/// den Fortschritt auf der Platte (`BytesStaged / BytesToStage`) - bei Updates
+/// laufen beide Werte auseinander, deshalb stehen sie getrennt im JSON.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SteamDownload {
     pub app_id: String,
     pub name: String,
-    /// Fortschritt in Prozent, auf eine Nachkommastelle gerundet.
+    /// Download-Fortschritt in Prozent, auf eine Nachkommastelle gerundet.
     pub percent: f64,
+    /// Fortschritt auf der Platte in Prozent (0.0, wenn Steam nichts staged).
+    pub percent_staged: f64,
     pub bytes_downloaded: u64,
     pub bytes_total: u64,
+    pub bytes_staged: u64,
+    pub bytes_to_stage: u64,
+    /// Tempo aus zwei Messungen von `BytesDownloaded` (0 = noch unbekannt).
+    pub speed_bps: u64,
+    /// Restzeit in Sekunden bei aktuellem Tempo (0 = unbekannt/fertig).
+    pub eta_seconds: u64,
 }
 
 /// Gesamtstatus fuer `GET /steam` und `pc.steam()`.
@@ -57,6 +77,8 @@ pub struct SteamStatus {
     pub bytes_downloaded: u64,
     pub bytes_total: u64,
     pub speed_bps: u64,
+    /// Restzeit des Kopf-Downloads in Sekunden (0 = unbekannt/fertig).
+    pub eta_seconds: u64,
     pub app_id: String,
     pub app_name: String,
     pub downloads: Vec<SteamDownload>,
@@ -71,6 +93,10 @@ pub struct AppManifest {
     pub state_flags: u64,
     pub bytes_downloaded: u64,
     pub bytes_to_download: u64,
+    /// Von Steam bereits auf die Platte geschriebene Bytes (`BytesStaged`).
+    pub bytes_staged: u64,
+    /// Gesamtmenge fuer das Staging (`BytesToStage`), bei reinen Downloads 0.
+    pub bytes_to_stage: u64,
     pub size_on_disk: u64,
     pub last_updated: u64,
 }
@@ -84,6 +110,11 @@ impl AppManifest {
     /// Fortschritt in Prozent (0.0, wenn die Gesamtgroesse fehlt).
     pub fn percent(&self) -> f64 {
         percent(self.bytes_downloaded, self.bytes_to_download)
+    }
+
+    /// Fortschritt auf der Platte in Prozent (0.0 ohne Staging-Angaben).
+    pub fn percent_staged(&self) -> f64 {
+        percent(self.bytes_staged, self.bytes_to_stage)
     }
 }
 
@@ -275,6 +306,8 @@ pub fn parse_acf(text: &str, fallback_id: &str) -> AppManifest {
             "stateflags" => manifest.state_flags = value.trim().parse().unwrap_or(0),
             "bytesdownloaded" => manifest.bytes_downloaded = value.trim().parse().unwrap_or(0),
             "bytestodownload" => manifest.bytes_to_download = value.trim().parse().unwrap_or(0),
+            "bytesstaged" => manifest.bytes_staged = value.trim().parse().unwrap_or(0),
+            "bytestostage" => manifest.bytes_to_stage = value.trim().parse().unwrap_or(0),
             "sizeondisk" => manifest.size_on_disk = value.trim().parse().unwrap_or(0),
             "lastupdated" => manifest.last_updated = value.trim().parse().unwrap_or(0),
             _ => {}
@@ -336,8 +369,14 @@ pub fn downloads_in(libraries: &[PathBuf]) -> Vec<SteamDownload> {
                 app_id: manifest.app_id.clone(),
                 name: manifest.name.clone(),
                 percent: manifest.percent(),
+                percent_staged: manifest.percent_staged(),
                 bytes_downloaded: manifest.bytes_downloaded,
                 bytes_total: manifest.bytes_to_download,
+                bytes_staged: manifest.bytes_staged,
+                bytes_to_stage: manifest.bytes_to_stage,
+                // Tempo/Restzeit erst in `with_speed` (zwei Messungen noetig).
+                speed_bps: 0,
+                eta_seconds: 0,
             });
         }
     }
@@ -367,69 +406,108 @@ pub fn millennium_present(steam: &Path) -> bool {
 }
 
 /// Laeuft `steam.exe`? (Pruefung ueber `tasklist`, Vorbild `optimize::task_list`.)
+///
+/// `GET /steam` wird im Sekundentakt abgefragt (App, Benachrichtigung, Plugin).
+/// Jeder Aufruf startet sonst einen `tasklist`-Prozess - deshalb wird das
+/// Ergebnis kurz gemerkt.
 pub fn steam_running() -> bool {
-    crate::optimize::task_list()
+    const TTL: Duration = Duration::from_secs(10);
+    static CACHE: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((value, at)) = guard.as_ref() {
+            if at.elapsed() < TTL {
+                return *value;
+            }
+        }
+    }
+    let running = crate::optimize::task_list()
         .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("steam.exe"))
+        .any(|(name, _)| name.eq_ignore_ascii_case("steam.exe"));
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((running, Instant::now()));
+    }
+    running
 }
 
 
 // ---------------- Download-Geschwindigkeit ----------------
 
-/// Letzte Messung fuer die Geschwindigkeit.
-#[derive(Clone)]
+/// Letzte Messung einer App fuer die Geschwindigkeit.
+#[derive(Clone, Copy)]
 struct SpeedSample {
-    app_id: String,
     bytes: u64,
     bps: u64,
     at: Instant,
+    /// Aufeinanderfolgende Abfragen ohne neuen Stand (Steam schreibt die
+    /// `.acf` nur in Abstaenden). Ab 3 wird das Tempo ehrlich auf 0 gesetzt.
+    idle: u32,
 }
 
-/// Geschwindigkeit aus zwei Messungen von `BytesDownloaded`. Der Abstand
-/// zaehlt: liegt er unter ~700 ms, gilt der zuletzt gemessene Wert weiter;
-/// der allererste Aufruf liefert 0 (es fehlt der Vergleichswert). Dadurch
-/// blockiert keine Anfrage und `GET /steam` bleibt schnell.
-static SPEED: Mutex<Option<SpeedSample>> = Mutex::new(None);
+/// Tempo je App (Schluessel: App-ID). Eine gemeinsame Messung fuer alle waere
+/// falsch, sobald zwei Spiele gleichzeitig laden.
+static SPEED: Mutex<Option<HashMap<String, SpeedSample>>> = Mutex::new(None);
 
-fn measure_speed(app_id: &str, bytes: u64) -> u64 {
-    const MIN_GAP: Duration = Duration::from_millis(700);
-    let Ok(mut guard) = SPEED.lock() else {
+/// Abstand, unter dem keine neue Messung gerechnet wird (zu kurze Fenster
+/// liefern nur Rauschen).
+const MIN_SPEED_GAP: Duration = Duration::from_millis(700);
+
+/// Restzeit in Sekunden; 0, wenn das Tempo unbekannt oder der Rest 0 ist.
+fn eta_seconds(remaining: u64, bps: u64) -> u64 {
+    if bps == 0 || remaining == 0 {
         return 0;
+    }
+    remaining.div_ceil(bps)
+}
+
+/// Ergaenzt `speed_bps` und `eta_seconds` fuer alle Downloads aus zwei
+/// Messungen von `BytesDownloaded`. Der erste Aufruf liefert 0 (kein
+/// Vergleichswert); danach bleibt `GET /steam` weiterhin sofort fertig, weil
+/// nichts blockiert und keine Datei doppelt gelesen wird.
+fn with_speed(list: &mut [SteamDownload]) {
+    let Ok(mut guard) = SPEED.lock() else {
+        return;
     };
     let now = Instant::now();
-    let previous = guard
-        .as_ref()
-        .map(|sample| (sample.app_id.clone(), sample.bytes, sample.bps, sample.at));
-    match previous {
-        Some((known_id, known_bytes, known_bps, at)) if known_id == app_id => {
-            let elapsed = now.saturating_duration_since(at);
-            if elapsed >= MIN_GAP {
-                let delta = bytes.saturating_sub(known_bytes);
-                let measured = (delta as f64 / elapsed.as_secs_f64()) as u64;
-                *guard = Some(SpeedSample {
-                    app_id: app_id.to_string(),
-                    bytes,
-                    bps: measured,
-                    at: now,
-                });
-                measured
-            } else {
-                known_bps
+    let previous = guard.take().unwrap_or_default();
+    let mut next: HashMap<String, SpeedSample> = HashMap::with_capacity(list.len());
+    for item in list.iter_mut() {
+        let known = previous.get(&item.app_id).copied();
+        let (bps, idle) = match known {
+            Some(sample) => {
+                let elapsed = now.saturating_duration_since(sample.at);
+                let delta = item.bytes_downloaded.saturating_sub(sample.bytes);
+                if elapsed < MIN_SPEED_GAP {
+                    // Zu kurz fuer eine Messung: alten Wert weiterverwenden.
+                    (sample.bps, sample.idle)
+                } else if delta == 0 {
+                    let idle = sample.idle + 1;
+                    (if idle >= 3 { 0 } else { sample.bps }, idle)
+                } else {
+                    ((delta as f64 / elapsed.as_secs_f64()) as u64, 0)
+                }
             }
-        }
-        _ => {
-            *guard = Some(SpeedSample {
-                app_id: app_id.to_string(),
-                bytes,
-                bps: 0,
+            // Erster Wert fuer diese App: nur merken, noch kein Tempo.
+            None => (0, 0),
+        };
+        item.speed_bps = bps;
+        item.eta_seconds = eta_seconds(
+            item.bytes_total.saturating_sub(item.bytes_downloaded),
+            bps,
+        );
+        next.insert(
+            item.app_id.clone(),
+            SpeedSample {
+                bytes: item.bytes_downloaded,
+                bps,
                 at: now,
-            });
-            0
-        }
+                idle,
+            },
+        );
     }
+    *guard = Some(next);
 }
 
-/// Vergisst die letzte Messung (kein Download mehr aktiv).
+/// Vergisst alle Messungen (kein Download mehr aktiv).
 fn reset_speed() {
     if let Ok(mut guard) = SPEED.lock() {
         *guard = None;
@@ -441,9 +519,16 @@ fn reset_speed() {
 /// Laufende Steam-Downloads; leer, wenn Steam nicht gefunden wird.
 pub fn downloads(_app: &App) -> Vec<SteamDownload> {
     let Some(steam) = steam_path() else {
+        reset_speed();
         return Vec::new();
     };
-    downloads_in(&libraries(&steam))
+    let mut list = downloads_in(&libraries(&steam));
+    if list.is_empty() {
+        reset_speed();
+        return list;
+    }
+    with_speed(&mut list);
+    list
 }
 
 /// Gesamtstatus fuer `GET /steam` und die Plugin-Freigabe `steam`.
@@ -455,18 +540,21 @@ pub fn status(_app: &App) -> SteamStatus {
         reset_speed();
         return SteamStatus::default();
     };
-    let list = downloads_in(&libraries(&steam));
+    let mut list = downloads_in(&libraries(&steam));
+    if list.is_empty() {
+        reset_speed();
+    } else {
+        with_speed(&mut list);
+    }
     let millennium = millennium_present(&steam);
     let running = steam_running();
-    // Kopfzeile des Status ist der erste Download (alphabetisch nach Name).
-    let primary = list.first().cloned();
-    let speed_bps = match &primary {
-        Some(item) => measure_speed(&item.app_id, item.bytes_downloaded),
-        None => {
-            reset_speed();
-            0
-        }
-    };
+    // Kopfzeile des Status ist der am weitesten fortgeschrittene Download -
+    // das ist der, den App und Benachrichtigung zuerst zeigen sollen.
+    let primary = list
+        .iter()
+        .max_by(|a, b| a.percent.total_cmp(&b.percent))
+        .cloned();
+    let speed_bps = primary.as_ref().map(|item| item.speed_bps).unwrap_or(0);
     SteamStatus {
         detected: true,
         steam_path: steam.display().to_string(),
@@ -480,6 +568,7 @@ pub fn status(_app: &App) -> SteamStatus {
             .unwrap_or(0),
         bytes_total: primary.as_ref().map(|item| item.bytes_total).unwrap_or(0),
         speed_bps,
+        eta_seconds: primary.as_ref().map(|item| item.eta_seconds).unwrap_or(0),
         app_id: primary
             .as_ref()
             .map(|item| item.app_id.clone())
@@ -634,6 +723,57 @@ mod tests {
         assert!(!millennium_present(&nur_text));
 
         std::fs::remove_dir_all(&basis).unwrap();
+    }
+
+    #[test]
+    fn staging_wird_gelesen() {
+        let text = "\"AppState\"\n{\n\t\"appid\"\t\t\"570\"\n\t\"name\"\t\t\"Dota 2\"\n\t\"StateFlags\"\t\t\"1042\"\n\t\"BytesDownloaded\"\t\t\"500\"\n\t\"BytesToDownload\"\t\t\"1000\"\n\t\"BytesStaged\"\t\t\"700\"\n\t\"BytesToStage\"\t\t\"1000\"\n}\n";
+        let manifest = parse_acf(text, "570");
+        assert_eq!(manifest.bytes_staged, 700);
+        assert_eq!(manifest.bytes_to_stage, 1000);
+        // `percent` bleibt der Download-Wert, der Plattenwert steht getrennt.
+        assert_eq!(manifest.percent(), 50.0);
+        assert_eq!(manifest.percent_staged(), 70.0);
+    }
+
+    #[test]
+    fn ohne_staging_ist_der_plattenwert_null() {
+        let manifest = parse_acf(ACF_CS2, "730");
+        assert_eq!(manifest.bytes_staged, 0);
+        assert_eq!(manifest.bytes_to_stage, 0);
+        assert_eq!(manifest.percent_staged(), 0.0);
+    }
+
+    #[test]
+    fn restzeit_aus_tempo() {
+        assert_eq!(eta_seconds(1000, 100), 10);
+        assert_eq!(eta_seconds(1001, 100), 11);
+        assert_eq!(eta_seconds(0, 100), 0);
+        assert_eq!(eta_seconds(1000, 0), 0);
+    }
+
+    #[test]
+    fn downloads_liefern_staging_und_tempo_felder() {
+        let dir = test_dir("staging");
+        let steamapps = dir.join("steamapps");
+        std::fs::create_dir_all(&steamapps).unwrap();
+        std::fs::write(
+            steamapps.join("appmanifest_570.acf"),
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"570\"\n\t\"name\"\t\t\"Dota 2\"\n\t\"StateFlags\"\t\t\"1042\"\n\t\"BytesDownloaded\"\t\t\"500\"\n\t\"BytesToDownload\"\t\t\"1000\"\n\t\"BytesStaged\"\t\t\"700\"\n\t\"BytesToStage\"\t\t\"1000\"\n}\n",
+        )
+        .unwrap();
+
+        let list = downloads_in(&[dir.clone()]);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].percent, 50.0);
+        assert_eq!(list[0].percent_staged, 70.0);
+        assert_eq!(list[0].bytes_staged, 700);
+        assert_eq!(list[0].bytes_to_stage, 1000);
+        // Tempo/Restzeit kommen erst aus zwei Messungen.
+        assert_eq!(list[0].speed_bps, 0);
+        assert_eq!(list[0].eta_seconds, 0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
