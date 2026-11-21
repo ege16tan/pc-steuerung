@@ -40,6 +40,15 @@ import kotlin.math.roundToInt
  *                        Titel = Spiel, Text = Prozent, Tempo und Restzeit
  *  b) Herunterfahren  -> `pending_seconds` / `pending_shutdown` aus `GET /status`
  *  c) Startphase      -> "PC startet ...", bis `/status` antwortet
+ *  d) Dauerkarte      -> Agent antwortet und es laeuft nichts: "PC ist an" mit
+ *                        den Knoepfen "Herunterfahren" und "Ruhezustand"
+ *
+ * Die Dauerkarte (d) ist bewusst eine normale ONGOING-Benachrichtigung ohne
+ * Fortschrittsbalken (Kategorie STATUS): sie bleibt stehen, solange der PC
+ * antwortet, und wird nur alle [IDLE_POLL_MS] nachgefragt, damit der Akku
+ * nicht leidet. Die Knoepfe schicken dieselben Aufrufe wie die App
+ * (`/shutdown?delay=` mit Countdown, `/hibernate`). Abschaltbar in den
+ * Einstellungen (`AppSettings.onlineCard`).
  *
  * Auf Android 16 (API 36) wird die Karte als echtes "Live Update" mit
  * `Notification.ProgressStyle` und Kurztext fuer den Statusleisten-Chip
@@ -65,6 +74,12 @@ class LiveStatusService : Service() {
     @Volatile
     private var waitOnline = false
     private var waitDeadlineMs = 0L
+
+    /** Dauerkarte aktiv? (Einstellung `onlineCard`, Default an) */
+    private var onlineCard = true
+
+    /** Steht gerade nur die Dauerkarte? (ruhiger Abfragetakt) */
+    private var idleCard = false
 
     /** Wurde der PC schon einmal nicht erreicht? (0 = nein) */
     private var unreachableSinceMs = 0L
@@ -96,7 +111,16 @@ class LiveStatusService : Service() {
         // aktuelle Karte stehen (kein Flackern bei jedem ACTION_SYNC).
         if (loop?.isActive != true) postForeground(notificationChecking())
 
-        profile = intent?.let { readProfile(it) } ?: ProfileStore.active(this)
+        // Ein Knopf der Dauerkarte bringt keine Verbindungsdaten mit: dann gilt
+        // das laufende Profil (die Karte zeigt genau diesen PC). Ein Anstoss
+        // aus der App liest dagegen das aktive Profil neu (Profilwechsel).
+        val fromCard =
+            action == ACTION_SHUTDOWN || action == ACTION_HIBERNATE || action == ACTION_ABORT
+        val stored = if (fromCard) profile else ProfileStore.active(this)
+        profile = intent?.let { readProfile(it) } ?: stored ?: ProfileStore.active(this)
+        // Die Dauerkarte laesst sich in den Einstellungen abschalten; der Wert
+        // wird bei jedem Aufruf neu gelesen, damit Umschalten sofort wirkt.
+        onlineCard = AppSettingsStore.load(this).onlineCard
         val active = profile
         if (active == null || !active.isComplete) {
             Log.d(LIVE_TAG, "Kein vollstaendiges Profil - Live-Anzeige beendet")
@@ -113,6 +137,9 @@ class LiveStatusService : Service() {
                 abortShutdown(active)
                 return START_NOT_STICKY
             }
+            // Knoepfe der Dauerkarte: Aktion an den Agenten, Dienst laeuft weiter.
+            ACTION_SHUTDOWN -> requestPower(active, PowerAction.SHUTDOWN)
+            ACTION_HIBERNATE -> requestPower(active, PowerAction.HIBERNATE)
             ACTION_WAIT_ONLINE -> {
                 waitOnline = true
                 val seconds = (intent?.getIntExtra(EXTRA_WAIT_SECONDS, DEFAULT_WAIT_SECONDS)
@@ -145,7 +172,15 @@ class LiveStatusService : Service() {
         loop = scope.launch {
             while (isActive) {
                 val now = SystemClock.elapsedRealtime()
-                val pollDue = now - lastPollAt >= POLL_MS
+                // Countdown tickt lokal jede Sekunde, die Dauerkarte braucht
+                // dagegen nur einen ruhigen Takt (ein Knopf weckt die Schleife).
+                val tick = when {
+                    countdownRemaining > 0 -> COUNTDOWN_TICK_MS
+                    idleCard -> IDLE_POLL_MS
+                    else -> POLL_MS
+                }
+                val pollEvery = if (idleCard) IDLE_POLL_MS else POLL_MS
+                val pollDue = now - lastPollAt >= pollEvery
                 val keepRunning = if (pollDue) {
                     lastPollAt = now
                     runCatching { poll() }.getOrElse { error ->
@@ -162,7 +197,7 @@ class LiveStatusService : Service() {
                     teardown()
                     return@launch
                 }
-                delay(if (countdownRemaining > 0) COUNTDOWN_TICK_MS else POLL_MS)
+                delay(tick)
             }
         }
     }
@@ -195,6 +230,7 @@ class LiveStatusService : Service() {
 
         val remaining = status?.pendingRemaining ?: 0
         val total = status?.pendingTotal ?: 0
+        idleCard = false
 
         return when {
             remaining > 0 -> {
@@ -212,13 +248,19 @@ class LiveStatusService : Service() {
                 postForeground(notificationDownload(running))
                 true
             }
-            // Antwortet der Agent und laeuft nichts, gibt es nichts anzuzeigen
-            // (auch nicht nach einem erledigten Download/Countdown oder am Ende
-            // der Startphase) -> sofort beenden, kein Dauerlauf ohne Zweck.
+            // Antwortet der Agent und laeuft nichts, uebernimmt die Dauerkarte
+            // (falls abgeschaltet: sofort beenden, kein Dauerlauf ohne Zweck).
             reachable -> {
                 countdownTotal = 0
                 countdownRemaining = 0
-                false
+                if (!onlineCard) {
+                    false
+                } else {
+                    clearGrace()
+                    idleCard = true
+                    postForeground(notificationOnline(active.name))
+                    true
+                }
             }
             else -> {
                 // PC nicht erreichbar: Gnadenfrist, dann aufgeben. Ein lokaler
@@ -271,13 +313,54 @@ class LiveStatusService : Service() {
             val response = httpPost(active.base, "/abort", active.authHeader())
             Log.d(LIVE_TAG, "POST /abort -> ${response.code}")
             if (response.code in 200..299) {
-                teardown()
+                // Zurueck zur Dauerkarte (bzw. Ende, wenn sie abgeschaltet ist).
+                restartLoop()
             } else {
                 // Ehrlich bleiben: der Countdown laeuft weiter, also weiter anzeigen.
                 postForeground(notificationAbortFailed())
                 startLoop()
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Knoepfe der Dauerkarte (Herunterfahren / Ruhezustand)
+    // -----------------------------------------------------------------------
+
+    private enum class PowerAction { SHUTDOWN, HIBERNATE }
+
+    /**
+     * Schickt einen Knopfdruck der Dauerkarte an den Agenten - dieselben
+     * Endpunkte wie in der App. "Herunterfahren" nutzt den Standard-Timer des
+     * Profils (mindestens [MIN_SHUTDOWN_DELAY] s, damit ein versehentlicher
+     * Druck auf dem Sperrbildschirm noch abgebrochen werden kann).
+     * Ein Fehlschlag steht kurz in der Karte, statt still zu verpuffen.
+     */
+    private fun requestPower(active: Profile, action: PowerAction) {
+        val path = when (action) {
+            PowerAction.SHUTDOWN -> liveShutdownPath(active.defaultDelay)
+            PowerAction.HIBERNATE -> "/hibernate"
+        }
+        scope.launch {
+            val response = httpPost(active.base, path, active.authHeader())
+            Log.d(LIVE_TAG, "POST $path -> ${response.code}")
+            if (response.code in 200..299) {
+                val seconds = liveShutdownDelay(active.defaultDelay)
+                postForeground(notificationPowerSent(action, seconds))
+                // Sofort neu fragen: bei "Herunterfahren" steht dann schon der
+                // Countdown des Agenten in der Karte, sonst der neue Zustand.
+                restartLoop()
+            } else {
+                postForeground(notificationPowerFailed(action, response.code))
+            }
+        }
+    }
+
+    /** Schleife neu starten, damit die naechste Abfrage sofort laeuft. */
+    private fun restartLoop() {
+        loop?.cancel()
+        loop = null
+        startLoop()
     }
 
     // -----------------------------------------------------------------------
@@ -302,10 +385,15 @@ class LiveStatusService : Service() {
     }
 
     private fun postForeground(notification: Notification) {
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        } else {
-            0
+        // Dauerkarte und Countdown laufen ohne festes Ende: deshalb ab Android 14
+        // "specialUse" (kein 6-Stunden-Limit wie bei dataSync seit Android 15).
+        // Aeltere Versionen kennen den Typ nicht und bleiben bei dataSync.
+        val type = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            else -> 0
         }
         runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type) }
             .onFailure { Log.d(LIVE_TAG, "startForeground fehlgeschlagen: ${it.javaClass.simpleName}") }
@@ -334,6 +422,10 @@ class LiveStatusService : Service() {
         /** Kurztext fuer den Chip der Statusleiste (Android 16 Live Updates). */
         val shortCritical: String? = null,
         val showAbort: Boolean = false,
+        /** false = reine Statuskarte (Dauerkarte) ohne Fortschrittsbalken. */
+        val progress: Boolean = true,
+        /** Knoepfe "Herunterfahren" und "Ruhezustand" (Dauerkarte). */
+        val powerActions: Boolean = false,
     )
 
     private fun buildNotification(card: LiveCard): Notification {
@@ -344,7 +436,9 @@ class LiveStatusService : Service() {
             .setContentText(card.text)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
-            .setCategory(Notification.CATEGORY_PROGRESS)
+            .setCategory(
+                if (card.progress) Notification.CATEGORY_PROGRESS else Notification.CATEGORY_STATUS
+            )
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setContentIntent(openAppIntent())
@@ -352,31 +446,46 @@ class LiveStatusService : Service() {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }
 
-        val permille = card.permille?.coerceIn(0, 1000)
-        if (Build.VERSION.SDK_INT >= ANDROID_16) {
-            // Android 16 "Live Updates": Segment als Balken (Gewicht 1000 passt
-            // zu Promille) plus Kurztext, den Samsung in der Now Bar als Chip
-            // zeigt. Ohne Segment bliebe die Karte eine normale Notification.
-            val style = Notification.ProgressStyle()
-                .setProgressSegments(listOf(Notification.ProgressStyle.Segment(1000)))
-                .setProgress(permille ?: 0)
-                .setProgressIndeterminate(permille == null)
-            builder.setStyle(style)
-            val shortCritical = card.shortCritical
-            if (shortCritical != null) {
-                // Manche OEMs pruefen den Chip-Text streng - ein Fehler darf
-                // niemals die Benachrichtigung (und damit den Dienst) kippen.
-                runCatching { builder.setShortCriticalText(shortCritical) }
-                    .onFailure { Log.d(LIVE_TAG, "Kurztext abgelehnt: ${it.javaClass.simpleName}") }
+        if (card.progress) {
+            val permille = card.permille?.coerceIn(0, 1000)
+            if (Build.VERSION.SDK_INT >= ANDROID_16) {
+                // Android 16 "Live Updates": Segment als Balken (Gewicht 1000 passt
+                // zu Promille) plus Kurztext, den Samsung in der Now Bar als Chip
+                // zeigt. Ohne Segment bliebe die Karte eine normale Notification.
+                val style = Notification.ProgressStyle()
+                    .setProgressSegments(listOf(Notification.ProgressStyle.Segment(1000)))
+                    .setProgress(permille ?: 0)
+                    .setProgressIndeterminate(permille == null)
+                builder.setStyle(style)
+                val shortCritical = card.shortCritical
+                if (shortCritical != null) {
+                    // Manche OEMs pruefen den Chip-Text streng - ein Fehler darf
+                    // niemals die Benachrichtigung (und damit den Dienst) kippen.
+                    runCatching { builder.setShortCriticalText(shortCritical) }
+                        .onFailure { Log.d(LIVE_TAG, "Kurztext abgelehnt: ${it.javaClass.simpleName}") }
+                }
+            } else if (permille != null) {
+                builder.setProgress(1000, permille, false)
+            } else {
+                builder.setProgress(0, 0, true)
             }
-        } else if (permille != null) {
-            builder.setProgress(1000, permille, false)
-        } else {
-            builder.setProgress(0, 0, true)
         }
 
         if (card.showAbort) {
             builder.addAction(0, getString(R.string.live_action_abort), abortIntent())
+        }
+        if (card.powerActions) {
+            // Reihenfolge wie in der App: Herunterfahren (mit Countdown) zuerst.
+            builder.addAction(
+                0,
+                getString(R.string.live_action_shutdown),
+                powerIntent(ACTION_SHUTDOWN, REQUEST_SHUTDOWN),
+            )
+            builder.addAction(
+                0,
+                getString(R.string.live_action_hibernate),
+                powerIntent(ACTION_HIBERNATE, REQUEST_HIBERNATE),
+            )
         }
         val notification = builder.build()
         logPromotionOnce(notification)
@@ -411,6 +520,12 @@ class LiveStatusService : Service() {
         return PendingIntent.getForegroundService(this, REQUEST_ABORT, intent, PENDING_FLAGS)
     }
 
+    /** Knopf der Dauerkarte; wie beim Abbrechen eine erlaubte Nutzeraktion. */
+    private fun powerIntent(action: String, request: Int): PendingIntent {
+        val intent = Intent(this, LiveStatusService::class.java).setAction(action)
+        return PendingIntent.getForegroundService(this, request, intent, PENDING_FLAGS)
+    }
+
     private fun notificationChecking(): Notification = buildNotification(
         LiveCard(
             title = getString(R.string.live_title_checking),
@@ -434,6 +549,64 @@ class LiveStatusService : Service() {
             showAbort = true,
         )
     )
+
+    /**
+     * Dauerkarte: der PC antwortet und es laeuft nichts. Zwei Knoepfe, damit
+     * Herunterfahren/Ruhezustand ohne Oeffnen der App moeglich sind.
+     */
+    private fun notificationOnline(deviceName: String): Notification = buildNotification(
+        LiveCard(
+            title = if (deviceName.isBlank()) {
+                getString(R.string.live_title_online_plain)
+            } else {
+                getString(R.string.live_title_online, deviceName)
+            },
+            text = getString(R.string.live_text_online),
+            progress = false,
+            powerActions = true,
+        )
+    )
+
+    /** Rueckmeldung nach einem Knopf der Dauerkarte. */
+    private fun notificationPowerSent(action: PowerAction, delaySeconds: Int): Notification =
+        when (action) {
+            PowerAction.SHUTDOWN -> buildNotification(
+                LiveCard(
+                    title = getString(R.string.live_title_shutdown),
+                    text = getString(R.string.live_text_shutdown_sent, delaySeconds),
+                    // Abbruch bleibt angeboten, bis der Countdown des Agenten
+                    // in der naechsten Abfrage in der Karte steht.
+                    showAbort = true,
+                )
+            )
+            PowerAction.HIBERNATE -> buildNotification(
+                LiveCard(
+                    title = getString(R.string.live_title_hibernate),
+                    text = getString(R.string.live_text_hibernate_sent),
+                    progress = false,
+                    powerActions = true,
+                )
+            )
+        }
+
+    /** Ehrlich bleiben: der Aufruf kam nicht durch (401, PC aus, ...). */
+    private fun notificationPowerFailed(action: PowerAction, code: Int): Notification =
+        buildNotification(
+            LiveCard(
+                title = when (action) {
+                    PowerAction.SHUTDOWN -> getString(R.string.live_title_shutdown)
+                    PowerAction.HIBERNATE -> getString(R.string.live_title_hibernate)
+                },
+                // code 0 = keine Verbindung (siehe `liveRequest`).
+                text = if (code == 0) {
+                    getString(R.string.live_text_action_unreachable)
+                } else {
+                    getString(R.string.live_text_action_failed, code)
+                },
+                progress = false,
+                powerActions = true,
+            )
+        )
 
     private fun notificationStarting(deviceName: String): Notification = buildNotification(
         LiveCard(
@@ -595,6 +768,9 @@ class LiveStatusService : Service() {
             port = port,
             user = intent.getStringExtra(EXTRA_USER).orEmpty(),
             pass = intent.getStringExtra(EXTRA_PASS).orEmpty(),
+            // Standard-Timer des Profils: bestimmt den Countdown, wenn
+            // "Herunterfahren" direkt aus der Karte kommt.
+            defaultDelay = intent.getIntExtra(EXTRA_DELAY, 60),
         )
     }
 
@@ -603,6 +779,8 @@ class LiveStatusService : Service() {
         const val ACTION_SYNC = "com.example.pcsteuerung.action.LIVE_SYNC"
         const val ACTION_WAIT_ONLINE = "com.example.pcsteuerung.action.LIVE_WAIT_ONLINE"
         const val ACTION_ABORT = "com.example.pcsteuerung.action.LIVE_ABORT"
+        const val ACTION_SHUTDOWN = "com.example.pcsteuerung.action.LIVE_SHUTDOWN"
+        const val ACTION_HIBERNATE = "com.example.pcsteuerung.action.LIVE_HIBERNATE"
         const val ACTION_STOP = "com.example.pcsteuerung.action.LIVE_STOP"
 
         const val EXTRA_HOST = "live_host"
@@ -610,6 +788,7 @@ class LiveStatusService : Service() {
         const val EXTRA_NAME = "live_name"
         const val EXTRA_USER = "live_user"
         const val EXTRA_PASS = "live_pass"
+        const val EXTRA_DELAY = "live_delay"
         const val EXTRA_WAIT_SECONDS = "live_wait_seconds"
 
         /** Kanal-ID; Name/Beschreibung stehen in `res/values/strings_live.xml`. */
@@ -619,8 +798,12 @@ class LiveStatusService : Service() {
         private const val NOTIFICATION_ID = 4711
         private const val REQUEST_OPEN = 1
         private const val REQUEST_ABORT = 2
+        private const val REQUEST_SHUTDOWN = 3
+        private const val REQUEST_HIBERNATE = 4
 
         private const val POLL_MS = 3_000L
+        /** Dauerkarte: ruhiger Takt, damit die Abfrage nicht am Akku zieht. */
+        private const val IDLE_POLL_MS = 15_000L
         /** Countdown lokal jede Sekunde neu zeichnen (ohne Netzabfrage). */
         private const val COUNTDOWN_TICK_MS = 1_000L
         /** Antwortet der Agent nicht, nach 60 s aufgeben (kein Dauerlauf ohne Zweck). */
@@ -653,6 +836,20 @@ class LiveStatusService : Service() {
                 .onFailure { runCatching { context.stopService(intent) } }
         }
 
+        /**
+         * Einstellungen neu einlesen (Dauerkarte an/aus), ohne die laufende
+         * Karte zu ersetzen. `startService` genuegt: der Aufruf kommt aus der
+         * App im Vordergrund, und der Dienst beendet sich selbst, wenn nichts
+         * mehr anzuzeigen ist.
+         */
+        fun refreshSettings(context: Context) {
+            val intent = Intent(context, LiveStatusService::class.java).setAction(ACTION_SYNC)
+            runCatching { context.startService(intent) }
+                .onFailure {
+                    Log.d(LIVE_TAG, "Einstellungen nicht uebernommen: ${it.javaClass.simpleName}")
+                }
+        }
+
         private fun start(context: Context, intent: Intent, profile: Profile?) {
             if (profile != null) {
                 intent.putExtra(EXTRA_HOST, profile.host)
@@ -660,6 +857,7 @@ class LiveStatusService : Service() {
                 intent.putExtra(EXTRA_NAME, profile.name)
                 intent.putExtra(EXTRA_USER, profile.user)
                 intent.putExtra(EXTRA_PASS, profile.pass)
+                intent.putExtra(EXTRA_DELAY, profile.defaultDelay)
             }
             runCatching { ContextCompat.startForegroundService(context, intent) }
                 .onFailure { Log.d(LIVE_TAG, "Live-Dienst nicht gestartet: ${it.javaClass.simpleName}") }
@@ -674,6 +872,24 @@ private const val ANDROID_16 = 36
 
 /** Zeitlimit fuer eine einzelne Abfrage (der Dienst pollt alle 3 s). */
 private const val LIVE_TIMEOUT_MS = 2_500
+
+// ---------------------------------------------------------------------------
+// Countdown fuer die Karte "Herunterfahren"
+// ---------------------------------------------------------------------------
+
+/** Kuerzester Countdown: ein Fehlgriff in der Karte soll abbrechbar bleiben. */
+private const val MIN_SHUTDOWN_DELAY = 10
+
+/** Obergrenze gegen Unsinnswerte aus alten Profilen (1 Stunde). */
+private const val MAX_SHUTDOWN_DELAY = 3_600
+
+/** Countdown in Sekunden, den "Herunterfahren" aus der Karte wirklich nutzt. */
+fun liveShutdownDelay(delaySeconds: Int): Int =
+    delaySeconds.coerceIn(MIN_SHUTDOWN_DELAY, MAX_SHUTDOWN_DELAY)
+
+/** Pfad fuer "Herunterfahren" aus der Dauerkarte. */
+fun liveShutdownPath(delaySeconds: Int): String =
+    "/shutdown?delay=${liveShutdownDelay(delaySeconds)}"
 
 // ---------------------------------------------------------------------------
 // Daten und Parser. Bewusst tolerant: fehlende Felder sind erlaubt, kaputtes

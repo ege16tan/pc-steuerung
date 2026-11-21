@@ -5,9 +5,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <!-- Live-Benachrichtigung (Now Bar): Foreground-Service vom Typ dataSync -->
+    <!-- Live-Benachrichtigung (Now Bar): Foreground-Service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Dauerkarte laeuft ohne festes Ende: "specialUse" ab Android 14. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Dauerkarte nach einem Neustart des Handys wieder aufbauen. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Android 16 "Live Updates": laufende Karte darf in der Now Bar erscheinen. -->
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
@@ -51,11 +55,27 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
-        <!-- Live-Benachrichtigung (Download, Shutdown-Countdown, Startphase). -->
+        <!-- Live-Benachrichtigung (Download, Shutdown-Countdown, Startphase) und
+             Dauerkarte ("PC ist an"): ab Android 14 "specialUse", weil die
+             Karte ohne festes Ende laufen darf (dataSync ist auf 6 h begrenzt). -->
         <service
             android:name=".LiveStatusService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="remote_pc_control_status" />
+        </service>
+
+        <!-- Dauerkarte nach Neustart / App-Update wieder aufbauen. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

@@ -111,8 +111,8 @@ Build-Ordner an. Das ist nur fuer `x86_64-pc-windows-gnu` aktiv.
 - `start.bat` baut mit Cargo den aktuellen Quellstand (Cargo ueberspringt
   unveraenderte Builds), ersetzt danach sicher die EXE und startet sie.
   Ohne Cargo wird eine vorhandene `pc-agent.exe` verwendet.
-- Standardstart aus dem Projektstamm: `start-agent.bat` oder der Launcher
-  `PC Steuerung.exe` (Agent, Tray und Web-UI ohne Konsole).
+- Standardstart: Desktop-Symbol **„PC Steuerung"** (Desktop-App: Fenster + Tray in einer
+  EXE). Ohne App: `..\scripts\start-agent.bat` (Agent + PowerShell-Tray).
 - Der Agent schreibt Zugangsdaten, Token, Geraeteeinstellungen und Log nach
   `%LOCALAPPDATA%\PC Steuerung`.
 
@@ -135,7 +135,8 @@ waehlen und danach das Login eintragen.
 
 ## Tray-Steuerung (Taskleiste)
 
-`start-tray.bat` oeffnet das Tray-Symbol. Doppelklick oeffnet die Web-UI;
+`..\scripts\start-tray.bat` oeffnet das Tray-Symbol (Notfallweg; die Desktop-App
+bringt ihr eigenes Tray-Symbol mit). Doppelklick oeffnet die Web-UI;
 das Kontextmenue kann den Agenten starten oder stoppen und den Browser
 oeffnen. Gruen = laeuft, grau = gestoppt, orange = Port belegt.
 

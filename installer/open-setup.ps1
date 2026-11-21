@@ -2,7 +2,14 @@ param([switch]$SkipStart)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$manager = Join-Path $root 'agent-manager.ps1'
+# Nach der Neu-Ablage liegen die Startskripte in "scripts" (alte Installationen:
+# direkt neben dieser Datei) - beides wird unterstuetzt.
+$scriptDir = if (Test-Path -LiteralPath (Join-Path $root 'scripts\agent-manager.ps1')) {
+    Join-Path $root 'scripts'
+} else {
+    $root
+}
+$manager = Join-Path $scriptDir 'agent-manager.ps1'
 $url = 'http://127.0.0.1:8000/'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -28,7 +35,7 @@ try {
 
     $trayTask = Get-ScheduledTask -TaskName 'PC Steuerung Tray' -ErrorAction SilentlyContinue
     if ($trayTask) {
-        Start-Process -FilePath (Join-Path $root 'start-tray.bat') -WorkingDirectory $root -WindowStyle Hidden
+        Start-Process -FilePath (Join-Path $scriptDir 'start-tray.bat') -WorkingDirectory $scriptDir -WindowStyle Hidden
     }
     Start-Process $url
 } catch {

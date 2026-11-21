@@ -59,22 +59,31 @@
 
 ## Schnellstart
 
-### 1. PC-Agent einrichten
+### 1. Desktop-App starten
 
 ```powershell
-start-agent.bat
+powershell -ExecutionPolicy Bypass -File "Desktop App\build.ps1"   # einmalig bauen
+dist\PC Steuerung.exe                                              # oder: Desktop-Symbol
 ```
 
-Oder `start-agent.bat` doppelklicken: Der Agent läuft komplett im Hintergrund,
-das **Tray-Symbol** erscheint automatisch im Infobereich. Danach
-**`http://localhost:8000/`** öffnen und einmalig **Benutzername + Passwort**
-festlegen. Für Zwischeninfos beim Testen gibt es `start-agent-debug.bat`
-(sichtbare Konsole + `agent.log` live).
+Die App zeigt **Fenster und Tray-Symbol aus einer EXE**: Status (gelb „wird gestartet",
+grün „läuft", grau „gestoppt", rot bei Fehlern), Service starten/stoppen, ein
+kombinierter Herunterfahren/Abbrechen-Knopf, Ruhezustand, Web-UI und Beenden.
+Das X versteckt nur ins Tray. Der Watchdog startet `pc-agent.exe` automatisch,
+solange die App läuft – einen **Autostart gibt es bewusst nicht**.
+Voraussetzung: .NET 8 Desktop-Runtime (`build.ps1 -SelfContained` baut ohne).
+
+Danach **`http://localhost:8000/`** öffnen und einmalig **Benutzername + Passwort**
+festlegen.
+
+**Notfallweg ohne Desktop-App:** `scripts\start-agent.bat` (Agent + PowerShell-Tray),
+`scripts\start-agent-debug.bat` (sichtbare Konsole + `agent.log` live),
+`scripts\start-tray.bat` (nur Tray).
 
 **Desktop-Symbol:** `scripts\create-desktop-shortcut.ps1` legt die Verknüpfung
-„PC Steuerung" auf dem Desktop an – mit dem App-Icon, startet Agent/Tray und
-öffnet die Web-Oberfläche. Das Icon wird von `scripts\build-icon.ps1` aus den
-Android-Vektoren erzeugt (`PC Steuerung.ico`).
+„PC Steuerung" an – Ziel ist die Desktop-App (`dist\PC Steuerung.exe`), das Icon kommt
+direkt aus der EXE. Das App-Icon selbst erzeugt `scripts\build-icon.ps1` aus den
+Android-Vektoren (`assets\PC Steuerung.ico`).
 
 Der Installer wird mit Inno Setup 6/7 und `installer\build-installer.ps1`
 gebaut. Er installiert pro Benutzer, kann Agent und Tray bei der Anmeldung
@@ -89,7 +98,7 @@ Optional:
 netsh advfirewall firewall add rule name="PC Agent 8000" dir=in action=allow protocol=TCP localport=8000 remoteip=localsubnet profile=private
 
 # Tray-Symbol starten
-start-tray.bat
+scripts\start-tray.bat
 
 # Autostart (inkl. Tray)
 powershell -ExecutionPolicy Bypass -File ".\PC Agent Rust\install-autostart.ps1" -WithTray
@@ -156,11 +165,13 @@ Shizuku muss laufen und der App ausdrücklich autorisiert werden.
 ## Projektstruktur
 
 ```
+Desktop App/     WinForms-App: Fenster + Tray in einer EXE (dist\PC Steuerung.exe)
 Android App/     Kotlin-/Jetpack-Compose-App (ohne Homescreen-Widget)
-PC Agent Rust/   Rust-Agent (einzelne EXE), Web-UI und Autostart-Skripte
+PC Agent Rust/   Rust-Agent (einzelne EXE), Web-UI, Plugin- und Autostart-Skripte
+scripts/         Start-/Notfallskripte, Icon-, Prüf- und Desktop-Helfer
+assets/          Icons (PC Steuerung.ico aus scripts\build-icon.ps1)
 installer/       Inno-Setup-Skript und Build-/Setup-Helfer
-scripts/         Prüf-, Icon- und Desktop-Helfer
-docs/            Planung und Hintergründe
+docs/            Technik (architecture/, decisions/), Planung und Releases
 ```
 
 ## Credits

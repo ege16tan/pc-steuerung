@@ -8,7 +8,7 @@
 
     <!-- Kanal (IMPORTANCE_LOW: kein Ton, keine Vibration) -->
     <string name="live_channel_name">PC Steuerung live</string>
-    <string name="live_channel_desc">Laufender Download, Shutdown-Countdown und Startphase</string>
+    <string name="live_channel_desc">Dauerkarte, laufender Download, Shutdown-Countdown und Startphase</string>
 
     <!-- Neutraler Zustand -->
     <string name="live_title_checking">PC Steuerung live</string>
@@ -39,6 +39,18 @@
     <string name="live_title_starting">PC startet \u2026</string>
     <string name="live_text_starting">warte auf %1$s</string>
     <string name="live_text_starting_plain">warte auf PC</string>
+
+    <!-- (d) Dauerkarte: PC ist an, Aktionen direkt aus der Karte -->
+    <string name="live_title_online">%1$s ist an</string>
+    <string name="live_title_online_plain">PC ist an</string>
+    <string name="live_text_online">Herunterfahren oder Ruhezustand moeglich</string>
+    <string name="live_action_shutdown">Herunterfahren</string>
+    <string name="live_action_hibernate">Ruhezustand</string>
+    <string name="live_text_shutdown_sent">Herunterfahren ausgeloest \u2013 noch %1$d s</string>
+    <string name="live_title_hibernate">Ruhezustand</string>
+    <string name="live_text_hibernate_sent">Ruhezustand ausgeloest</string>
+    <string name="live_text_action_failed">Aktion fehlgeschlagen (HTTP %1$d)</string>
+    <string name="live_text_action_unreachable">PC nicht erreichbar \u2013 Aktion nicht gesendet</string>
 
     <!-- Zustand unbekannt (PC nicht erreichbar, 401/404, kaputtes JSON) -->
     <string name="live_title_unknown">PC Steuerung</string>

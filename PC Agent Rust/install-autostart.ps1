@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $scriptDir
-$startBat  = Join-Path $projectRoot 'start-agent.bat'
+$startBat  = Join-Path $projectRoot 'scripts\start-agent.bat'
 
 if (-not (Test-Path -LiteralPath $startBat -PathType Leaf)) {
     throw "start.bat wurde nicht gefunden: $startBat"
@@ -75,7 +75,7 @@ Write-Host "  StartIn:  $scriptDir"
 
 if ($WithTray) {
     $trayTaskName = 'PC Steuerung Tray'
-    $startTray = Join-Path $projectRoot 'start-tray.bat'
+    $startTray = Join-Path $projectRoot 'scripts\start-tray.bat'
     if (-not (Test-Path -LiteralPath $startTray -PathType Leaf)) {
         throw "start-tray.bat wurde nicht gefunden: $startTray"
     }

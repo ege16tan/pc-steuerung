@@ -42,6 +42,10 @@
     <string name="settings_simulation_on">Aktiv – Aktionen werden nur geloggt</string>
     <string name="settings_simulation_off">Aus – Aktionen werden wirklich ausgeführt</string>
     <string name="settings_simulation_unknown">Modus kann gerade nicht ermittelt werden</string>
+    <!-- Dauerkarte: ongoing-Benachrichtigung "PC ist an" mit zwei Knoepfen -->
+    <string name="settings_online_card">Dauerkarte in der Statusleiste</string>
+    <string name="settings_online_card_on">Aktiv – zeigt „An“ mit Herunterfahren und Ruhezustand, solange der PC läuft</string>
+    <string name="settings_online_card_off">Aus – nur Downloads, Countdown und Startphase werden angezeigt</string>
     <string name="settings_webui">PC-Weboberfläche</string>
 
     <!-- Plugins des PC-Agenten (Markt+) -->

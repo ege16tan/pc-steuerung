@@ -9,19 +9,30 @@ einen Windows-PC (Wake-on-LAN, Herunterfahren, Abbrechen, Ruhezustand, Energiepl
 Status).
 
 - `PC Agent Rust/` – Windows-Agent als einzelne Rust-EXE (einzige PC-Version).
+- `Desktop App/` – WinForms-Desktop-App (.NET 8): Fenster + Tray-Symbol in **einer**
+  EXE (`dist\PC Steuerung.exe`), startet/stoppt den Rust-Agenten per HTTP.
 - `Android App/` – Kotlin/Jetpack Compose-Client, läuft auf dem Handy.
-- Kein GUI-Launcher mehr: Start über `start-agent.bat` bzw. Tray/Autostart.
+- **Kein Autostart mehr:** Die PowerShell-Aufgaben in der Aufgabenplanung sind
+  deaktiviert (`\PC Agent`, `\PC Steuerung Agent`, `\PC Steuerung Tray`); gestartet
+  wird über das Desktop-Symbol.
 - Die frühere Python-Version liegt archiviert unter
   https://github.com/ege16tan/pc-steuerung-python und wird nicht mehr gepflegt.
 
 ## Befehle
 
-- Standardstart: `start-agent.bat` (Agent + Tray, alles im Hintergrund).
-  Debug: `start-agent-debug.bat` (sichtbare Konsole + `agent.log` live).
-  Nur Tray: `start-tray.bat`. Web-UI: `http://127.0.0.1:8000/`.
+- **Desktop-App bauen:** `powershell -ExecutionPolicy Bypass -File "Desktop App\build.ps1"`
+  → `dist\PC Steuerung.exe` (framework-abhängig, braucht .NET 8 Desktop-Runtime;
+  `-SelfContained` für eine EXE ohne Runtime). Start per Desktop-Symbol; das Fenster
+  zeigt Status, Start/Stop, Herunterfahren/Abbrechen, Ruhezustand, Web-UI, Beenden.
+- **Debug/Notfall (alt, bleibt vorerst):** `scripts\start-agent.bat` (Agent + PowerShell-Tray),
+  `scripts\start-agent-debug.bat` (sichtbare Konsole + `agent.log` live),
+  `scripts\start-tray.bat`. Web-UI: `http://127.0.0.1:8000/`.
 - Desktop-Symbol: `scripts\create-desktop-shortcut.ps1` legt „PC Steuerung" auf dem
-  Desktop an (startet Agent/Tray und öffnet die Web-UI). Icon erzeugen:
-  `scripts\build-icon.ps1` (rendert `PC Steuerung.ico` aus den Android-Vektoren).
+  Desktop an (Ziel: die Desktop-App, kein PowerShell). Icon: `assets\app.ico` in der
+  Desktop-App bzw. `scripts\build-icon.ps1` (rendert `assets\PC Steuerung.ico`).
+- **Ablage:** Start-/Notfallskripte in `scripts/` (Agent-Manager greift auf
+  `..\PC Agent Rust` zu), Icons in `assets/`, Technik-Doku in `docs/architecture/`
+  und `docs/decisions/`, Planung in `docs/planung.md`, Release-Notizen in `docs/releases/`.
 - Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
 - `PC_AGENT_SIMULATE` (Default `0` im Manager) = echte Aktion; `1` = Simulation (nur Loggen).
   Simulation nur bewusst einschalten; destruktive Aufrufe (Shutdown) immer mit Countdown testen.
@@ -29,7 +40,7 @@ Status).
 - `PC_AGENT_CORS` (Default leer) = Komma-getrennte Origins, die die Geräteliste im
   Browser lesen dürfen (z. B. `http://192.168.1.10:8000`). Leer = kein CORS; `*`
   gibt es bewusst nicht.
-- Tray-Steuerung: `start-tray.bat` (Web-UI öffnen, Agent starten/stoppen).
+- Tray-Steuerung: `scripts\start-tray.bat` (Web-UI öffnen, Agent starten/stoppen).
   Nur eine Tray-Instanz gleichzeitig (Mutex `Local\PCSteuerungTray`).
 - Push-Schutz: `scripts/check-sensitive.sh` (Pre-Push-Hook in `.githooks/`,
   aktivieren mit `scripts/install-hooks.ps1`); GitHub Actions prüft dasselbe.
@@ -91,6 +102,31 @@ Status).
   Inhalt als normale Progress-Notification. Texte in
   `res/values/strings_live.xml`. Samsung Now Bar kann die Karte zeigen – abhängig
   von One UI/„Live-Benachrichtigungen“, nicht erzwingbar.
+- **Dauerkarte (21.11.2026):** `LiveStatusService` laesst nicht mehr nur
+  Download/Countdown/Startphase laufen, sondern zeigt – solange der Agent antwortet
+  und nichts anderes ansteht – eine ongoing Statuskarte „<PC> ist an“ (Kategorie
+  STATUS, ohne Fortschrittsbalken) mit den Knoepfen „Herunterfahren“
+  (`/shutdown?delay=`, Countdown aus `Profile.defaultDelay`, mindestens 10 s, damit
+  ein Fehlgriff auf dem Sperrbildschirm abbrechbar bleibt) und „Ruhezustand“
+  (`/hibernate`). Abfragetakt im Leerlauf 15 s statt 3 s (Akku). Abschaltbar unter
+  Einstellungen → Steuerung (`AppSettings.onlineCard`, SharedPreferences-Key
+  `online_card`); aus = der Dienst beendet sich, sobald nichts anzuzeigen ist.
+  Ab Android 14 laeuft der Dienst als `specialUse`-Foreground-Dienst (`dataSync`
+  haette seit Android 15 ein 6-h-Limit), `BootReceiver` baut die Karte nach
+  Neustart/App-Update wieder auf.
+- **Desktop App (21.11.2026):** `Desktop App/` ist eine WinForms-App auf .NET 8
+  (`PC Steuerung.exe`, Einzeldatei). Ein Fenster + ein Tray-Symbol aus derselben EXE:
+  Schließen (X) versteckt nur ins Tray, „Beenden" beendet wirklich. Sichtbare Texte
+  sagen konsequent **„Service"** (der Dateiname bleibt `pc-agent.exe`). Status: gelb
+  „Service wird gestartet …", grün „Service läuft" (+ Energieplan), grau „Service
+  gestoppt", rot bei Fehlern; Abfrage alle 2 s gegen `GET /status`. Ein kombinierter
+  Knopf „PC herunterfahren (60 s)" / „Herunterfahren abbrechen (noch N s)" folgt
+  `pending_shutdown` (auch wenn der Shutdown von Handy/Web-UI/Routine kommt).
+  Aktionen per `POST` mit `X-PC-Steuerung: 1`; Agent-Start per `Process.Start` ohne
+  Konsolenfenster (`PC_AGENT_PORT`, `PC_AGENT_SIMULATE=0`). Einzelinstanz über Mutex
+  `Local\PCSteuerungDesktop` (zweiter Start holt das Fenster nach vorn), Watchdog-Checkbox
+  „Service automatisch starten" (pausiert nach manuellem Stopp, gespeichert in
+  `%LOCALAPPDATA%\PC Steuerung\desktop-settings.json`). Icons in `assets\` (eingebettet).
 - **Plugins (alt):** `src/plugins.rs` startet weiter EXE-Hilfsprogramme nur auf
   Anforderung (Manifeste `<EXE>\plugins\*.json` oder `<Datenordner>\plugins\*.json`,
   `bin` + `args`). Das frühere eingebaute `game-optimizer.exe` ist ersatzlos
@@ -153,14 +189,16 @@ Status).
 ## Gotchas
 
 - Deutsche UI-Strings/Kommentare (teilweise ASCII-Transliteration, z. B. „Pruefung", „fuer").
-- Windows: **kein GUI-Launcher** mehr – der Agent läuft im Hintergrund, bedient wird
-  er über Tray-Symbol und Web-UI (`http://127.0.0.1:8000/`).
-- Tray startet automatisch: `agent-manager.ps1 -Action start` ruft `Start-TrayIfNeeded`
-  auf; der Mutex `Local\PCSteuerungTray` verhindert doppelte Symbole.
-- Agent läuft dauerhaft: Autostart über `PC Agent Rust\install-autostart.ps1 -WithTray`
-  (Aufgabenplanung, „bei Anmeldung") **und** Tray-Watchdog (`tray.ps1` startet den Agenten
-  automatisch, wenn er nicht läuft; abschaltbar im Tray-Menü).
-- Debug: `start-agent-debug.bat` startet den Agenten in einer sichtbaren Konsole und
+- Windows: **GUI jetzt in der Desktop-App** (`Desktop App/`, Fenster + Tray in einer
+  EXE). Der Rust-Agent läuft unabhängig davon im Hintergrund; die Web-UI
+  (`http://127.0.0.1:8000/`) bleibt als Zweitzugang.
+- Das alte PowerShell-Tray (`scripts\tray.ps1`) und `scripts\agent-manager.ps1` bleiben als
+  Notfallweg liegen, werden aber nicht mehr automatisch gestartet: die Aufgaben
+  `\PC Agent`, `\PC Steuerung Agent`, `\PC Steuerung Tray` sind **deaktiviert**
+  (vorher: `install-autostart.ps1 -WithTray`). Mutex dort: `Local\PCSteuerungTray`.
+- Agent läuft dauerhaft, solange die Desktop-App offen ist: deren Watchdog startet ihn
+  (Checkbox „Service automatisch starten"). Es gibt bewusst **keinen** Autostart-Eintrag.
+- Debug: `scripts\start-agent-debug.bat` startet den Agenten in einer sichtbaren Konsole und
   zeigt `agent.log` live (Zwischeninfos, kein Hardcore-Debugging).
 - Credits: genutzte Fremdprojekte/Skills in `CREDITS.md` und im Vault (`Credits`) pflegen.
 - Android: minSdk 26, compileSdk/targetSdk 36, Compose BOM `2025.09.00`, Kotlin 2.3.21,

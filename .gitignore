@@ -2,6 +2,10 @@
 credentials.json
 token.json
 device.json
+# Signing (Keystore bleibt ausserhalb des Repos)
+keystore.properties
+*.jks
+*.keystore
 
 # Lokale OpenCode/Codex-Konfiguration
 opencode.json
@@ -22,3 +26,7 @@ dist/
 
 # Lokal gebauter Launcher (Quelle liegt in launcher/)
 PC Steuerung.exe
+
+# Desktop App: Build-Ausgaben (Quelle liegt in "Desktop App/")
+Desktop App/bin/
+Desktop App/obj/

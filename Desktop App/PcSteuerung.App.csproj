@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Sichtbarer Name: "PC Steuerung.exe" (Fenster, Tray und Desktop-Icon
+         zeigen auf dieselbe Datei). -->
+    <AssemblyName>PC Steuerung</AssemblyName>
+    <RootNamespace>PcSteuerung.Desktop</RootNamespace>
+    <Product>PC Steuerung</Product>
+    <Company>PC Steuerung</Company>
+    <Version>0.13.0</Version>
+    <ApplicationIcon>assets\app.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Tray-Status-Icons werden eingebettet, damit die Einzeldatei-EXE
+         keine losen Dateien daneben braucht. -->
+    <EmbeddedResource Include="assets\app.ico" />
+    <EmbeddedResource Include="assets\tray-*.ico" />
+  </ItemGroup>
+
+</Project>

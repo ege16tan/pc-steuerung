@@ -155,7 +155,7 @@ statt Dateiname, optionaler Auto-Rücklauf nach X Minuten.
 
 ## 8. Web-Oberfläche Phase 1 (13.11.2026)
 
-Die Vorlage `docs/webui-konzept.html` wird als dunkles Dashboard umgesetzt, aufgeteilt
+Die Vorlage `docs/architecture/webui-konzept.html` wird als dunkles Dashboard umgesetzt, aufgeteilt
 in `page.html` (Gerüst), `app.css` und `app.js` – alle drei per `include_str!` im Binary.
 
 **Entschieden:** ein Gerät (keine Geräte-Sidebar), keine Benutzer/Rollen, Polling alle

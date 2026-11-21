@@ -8,7 +8,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Skripte liegen in scripts/, das Projekt (Rust-Agent) eine Ebene darueber.
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent $scriptDir
 $rustDir = Join-Path $projectRoot 'PC Agent Rust'
 $stateDir = Join-Path $env:LOCALAPPDATA 'PC Steuerung'
 $managerLog = Join-Path $stateDir 'agent-manager.log'
@@ -31,7 +33,7 @@ function Write-ManagerLog([string]$message) {
     Mutex nur kurz getestet, danach wird das Skript gestartet.
 #>
 function Start-TrayIfNeeded {
-    $trayScript = Join-Path $projectRoot 'tray.ps1'
+    $trayScript = Join-Path $scriptDir 'tray.ps1'
     if (-not (Test-Path -LiteralPath $trayScript -PathType Leaf)) { return $false }
 
     $trayMutex = $null

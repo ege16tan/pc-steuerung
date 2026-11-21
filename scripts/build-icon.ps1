@@ -16,7 +16,9 @@ Add-Type -AssemblyName System.Drawing
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $here
-$target = Join-Path $projectRoot 'PC Steuerung.ico'
+$assets = Join-Path $projectRoot 'assets'
+if (-not (Test-Path -LiteralPath $assets)) { New-Item -ItemType Directory -Path $assets | Out-Null }
+$target = Join-Path $assets 'PC Steuerung.ico'
 
 # Android-Vektoren (viewport 108x108) exakt nachbauen.
 $viewport = 108.0

@@ -171,8 +171,20 @@ class MainActivity : ComponentActivity() {
                     AppRoot(
                         settings = settings,
                         onSettingsChange = { updated ->
+                            val cardChanged = updated.onlineCard != settings.onlineCard
                             AppSettingsStore.save(context, updated)
                             settings = updated
+                            // Dauerkarte sofort an/aus: an -> Dienst starten,
+                            // aus -> Dienst liest die Einstellung neu und
+                            // beendet sich, wenn nichts anderes laeuft.
+                            if (cardChanged) {
+                                val ready = ProfileStore.active(context)?.isComplete == true
+                                if (updated.onlineCard && ready) {
+                                    LiveStatusService.startSync(context)
+                                } else {
+                                    LiveStatusService.refreshSettings(context)
+                                }
+                            }
                         },
                         confirmShutdown = confirmShutdownRequest.value,
                         onConfirmConsumed = { confirmShutdownRequest.value = false },
@@ -3262,6 +3274,7 @@ private fun SettingsTab(
                 onOpenWeb = onOpenWeb,
                 onTestConnection = onTestConnection,
                 onModeChange = onModeChange,
+                onSettingsChange = onSettingsChange,
             )
         } else {
             SettingsPageHeader(
@@ -3589,6 +3602,7 @@ private fun SettingsOverview(
     onOpenWeb: () -> Unit,
     onTestConnection: () -> Unit,
     onModeChange: (Boolean) -> Unit,
+    onSettingsChange: (AppSettings) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -3662,6 +3676,19 @@ private fun SettingsOverview(
 
         SettingsSectionLabel(stringResource(R.string.settings_section_control))
         SettingsGroup {
+            SettingsSwitchRow(
+                icon = Icons.Default.Build,
+                title = stringResource(R.string.settings_online_card),
+                subtitle = if (settings.onlineCard) {
+                    stringResource(R.string.settings_online_card_on)
+                } else {
+                    stringResource(R.string.settings_online_card_off)
+                },
+                checked = settings.onlineCard,
+                enabled = true,
+                onCheckedChange = { onSettingsChange(settings.copy(onlineCard = it)) },
+            )
+            SettingsGroupDivider()
             SettingsSwitchRow(
                 icon = Icons.Default.Settings,
                 title = stringResource(R.string.settings_simulation),

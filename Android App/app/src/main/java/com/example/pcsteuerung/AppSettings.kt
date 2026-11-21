@@ -14,6 +14,8 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val refreshSeconds: Int = 5,
     val updateInstallMethod: UpdateInstallMethod = UpdateInstallMethod.SYSTEM,
+    /** Dauerkarte in der Statusleiste ("PC ist an" mit zwei Knoepfen). */
+    val onlineCard: Boolean = true,
 )
 
 object AppSettingsStore {
@@ -22,6 +24,7 @@ object AppSettingsStore {
     private const val KEY_THEME = "theme_mode"
     private const val KEY_REFRESH = "refresh_seconds"
     private const val KEY_UPDATE_INSTALL_METHOD = "update_install_method"
+    private const val KEY_ONLINE_CARD = "online_card"
 
     /** Erlaubte Abstaende fuer die Status-Abfrage (Sekunden). */
     val REFRESH_CHOICES = listOf(2, 5, 10, 30)
@@ -40,6 +43,7 @@ object AppSettingsStore {
             themeMode = theme,
             refreshSeconds = refresh,
             updateInstallMethod = installMethod,
+            onlineCard = prefs.getBoolean(KEY_ONLINE_CARD, true),
         )
     }
 
@@ -49,6 +53,7 @@ object AppSettingsStore {
             .putString(KEY_THEME, settings.themeMode.name)
             .putInt(KEY_REFRESH, settings.refreshSeconds)
             .putString(KEY_UPDATE_INSTALL_METHOD, settings.updateInstallMethod.name)
+            .putBoolean(KEY_ONLINE_CARD, settings.onlineCard)
             .apply()
     }
 }

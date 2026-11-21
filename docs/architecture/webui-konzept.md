@@ -1,7 +1,7 @@
 # Web-UI-Konzept „Dashboard" – Abgleich mit dem Agenten
 
 **Stand:** 2026-11-14 · **Status:** geprüft · **Phasen 1–4 umgesetzt** (siehe §8–§11)
-**Vorlage:** `docs/webui-konzept.html` (das gelieferte Mockup, reines HTML/CSS/JS)
+**Vorlage:** `docs/architecture/webui-konzept.html` (das gelieferte Mockup, reines HTML/CSS/JS)
 
 ## 1. Was das Konzept zeigt
 
@@ -110,8 +110,8 @@
 
 | Datei | Zweck |
 |---|---|
-| `docs/webui-konzept.html` | gelieferte Vorlage (Referenz, wird nicht ausgeliefert) |
-| `docs/webui-konzept.md` | diese Abgleich-Liste |
+| `docs/architecture/webui-konzept.html` | gelieferte Vorlage (Referenz, wird nicht ausgeliefert) |
+| `docs/architecture/webui-konzept.md` | diese Abgleich-Liste |
 | `PC Agent Rust/src/page.html` | heute ausgelieferte UI (~28 KB, per `include_str!`) |
 
 ## 8. Umsetzung Phase 1 (13.11.2026)

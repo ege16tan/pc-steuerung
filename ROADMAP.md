@@ -50,7 +50,7 @@
 
 > **Neu ab 18.11.2026:** Steam-Plugin (Millennium), Kachel-Startbildschirm und
 > Now-Bar-Live-Benachrichtigungen. Verbindliche Checkliste:
-> [`docs/steam-plugin-und-kacheln.md`](docs/steam-plugin-und-kacheln.md)
+> [`docs/architecture/steam-plugin-und-kacheln.md`](docs/architecture/steam-plugin-und-kacheln.md)
 
 - [x] Steam-Plugin `steam-millennium`: Release **v0.11.0**, Katalog live
       (Markt+ findet es)
