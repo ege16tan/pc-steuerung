@@ -24,6 +24,11 @@ Status).
   → `dist\PC Steuerung.exe` (framework-abhängig, braucht .NET 8 Desktop-Runtime;
   `-SelfContained` für eine EXE ohne Runtime). Start per Desktop-Symbol; das Fenster
   zeigt Status, Start/Stop, Herunterfahren/Abbrechen, Ruhezustand, Web-UI, Beenden.
+- **Release bauen:** `Android App` → `gradlew.bat assembleRelease` (braucht
+  `app\keystore.properties` + `.jks`; ohne Keystore gibt es kein updatefähiges APK –
+  genau das fehlte v0.13.0 zuerst) und `Desktop App\build.ps1`. Hochladen mit
+  `gh release upload <tag> <datei> --repo ege16tan/pc-steuerung`; das APK **muss**
+  `app-release.apk` heißen, weil der In-App-Updater genau diesen Namen sucht.
 - **Debug/Notfall (alt, bleibt vorerst):** `scripts\start-agent.bat` (Agent + PowerShell-Tray),
   `scripts\start-agent-debug.bat` (sichtbare Konsole + `agent.log` live),
   `scripts\start-tray.bat`. Web-UI: `http://127.0.0.1:8000/`.
