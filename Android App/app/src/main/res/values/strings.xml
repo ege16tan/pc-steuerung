@@ -50,6 +50,7 @@
 
     <!-- Plugins des PC-Agenten (Markt+) -->
     <string name="plugins_section_title">PLUGINS AUF DEM PC</string>
+    <string name="plugins_steam_hint">Downloads, Tempo und Restzeit</string>
     <string name="plugins_section_subtitle">Lokale Plugins im Agenten – laden, starten, entfernen</string>
     <string name="plugins_empty">Keine Plugins gefunden – läuft der Agent gerade?</string>
     <string name="plugins_catalog_title">KATALOG</string>
@@ -69,6 +70,9 @@
 
     <!-- Kacheln und ihre Kurzstatus -->
     <string name="tile_control">Steuerung</string>
+    <!-- Kachel Systemwerte: Kurzstatus CPU/RAM, sonst "Nicht verfügbar" -->
+    <string name="tile_sensors">Systemwerte</string>
+    <string name="tile_sensors_status">CPU %1$s · RAM %2$s</string>
     <string name="tile_steam">Steam</string>
     <string name="tile_plugins">Plugins</string>
     <string name="tile_market">Markt+</string>
@@ -92,6 +96,8 @@
 
     <!-- Aktionsseiten: Kopfzeilen -->
     <string name="page_control_title">Steuerung</string>
+    <string name="page_sensors_title">Systemwerte</string>
+    <string name="page_sensors_subtitle">Live-Werte vom PC</string>
     <string name="page_steam_title">Steam</string>
     <string name="page_steam_subtitle">Downloads und Millennium auf dem PC</string>
     <string name="page_plugins_title">Plugins</string>
@@ -152,4 +158,29 @@
     <string name="history_empty">Noch keine Einträge.</string>
     <string name="history_copy">Kopieren</string>
     <string name="history_refresh">Aktualisieren</string>
+
+    <!-- Aktionsseite Systemwerte (GET /sensors) -->
+    <string name="sensors_hint">Werte werden nur solange geladen, wie diese Seite offen ist.</string>
+    <string name="sensors_refresh">Systemwerte aktualisieren</string>
+    <string name="sensors_loading">Lade Systemwerte …</string>
+    <string name="sensors_unavailable">Nicht verfügbar</string>
+    <string name="sensors_unavailable_hint">Der Agent liefert keine Systemwerte. Prüfe, ob der Agent aktuell ist (Route /sensors).</string>
+    <string name="sensors_tile_cpu">CPU</string>
+    <string name="sensors_tile_ram">Arbeitsspeicher</string>
+    <string name="sensors_tile_gpu">Grafikkarte</string>
+    <string name="sensors_tile_network">Netzwerk</string>
+    <string name="sensors_tile_disks">Datenträger</string>
+    <string name="sensors_tile_fans">Lüfter</string>
+    <string name="sensors_tile_temperatures">Temperaturen</string>
+    <!-- Einheiten: Prozent, GB, MB und Mbit/s wie in fmtBytes/fmtPercent -->
+    <string name="sensors_percent_value">%1$s %%</string>
+    <string name="sensors_gb_value">%1$s GB</string>
+    <string name="sensors_mb_value">%1$s MB</string>
+    <string name="sensors_rate_value">%1$s Mbit/s</string>
+    <string name="sensors_cores">%1$d Kerne</string>
+    <string name="sensors_ram_used">%1$s von %2$s belegt</string>
+    <string name="sensors_gpu_memory">%1$s von %2$s</string>
+    <string name="sensors_disk_free">%1$s frei von %2$s</string>
+    <string name="sensors_down_up">↓ %1$s · ↑ %2$s</string>
+    <string name="sensors_no_disks">Keine Datenträger gemeldet</string>
 </resources>

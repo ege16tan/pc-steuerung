@@ -1388,6 +1388,13 @@ fun MainApp(
     var routinesLoading by remember { mutableStateOf(true) }
     var events by remember { mutableStateOf<List<AgentEvent>>(emptyList()) }
 
+    // Systemwerte (`GET /sensors`): null = noch nie geladen. Die Seite fragt nur
+    // ab, solange sie offen ist (siehe LaunchedEffect weiter unten), die
+    // Startseite nutzt denselben Wert nur fuer den Kurzstatus der Kachel.
+    var sensors by remember { mutableStateOf<SensorsStatus?>(null) }
+    var sensorsRefreshing by remember { mutableStateOf(false) }
+    var sensorsRefresh by remember { mutableIntStateOf(0) }
+
     fun installModule(module: CatalogModule) {
         val next = installedModules + module.id
         ModuleStore.save(context, next)
@@ -1540,6 +1547,24 @@ fun MainApp(
         routinesLoading = false
     }
 
+    /**
+     * Systemwerte des Agenten (`GET /sensors`). Fehlt die Route (404, alter
+     * Agent), liefert [parseSensors] einen leeren Status - Kachel und Seite
+     * zeigen dann "Nicht verfügbar" statt Fantasiewerten.
+     */
+    suspend fun loadSensors() {
+        val result = withContext(Dispatchers.IO) {
+            try {
+                parseSensors(httpCall(active.base, "/sensors", active.authHeader()))
+            } catch (e: Exception) {
+                Log.e(TAG, "Systemwerte nicht erreichbar", e)
+                SensorsStatus()
+            }
+        }
+        sensors = result
+        sensorsRefreshing = false
+    }
+
     /** Ereignisse des Agenten (`GET /events`, neueste zuerst). */
     suspend fun loadEvents() {
         val list = withContext(Dispatchers.IO) {
@@ -1597,6 +1622,7 @@ fun MainApp(
                 loadPlugins()
                 loadRoutines()
                 loadSteam()
+                loadSensors()
             }
 
             Route.Plugins -> loadPlugins()
@@ -1611,8 +1637,22 @@ fun MainApp(
         }
     }
 
-    // Kacheln der Startseite regelmaessig auffrischen (Plugins, Steam, Routinen),
-    // aber nur solange die Seite sichtbar ist - kein Funkverkehr im Hintergrund.
+    // Systemwerte-Seite: nur solange die Seite offen ist, alle 2 Sekunden
+    // nachfragen (Pflichtregel D1 - keine Dauerabfrage im Hintergrund). Das
+    // Verlassen der Seite beendet den Effekt, STARTED pausiert ihn zusaetzlich.
+    LaunchedEffect(active, route, sensorsRefresh) {
+        if (route != Route.Sensors) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                loadSensors()
+                delay(2000L)
+            }
+        }
+    }
+
+    // Kacheln der Startseite regelmaessig auffrischen (Plugins, Steam, Routinen,
+    // Systemwerte), aber nur solange die Seite sichtbar ist - kein Funkverkehr
+    // im Hintergrund.
     LaunchedEffect(active, route, refresh, pluginRefresh) {
         if (route != Route.Home) return@LaunchedEffect
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -1621,6 +1661,7 @@ fun MainApp(
                 loadPlugins()
                 loadRoutines()
                 loadSteam()
+                loadSensors()
             }
         }
     }
@@ -1861,12 +1902,28 @@ fun MainApp(
                         events = events,
                         steam = steam,
                         steamLoading = steamLoading,
+                        sensors = sensors,
                         onRefresh = {
                             refreshing = true
                             refresh++
                         },
                         onOpen = { route = it },
                     )
+
+                    Route.Sensors -> ActionPage(
+                        title = stringResource(R.string.page_sensors_title),
+                        subtitle = stringResource(R.string.page_sensors_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        SensorsPage(
+                            status = sensors,
+                            refreshing = sensorsRefreshing,
+                            onRefresh = {
+                                sensorsRefreshing = true
+                                sensorsRefresh++
+                            },
+                        )
+                    }
 
                     Route.Control -> ActionPage(
                         title = stringResource(R.string.page_control_title),
@@ -1931,6 +1988,7 @@ fun MainApp(
                             onStop = ::stopPlugin,
                             onRemove = ::removePlugin,
                             onInstall = ::installPlugin,
+                            onOpenSteam = { route = Route.Steam },
                         )
                     }
 
@@ -2725,6 +2783,7 @@ private fun PluginsPage(
     onStop: (PluginInfo) -> Unit,
     onRemove: (PluginInfo) -> Unit,
     onInstall: (PluginCatalogEntry) -> Unit,
+    onOpenSteam: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -2755,6 +2814,41 @@ private fun PluginsPage(
                     Icons.Default.Refresh,
                     contentDescription = stringResource(R.string.plugins_refresh)
                 )
+            }
+        }
+
+        // Steam ist kein JavaScript-Plugin, hat aber eine eigene Detailseite
+        // (Downloads mit Tempo und Restzeit). Auf der Startseite steht bewusst
+        // kein Plugin-Inhalt, deshalb ist dieser Einstieg der Weg dorthin.
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onOpenSteam() },
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.page_steam_title),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = stringResource(R.string.plugins_steam_hint),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
             }
         }
 
@@ -3944,6 +4038,9 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
 sealed interface Route {
     data object Home : Route
     data object Control : Route
+
+    /** Systemwerte (CPU, RAM, GPU, Netzwerk, Datentraeger, Luefter, Temperaturen). */
+    data object Sensors : Route
     data object Steam : Route
     data object Plugins : Route
     data object Market : Route
@@ -4100,6 +4197,7 @@ private fun HomeScreen(
     events: List<AgentEvent>,
     steam: SteamStatus?,
     steamLoading: Boolean,
+    sensors: SensorsStatus?,
     onRefresh: () -> Unit,
     onOpen: (Route) -> Unit,
 ) {
@@ -4151,6 +4249,19 @@ private fun HomeScreen(
             .filter(String::isNotBlank)
             .joinToString(" · ")
     }
+    // Kurzstatus der Systemwerte-Kachel: nur echte Messwerte zeigen, sonst
+    // "Nicht verfügbar" (kein Platzhalter, keine 0 %).
+    val sensorsStatus = if (sensors == null ||
+        (sensors.cpu.percent == null && sensors.ram.percent == null)
+    ) {
+        stringResource(R.string.sensors_unavailable)
+    } else {
+        stringResource(
+            R.string.tile_sensors_status,
+            sensorPercentText(sensors.cpu.percent),
+            sensorPercentText(sensors.ram.percent),
+        )
+    }
 
     val tiles = listOf(
         HomeTileSpec(
@@ -4161,15 +4272,25 @@ private fun HomeScreen(
             dotColor = statusColor(state.status),
             pulsing = state.status == PcStatus.ONLINE,
         ),
+        // Systemwerte: Icons.Default.Memory liegt nur in material-icons-extended,
+        // das die App bewusst nicht einbindet - daher das vorhandene Info-Symbol.
         HomeTileSpec(
-            route = Route.Steam,
-            title = stringResource(R.string.tile_steam),
-            status = steamStatus,
-            icon = Icons.Default.PlayArrow,
-            // Laufender Download: duenner Balken auf der Kachel (wie Live-Karte).
-            progress = steam?.let {
-                if (it.downloading) (it.progressPercent / 100.0).toFloat() else null
-            },
+            route = Route.Sensors,
+            title = stringResource(R.string.tile_sensors),
+            status = sensorsStatus,
+            icon = Icons.Default.Info,
+        ),
+        HomeTileSpec(
+            route = Route.Energy,
+            title = stringResource(R.string.tile_energy),
+            status = planLabel(state.plan),
+            icon = Icons.Default.Star,
+        ),
+        HomeTileSpec(
+            route = Route.Routines,
+            title = stringResource(R.string.tile_routines),
+            status = routineStatus,
+            icon = Icons.Default.DateRange,
         ),
         HomeTileSpec(
             route = Route.Plugins,
@@ -4184,22 +4305,10 @@ private fun HomeScreen(
             icon = Icons.Default.ShoppingCart,
         ),
         HomeTileSpec(
-            route = Route.Routines,
-            title = stringResource(R.string.tile_routines),
-            status = routineStatus,
-            icon = Icons.Default.DateRange,
-        ),
-        HomeTileSpec(
             route = Route.History,
             title = stringResource(R.string.tile_history),
             status = historyStatus,
             icon = Icons.AutoMirrored.Filled.List,
-        ),
-        HomeTileSpec(
-            route = Route.Energy,
-            title = stringResource(R.string.tile_energy),
-            status = planLabel(state.plan),
-            icon = Icons.Default.Star,
         ),
         HomeTileSpec(
             route = Route.Settings,
@@ -4208,7 +4317,6 @@ private fun HomeScreen(
             icon = Icons.Default.Settings,
         ),
     )
-
 
     PullToRefreshBox(
         isRefreshing = refreshing,
@@ -4274,6 +4382,349 @@ private fun HomeScreen(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Aktionsseite Systemwerte (`GET /sensors`)
+//
+// Sieben Unterkacheln in zwei Spalten. Jeder Block kann einzeln fehlen:
+// dann steht dort "Nicht verfuegbar" (Text aus strings.xml), niemals eine 0.
+// ---------------------------------------------------------------------------
+
+/** Prozentwert als Text fuer Kachel und Seite; null = "Nicht verfuegbar". */
+@Composable
+private fun sensorPercentText(value: Double?): String = if (value == null) {
+    stringResource(R.string.sensors_unavailable)
+} else {
+    stringResource(R.string.sensors_percent_value, fmtSensorPercent(value))
+}
+
+/** Groesse in MB mit Einheit aus der Ressourcendatei. */
+@Composable
+private fun sensorMbText(value: Long): String =
+    stringResource(R.string.sensors_mb_value, fmtSensorMb(value))
+
+/** Groesse in GB mit Einheit aus der Ressourcendatei. */
+@Composable
+private fun sensorGbText(value: Double): String =
+    stringResource(R.string.sensors_gb_value, fmtSensorGb(value))
+
+/** Durchsatz als Mbit/s mit Einheit aus der Ressourcendatei. */
+@Composable
+private fun sensorRateText(bytesPerSecond: Double): String =
+    stringResource(R.string.sensors_rate_value, fmtSensorRate(bytesPerSecond))
+
+/** Eine Unterkachel im Raster: Titel klein oben, Messwert darunter. */
+@Composable
+private fun SensorTile(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = title,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            content()
+        }
+    }
+}
+
+/** Grosser Messwert einer Unterkachel (grau, wenn kein Wert vorliegt). */
+@Composable
+private fun SensorValue(text: String, available: Boolean = true) {
+    Text(
+        text = text,
+        fontSize = 20.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = if (available) {
+            MaterialTheme.colorScheme.onSurface
+        } else {
+            MaterialTheme.colorScheme.outline
+        },
+    )
+}
+
+/** Kleine Zusatzzeile (Einheit, Kerne, Name) einer Unterkachel. */
+@Composable
+private fun SensorDetail(text: String) {
+    Text(
+        text = text,
+        fontSize = 11.sp,
+        lineHeight = 15.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Duenner Fortschrittsbalken; ohne Prozentwert bleibt er weg. */
+@Composable
+private fun SensorBar(percent: Double?) {
+    if (percent == null) return
+    LinearProgressIndicator(
+        progress = { (percent / 100.0).toFloat().coerceIn(0f, 1f) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp)),
+    )
+}
+
+/** "Nicht verfuegbar" plus optionaler Grund des Agenten. */
+@Composable
+private fun SensorUnavailable(reason: String = "") {
+    SensorValue(stringResource(R.string.sensors_unavailable), available = false)
+    if (reason.isNotBlank()) SensorDetail(reason)
+}
+
+/** Zwei Unterkacheln nebeneinander, gleich hoch. */
+@Composable
+private fun SensorRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        content = content,
+    )
+}
+
+/**
+ * Inhalt der Systemwerte-Seite. [status] ist null, solange noch nichts geladen
+ * wurde; ein leerer Status (Agent ohne `/sensors`, 404) zeigt nur den Hinweis.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SensorsPage(
+    status: SensorsStatus?,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+) {
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.sensors_hint),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onRefresh) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = stringResource(R.string.sensors_refresh),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+
+            when {
+                status == null -> Text(
+                    text = stringResource(R.string.sensors_loading),
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+
+                status.isEmpty -> {
+                    Text(
+                        text = stringResource(R.string.sensors_unavailable),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Text(
+                        text = stringResource(R.string.sensors_unavailable_hint),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+
+                else -> SensorTiles(status = status)
+            }
+        }
+    }
+}
+
+/** Die sieben Unterkacheln in zwei Spalten; Datentraeger ueber die volle Breite. */
+@Composable
+private fun SensorTiles(status: SensorsStatus) {
+    SensorRow {
+        SensorCpuTile(status.cpu, Modifier.weight(1f))
+        SensorRamTile(status.ram, Modifier.weight(1f))
+    }
+    SensorRow {
+        SensorGpuTile(status.gpu, Modifier.weight(1f))
+        SensorNetworkTile(status.network, Modifier.weight(1f))
+    }
+    SensorTile(title = stringResource(R.string.sensors_tile_disks)) {
+        if (status.disks.isEmpty()) {
+            SensorUnavailable()
+        } else {
+            status.disks.forEach { disk ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = disk.name,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SensorValue(
+                        text = if (disk.percent == null) {
+                            stringResource(R.string.sensors_unavailable)
+                        } else {
+                            stringResource(
+                                R.string.sensors_percent_value,
+                                fmtSensorPercent(disk.percent),
+                            )
+                        },
+                        available = disk.percent != null,
+                    )
+                }
+                if (disk.freeGb != null && disk.totalGb != null) {
+                    SensorDetail(
+                        stringResource(
+                            R.string.sensors_disk_free,
+                            sensorGbText(disk.freeGb),
+                            sensorGbText(disk.totalGb),
+                        )
+                    )
+                }
+                SensorBar(disk.percent)
+            }
+        }
+    }
+    SensorRow {
+        SensorGroupTile(
+            title = stringResource(R.string.sensors_tile_fans),
+            group = status.fans,
+            modifier = Modifier.weight(1f),
+        )
+        SensorGroupTile(
+            title = stringResource(R.string.sensors_tile_temperatures),
+            group = status.temperatures,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+
+@Composable
+private fun SensorCpuTile(cpu: SensorCpu, modifier: Modifier = Modifier) {
+    SensorTile(title = stringResource(R.string.sensors_tile_cpu), modifier = modifier) {
+        if (!cpu.available) {
+            SensorUnavailable(cpu.reason)
+        } else {
+            SensorValue(sensorPercentText(cpu.percent), available = cpu.percent != null)
+            cpu.cores?.let { SensorDetail(stringResource(R.string.sensors_cores, it)) }
+            SensorBar(cpu.percent)
+        }
+    }
+}
+
+@Composable
+private fun SensorRamTile(ram: SensorRam, modifier: Modifier = Modifier) {
+    SensorTile(title = stringResource(R.string.sensors_tile_ram), modifier = modifier) {
+        if (!ram.available) {
+            SensorUnavailable(ram.reason)
+        } else {
+            SensorValue(sensorPercentText(ram.percent), available = ram.percent != null)
+            if (ram.usedMb != null && ram.totalMb != null) {
+                SensorDetail(
+                    stringResource(
+                        R.string.sensors_ram_used,
+                        sensorMbText(ram.usedMb),
+                        sensorMbText(ram.totalMb),
+                    )
+                )
+            }
+            SensorBar(ram.percent)
+        }
+    }
+}
+
+@Composable
+private fun SensorGpuTile(gpu: SensorGpu, modifier: Modifier = Modifier) {
+    SensorTile(title = stringResource(R.string.sensors_tile_gpu), modifier = modifier) {
+        if (!gpu.available) {
+            SensorUnavailable(gpu.reason)
+        } else {
+            SensorValue(sensorPercentText(gpu.percent), available = gpu.percent != null)
+            if (gpu.name.isNotBlank()) SensorDetail(gpu.name)
+            if (gpu.memoryUsedMb != null && gpu.memoryTotalMb != null) {
+                SensorDetail(
+                    stringResource(
+                        R.string.sensors_gpu_memory,
+                        sensorMbText(gpu.memoryUsedMb),
+                        sensorMbText(gpu.memoryTotalMb),
+                    )
+                )
+            }
+            SensorBar(gpu.percent)
+        }
+    }
+}
+
+@Composable
+private fun SensorNetworkTile(network: SensorNetwork, modifier: Modifier = Modifier) {
+    val unavailable = stringResource(R.string.sensors_unavailable)
+    SensorTile(title = stringResource(R.string.sensors_tile_network), modifier = modifier) {
+        if (!network.available) {
+            SensorUnavailable(network.reason)
+        } else {
+            val hasRate = network.rxBps != null || network.txBps != null
+            SensorValue(
+                text = if (!hasRate) {
+                    unavailable
+                } else {
+                    stringResource(
+                        R.string.sensors_down_up,
+                        network.rxBps?.let { sensorRateText(it) } ?: unavailable,
+                        network.txBps?.let { sensorRateText(it) } ?: unavailable,
+                    )
+                },
+                available = hasRate,
+            )
+            if (network.name.isNotBlank()) SensorDetail(network.name)
+        }
+    }
+}
+
+@Composable
+private fun SensorGroupTile(
+    title: String,
+    group: SensorGroup,
+    modifier: Modifier = Modifier,
+) {
+    SensorTile(title = title, modifier = modifier) {
+        // Der Agent liefert hier aktuell nur die Verfuegbarkeit (available und
+        // reason). Ohne Messwert bleibt es bei "Nicht verfügbar" - nie eine
+        // erfundene Zahl.
+        SensorUnavailable(group.reason)
+    }
+}
+
 
 /**
  * Aktionsseite Steam. `GET /steam` ist neu im Agenten: Fehlt die Route (404)

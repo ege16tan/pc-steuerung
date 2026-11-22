@@ -1,6 +1,7 @@
 //! HTTP-Endpunkte des Agenten:
 //! GET /, GET /setup-status, POST /setup,
 //! POST /mode, GET /status,
+//! GET /sensors (CPU, RAM, GPU, Netzwerk, Datentraeger),
 //! POST /shutdown, POST /abort, POST /hibernate, POST /power-plan,
 //! POST /wake, POST /ping, GET /events, GET /log,
 //! GET /plugins, POST /plugins/{id}/start, POST /plugins/{id}/stop,
@@ -606,6 +607,26 @@ pub async fn status_ep(State(app): State<SharedApp>, auth: Auth) -> Response {
 /// Die erste Anfrage liefert `cpu_percent: null` (zwei Stichproben noetig).
 pub async fn metrics_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
     Json(crate::metrics::read(&app.metrics)).into_response()
+}
+
+/// GET /sensors — erweiterte Messwerte: CPU, RAM, GPU, Netzwerk, Datentraeger.
+///
+/// Datentraeger, Schnittstellen-Zaehler und `nvidia-smi` sind blockierend,
+/// deshalb laufen sie in einem eigenen Thread (`spawn_blocking`). Luefter und
+/// Temperaturen sind ohne Zusatzbibliothek nicht lesbar (`available: false`).
+pub async fn sensors_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    let worker = Arc::clone(&app);
+    match tokio::task::spawn_blocking(move || {
+        crate::sensors::read(&worker.sensors, worker.as_ref())
+    })
+    .await
+    {
+        Ok(sensors) => Json(sensors).into_response(),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Messwerte konnten nicht gelesen werden: {error}"),
+        ),
+    }
 }
 
 /// Validierung wie FastAPI: fehlend -> 0, sonst 0..=86400, alles uebige -> Fehler.

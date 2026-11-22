@@ -168,6 +168,8 @@ pub struct App {
     pub jsplugins: Mutex<crate::jsplugins::JsPluginState>,
     /// Zwischengespeicherte CPU-Stichprobe fuer `/metrics`.
     pub metrics: Mutex<crate::metrics::MetricsState>,
+    /// Zwischengespeicherte Netzwerk- und GPU-Messungen fuer `/sensors`.
+    pub sensors: Mutex<crate::sensors::SensorsState>,
     /// Zwischengespeicherte Spiele-Liste (`games.json`).
     pub games_cache_file: PathBuf,
     /// Einstellungen der Spiel-Optimierung (`game-config.json`).
@@ -216,6 +218,7 @@ impl App {
             plugins: Mutex::new(crate::plugins::PluginState::default()),
             jsplugins: Mutex::new(crate::jsplugins::JsPluginState::default()),
             metrics: Mutex::new(crate::metrics::MetricsState::default()),
+            sensors: Mutex::new(crate::sensors::SensorsState::default()),
             games_cache_file: base_dir.join("games.json"),
             game_config_file: base_dir.join("game-config.json"),
             routines_file,

@@ -54,7 +54,7 @@ Status).
 
 ## Architektur / Wichtige Fakten
 
-- Endpunkte: `GET /status`, `GET /metrics`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
+- Endpunkte: `GET /status`, `GET /metrics`, `GET /sensors`, `POST /shutdown?delay=`, `POST /abort`, `POST /hibernate`,
   `POST /power-plan`, `POST /wake?mac=&port=`, `GET /events`, `GET /log?lines=`,
   `GET /events/stream` (SSE), `GET /users`, `POST /users`, `DELETE /users/{user}`,
   `GET /routines`, `POST /routines`, `DELETE /routines/{id}`, `POST /routines/{id}/run`,

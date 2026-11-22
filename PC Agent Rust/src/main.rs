@@ -31,6 +31,7 @@ mod pairing;
 mod plugins;
 mod routines;
 mod routes;
+mod sensors;
 mod steam;
 mod wol;
 
@@ -161,6 +162,7 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/mode", axum::routing::post(routes::set_mode))
         .route("/status", axum::routing::get(routes::status_ep))
         .route("/metrics", axum::routing::get(routes::metrics_ep))
+        .route("/sensors", axum::routing::get(routes::sensors_ep))
         .route("/shutdown", axum::routing::post(routes::shutdown_ep))
         .route("/abort", axum::routing::post(routes::abort_ep))
         .route("/hibernate", axum::routing::post(routes::hibernate_ep))
