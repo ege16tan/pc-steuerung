@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
@@ -1395,6 +1396,16 @@ fun MainApp(
     var sensorsRefreshing by remember { mutableStateOf(false) }
     var sensorsRefresh by remember { mutableIntStateOf(0) }
 
+    // Plugin-Detailseite: Ausgabe der letzten Zeilen (`GET /plugins/{id}/output`).
+    var pluginOutput by remember { mutableStateOf("") }
+
+    // Spiele-Optimierung (`GET /games` + `GET /game-config`). `gameConfig` bleibt
+    // null, wenn der Agent /game-config nicht kennt - dann ist nur Lesen moeglich.
+    var games by remember { mutableStateOf<List<GameEntry>>(emptyList()) }
+    var gameConfig by remember { mutableStateOf<GameConfig?>(null) }
+    var gamesLoading by remember { mutableStateOf(true) }
+    var gamesRefresh by remember { mutableIntStateOf(0) }
+
     fun installModule(module: CatalogModule) {
         val next = installedModules + module.id
         ModuleStore.save(context, next)
@@ -1411,7 +1422,12 @@ fun MainApp(
 
     // ---------------- Plugins des Agenten ----------------
 
-    fun pluginAction(path: String, method: String, success: String) {
+    fun pluginAction(
+        path: String,
+        method: String,
+        success: String,
+        afterSuccess: () -> Unit = {},
+    ) {
         if (busy) return
         scope.launch {
             busy = true
@@ -1424,11 +1440,9 @@ fun MainApp(
                         "Nicht erreichbar: ${e.message ?: "Fehler"}"
                     }
                 }
-                message = if (result.startsWith("HTTP ") || result.startsWith("Nicht")) {
-                    result
-                } else {
-                    success
-                }
+                val failed = result.startsWith("HTTP ") || result.startsWith("Nicht")
+                message = if (failed) result else success
+                if (!failed) afterSuccess()
                 pluginRefresh++
             } finally {
                 busy = false
@@ -1436,14 +1450,23 @@ fun MainApp(
         }
     }
 
+    /**
+     * Start eines Plugins: je nach Einstellung bleibt die Detailseite offen
+     * ("Manager offen lassen", Default) oder es geht zurueck zur Uebersicht.
+     */
     fun startPlugin(plugin: PluginInfo) =
-        pluginAction("/plugins/${plugin.id}/start", "POST", "${plugin.name} gestartet")
+        pluginAction("/plugins/${plugin.id}/start", "POST", "${plugin.name} gestartet") {
+            if (settings.pluginAutoClose) route = Route.Plugins
+        }
 
     fun stopPlugin(plugin: PluginInfo) =
         pluginAction("/plugins/${plugin.id}/stop", "POST", "${plugin.name} beendet")
 
+    // Nach dem Entfernen existiert die Detailseite nicht mehr - zurueck zur Liste.
     fun removePlugin(plugin: PluginInfo) =
-        pluginAction("/plugins/${plugin.id}", "DELETE", "${plugin.name} entfernt")
+        pluginAction("/plugins/${plugin.id}", "DELETE", "${plugin.name} entfernt") {
+            route = Route.Plugins
+        }
 
     fun installPlugin(entry: PluginCatalogEntry) =
         pluginAction("/plugins/${entry.id}/install", "POST", "${entry.name} installiert")
@@ -1491,6 +1514,80 @@ fun MainApp(
         }
         plugins = snapshot?.plugins.orEmpty()
         pluginCatalog = snapshot?.catalog.orEmpty()
+    }
+
+    /**
+     * Spiele-Liste (`GET /games`) und Konfiguration (`GET /game-config`) laden.
+     * Der Agent fuehrt `custom` schon in die Liste ein; damit auch ein aelterer
+     * Agent ohne dieses Verhalten vollstaendig aussieht, werden die manuellen
+     * Spiele hier zusaetzlich zusammengefuehrt.
+     */
+    suspend fun loadGames() {
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val list = parseGames(httpCall(active.base, "/games", active.authHeader()))
+                val config = parseGameConfig(httpCall(active.base, "/game-config", active.authHeader()))
+                list to config
+            } catch (e: Exception) {
+                Log.e(TAG, "Spiele konnten nicht geladen werden", e)
+                emptyList<GameEntry>() to null
+            }
+        }
+        val config = result.second
+        games = if (config == null) result.first else mergeCustomGames(result.first, config.custom)
+        gameConfig = config
+        gamesLoading = false
+    }
+
+    /** Letzte Ausgabezeilen eines Plugins (`GET /plugins/{id}/output?lines=100`). */
+    suspend fun loadPluginOutput(id: String) {
+        pluginOutput = withContext(Dispatchers.IO) {
+            try {
+                parsePluginOutput(
+                    httpCall(active.base, "/plugins/$id/output?lines=100", active.authHeader())
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Plugin-Ausgabe nicht erreichbar", e)
+                "Nicht erreichbar: ${e.message ?: "Fehler"}"
+            }
+        }
+    }
+
+    /** Schreibende Spiele-Aktion (z. B. `POST /games/scan`), danach neu laden. */
+    fun gameAction(path: String, method: String, body: String?, success: String) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(active.base, path, active.authHeader(), method, body)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Spiele-Aktion fehlgeschlagen: $path", e)
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
+                }
+                message = if (result.startsWith("HTTP ") || result.startsWith("Nicht")) {
+                    result
+                } else {
+                    success
+                }
+                gamesRefresh++
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    /**
+     * Aenderung an der Spiel-Konfiguration speichern. Der Vertrag ist immer der
+     * komplette Zustand (GET -> Feld aendern -> POST); der neue Zustand wird
+     * sofort angezeigt, die Antwort des Agenten korrigiert ihn danach.
+     */
+    fun saveGameConfig(next: GameConfig, success: String) {
+        if (busy) return
+        gameConfig = next
+        gameAction("/game-config", "POST", gameConfigJson(next), success)
     }
 
     /**
@@ -1616,8 +1713,10 @@ fun MainApp(
 
     // Nachladen abhaengig von der sichtbaren Seite. Die Startseite braucht die
     // Kurzstatus, die Aktionsseiten ihre vollen Listen.
-    LaunchedEffect(active, route, pluginRefresh, refresh) {
-        when (route) {
+    LaunchedEffect(active, route, pluginRefresh, refresh, gamesRefresh) {
+        // `val current` statt `route`: der Zustand ist delegiert, ein Smart-Cast
+        // auf `route` ist in Kotlin deshalb nicht erlaubt.
+        when (val current = route) {
             Route.Home -> {
                 loadPlugins()
                 loadRoutines()
@@ -1625,7 +1724,18 @@ fun MainApp(
                 loadSensors()
             }
 
-            Route.Plugins -> loadPlugins()
+            Route.Plugins -> {
+                loadPlugins()
+                loadSteam()
+                loadGames()
+            }
+
+            is Route.PluginDetail -> {
+                loadPlugins()
+                loadPluginOutput(current.id)
+            }
+
+            Route.GameOptimization -> loadGames()
             Route.Steam -> loadSteam()
             Route.Routines -> loadRoutines()
             Route.History -> {
@@ -1797,9 +1907,10 @@ fun MainApp(
         }
     }
 
-    // Zurueck-Taste: von jeder Aktionsseite zurueck zur Kachel-Startseite statt
-    // die App zu schliessen (typisches Android-Verhalten).
-    BackHandler(enabled = route != Route.Home) { route = Route.Home }
+    // Zurueck-Taste: von jeder Aktionsseite zur Kachel-Startseite statt die App
+    // zu schliessen (typisches Android-Verhalten). Detailseiten fuehren zu ihrer
+    // Uebersicht zurueck (siehe backTarget).
+    BackHandler(enabled = route != Route.Home) { route = backTarget(route) }
 
     // Sekundentakt fuer Countdown und "zuletzt geprueft"-Anzeige. Nur im
     // Vordergrund aktiv, damit im Hintergrund keine Recomposition laeuft.
@@ -1964,7 +2075,7 @@ fun MainApp(
                     Route.Steam -> ActionPage(
                         title = stringResource(R.string.page_steam_title),
                         subtitle = stringResource(R.string.page_steam_subtitle),
-                        onBack = { route = Route.Home },
+                        onBack = { route = backTarget(Route.Steam) },
                     ) {
                         SteamPage(
                             steam = steam,
@@ -1977,18 +2088,109 @@ fun MainApp(
                     Route.Plugins -> ActionPage(
                         title = stringResource(R.string.page_plugins_title),
                         subtitle = stringResource(R.string.page_plugins_subtitle),
-                        onBack = { route = Route.Home },
+                        onBack = { route = backTarget(Route.Plugins) },
                     ) {
                         PluginsPage(
                             plugins = plugins,
                             pluginCatalog = pluginCatalog,
+                            steam = steam,
+                            gamesCount = games.size,
                             busy = busy,
+                            autoClose = settings.pluginAutoClose,
+                            onAutoCloseChange = {
+                                onSettingsChange(settings.copy(pluginAutoClose = it))
+                            },
                             onRefresh = { pluginRefresh++ },
-                            onStart = ::startPlugin,
-                            onStop = ::stopPlugin,
-                            onRemove = ::removePlugin,
-                            onInstall = ::installPlugin,
+                            onOpenPlugin = { plugin -> route = Route.PluginDetail(plugin.id) },
                             onOpenSteam = { route = Route.Steam },
+                            onOpenGames = { route = Route.GameOptimization },
+                            onInstall = ::installPlugin,
+                        )
+                    }
+
+                    is Route.PluginDetail -> {
+                        val plugin = plugins.firstOrNull { it.id == screen.id }
+                        ActionPage(
+                            title = plugin?.name ?: stringResource(R.string.page_plugins_title),
+                            subtitle = stringResource(R.string.plugins_detail_subtitle),
+                            onBack = { route = backTarget(screen) },
+                        ) {
+                            PluginDetailPage(
+                                plugin = plugin,
+                                output = pluginOutput,
+                                busy = busy,
+                                autoClose = settings.pluginAutoClose,
+                                onAutoCloseChange = {
+                                    onSettingsChange(settings.copy(pluginAutoClose = it))
+                                },
+                                onStart = { plugin?.let(::startPlugin) },
+                                onStop = { plugin?.let(::stopPlugin) },
+                                onRemove = { plugin?.let(::removePlugin) },
+                                onRefresh = { pluginRefresh++ },
+                            )
+                        }
+                    }
+
+                    Route.GameOptimization -> ActionPage(
+                        title = stringResource(R.string.page_games_title),
+                        subtitle = stringResource(R.string.page_games_subtitle),
+                        onBack = { route = backTarget(Route.GameOptimization) },
+                    ) {
+                        GameOptimizationPage(
+                            games = games,
+                            config = gameConfig,
+                            loading = gamesLoading,
+                            busy = busy,
+                            onRefresh = { gamesRefresh++ },
+                            onScan = { gameAction("/games/scan", "POST", null, "Spiele gesucht") },
+                            onToggleHidden = { game ->
+                                val config = gameConfig
+                                if (config != null) {
+                                    val hide = !isHiddenGame(game, config.hidden)
+                                    saveGameConfig(
+                                        config.copy(
+                                            hidden = withHidden(config.hidden, game, hide)
+                                        ),
+                                        if (hide) {
+                                            "${game.name} ausgeblendet"
+                                        } else {
+                                            "${game.name} eingeblendet"
+                                        },
+                                    )
+                                }
+                            },
+                            onAddManual = { name, exe ->
+                                val config = gameConfig
+                                if (config != null) {
+                                    saveGameConfig(
+                                        withCustomGame(
+                                            config,
+                                            GameEntry(name = name.trim(), exe = exe.trim()),
+                                        ),
+                                        "${name.trim()} hinzugefügt",
+                                    )
+                                }
+                            },
+                            onDeleteManual = { game ->
+                                val config = gameConfig
+                                if (config != null) {
+                                    saveGameConfig(
+                                        withoutCustomGame(config, game),
+                                        "${game.name} gelöscht",
+                                    )
+                                }
+                            },
+                            onKillChange = { name, present ->
+                                val config = gameConfig
+                                if (config != null) {
+                                    saveGameConfig(
+                                        config.copy(
+                                            killList = withKillEntry(config.killList, name, present)
+                                        ),
+                                        if (present) "$name aufgenommen" else "$name entfernt",
+                                    )
+                                }
+                            },
                         )
                     }
 
@@ -2770,215 +2972,353 @@ private fun MarketPage(
 }
 
 /**
- * Aktionsseite Plugins: lokale Plugins des Agenten (starten, stoppen,
- * entfernen) plus Katalogeintraege zum Nachinstallieren.
+ * Aktionsseite Plugins: 2-Spalten-Kachelraster der lokalen Plugins des Agenten.
+ *
+ * Jede Kachel oeffnet eine Detailseite (Start/Stop, Entfernen, Ausgabe). Dazu
+ * kommen zwei Sonderkacheln ohne JS-Plugin - Steam und Spiele-Optimierung -,
+ * weil beide einen eigenen Bereich mit eigener Seite haben. Der Marktplatz-
+ * Katalog bleibt als Liste unter dem Raster.
  */
 @Composable
 private fun PluginsPage(
     plugins: List<PluginInfo>,
     pluginCatalog: List<PluginCatalogEntry>,
+    steam: SteamStatus?,
+    gamesCount: Int,
     busy: Boolean,
+    autoClose: Boolean,
+    onAutoCloseChange: (Boolean) -> Unit,
     onRefresh: () -> Unit,
-    onStart: (PluginInfo) -> Unit,
-    onStop: (PluginInfo) -> Unit,
-    onRemove: (PluginInfo) -> Unit,
-    onInstall: (PluginCatalogEntry) -> Unit,
+    onOpenPlugin: (PluginInfo) -> Unit,
     onOpenSteam: () -> Unit,
+    onOpenGames: () -> Unit,
+    onInstall: (PluginCatalogEntry) -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.plugins_section_title),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Text(
-                    text = stringResource(R.string.plugins_section_subtitle),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-            IconButton(onClick = onRefresh, enabled = !busy) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = stringResource(R.string.plugins_refresh)
-                )
-            }
-        }
+    val running = plugins.count { it.running }
+    val summary = when {
+        plugins.isEmpty() -> stringResource(R.string.plugins_empty)
+        running > 0 -> stringResource(R.string.tile_plugins_active, plugins.size, running)
+        else -> stringResource(R.string.tile_plugins_count, plugins.size)
+    }
+    val steamStatus = when {
+        steam == null -> stringResource(R.string.tile_steam_unavailable)
+        steam.downloading && steam.appName.isNotBlank() -> stringResource(
+            R.string.steam_progress,
+            "${fmtPercent(steam.progressPercent)} %",
+            steam.appName,
+        )
+        steam.downloading -> stringResource(R.string.tile_steam_download_count, steam.downloads.size)
+        !steam.detected -> stringResource(R.string.tile_steam_not_detected)
+        else -> stringResource(R.string.tile_steam_no_downloads)
+    }
+    val gamesStatus = if (gamesCount > 0) {
+        stringResource(R.string.plugins_tile_games_status, gamesCount)
+    } else {
+        stringResource(R.string.plugins_tile_games_empty)
+    }
+    val autoCloseHint = if (autoClose) {
+        stringResource(R.string.plugins_auto_close_off)
+    } else {
+        stringResource(R.string.plugins_auto_close_on)
+    }
+    // Kacheln wie auf der Startseite (HomeTile), je Kachel ein eigenes Ziel.
+    val tiles = ArrayList<Pair<HomeTileSpec, () -> Unit>>(plugins.size + 2)
+    tiles.add(
+        HomeTileSpec(
+            route = Route.Steam,
+            title = stringResource(R.string.page_steam_title),
+            status = steamStatus,
+            icon = Icons.Default.PlayArrow,
+            dotColor = if (steam?.downloading == true) statusColor(PcStatus.ONLINE) else null,
+            pulsing = steam?.downloading == true,
+        ) to onOpenSteam
+    )
+    tiles.add(
+        HomeTileSpec(
+            route = Route.GameOptimization,
+            title = stringResource(R.string.plugins_tile_games),
+            status = gamesStatus,
+            icon = Icons.Default.Star,
+        ) to onOpenGames
+    )
+    plugins.forEach { plugin ->
+        tiles.add(
+            HomeTileSpec(
+                route = Route.PluginDetail(plugin.id),
+                title = plugin.name,
+                status = stringResource(
+                    R.string.plugins_tile_status,
+                    pluginStateText(plugin),
+                    pluginKindLabel(plugin),
+                ),
+                icon = Icons.Default.Build,
+                dotColor = pluginDotColor(plugin),
+                pulsing = plugin.running,
+            ) to { onOpenPlugin(plugin) }
+        )
+    }
 
-        // Steam ist kein JavaScript-Plugin, hat aber eine eigene Detailseite
-        // (Downloads mit Tempo und Restzeit). Auf der Startseite steht bewusst
-        // kein Plugin-Inhalt, deshalb ist dieser Einstieg der Weg dorthin.
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onOpenSteam() },
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh
-        ) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.page_steam_title),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
+                        text = stringResource(R.string.plugins_section_title),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.outline
                     )
                     Text(
-                        text = stringResource(R.string.plugins_steam_hint),
+                        text = summary,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                IconButton(onClick = onRefresh, enabled = !busy) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = stringResource(R.string.plugins_refresh)
                     )
                 }
             }
         }
 
-        if (plugins.isEmpty()) {
-            Text(
-                text = stringResource(R.string.plugins_empty),
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.outline
-            )
-        }
-
-        plugins.forEachIndexed { index, plugin ->
-            PluginCard(
-                plugin = plugin,
-                index = index,
-                busy = busy,
-                onStart = { onStart(plugin) },
-                onStop = { onStop(plugin) },
-                onRemove = { onRemove(plugin) },
-            )
+        items(tiles) { (tile, onClick) ->
+            HomeTile(tile = tile, onClick = onClick)
         }
 
         if (pluginCatalog.isNotEmpty()) {
-            Text(
-                text = stringResource(R.string.plugins_catalog_title),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.outline
-            )
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Text(
+                    text = stringResource(R.string.plugins_catalog_title),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
             pluginCatalog.forEach { entry ->
-                PluginCatalogRow(
-                    entry = entry,
-                    busy = busy,
-                    onInstall = { onInstall(entry) },
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    PluginCatalogRow(
+                        entry = entry,
+                        busy = busy,
+                        onInstall = { onInstall(entry) },
+                    )
+                }
+            }
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            SettingsGroup {
+                SettingsSwitchRow(
+                    icon = Icons.Default.Build,
+                    title = stringResource(R.string.plugins_auto_close),
+                    subtitle = autoCloseHint,
+                    checked = !autoClose,
+                    enabled = true,
+                    onCheckedChange = { keepOpen -> onAutoCloseChange(!keepOpen) },
                 )
             }
         }
     }
 }
 
-/** Karte fuer ein Plugin des Agenten: Zustand, letzte Zeilen, Aktionen. */
+/** Zustand eines Plugins als Text (Aktiv/Bereit/Fehlt) fuer Kachel und Detailseite. */
 @Composable
-private fun PluginCard(
-    plugin: PluginInfo,
-    index: Int,
+private fun pluginStateText(plugin: PluginInfo): String = when {
+    !plugin.installed -> stringResource(R.string.plugins_state_missing)
+    plugin.running && plugin.uptime > 0 ->
+        stringResource(R.string.plugins_state_active_since, fmtDuration(plugin.uptime))
+    plugin.running -> stringResource(R.string.plugins_state_active)
+    else -> stringResource(R.string.plugins_state_ready)
+}
+
+/** Statuspunkt einer Plugin-Kachel: laeuft = gruen, bereit = grau, fehlt = gelb. */
+private fun pluginDotColor(plugin: PluginInfo): Color = when {
+    plugin.running -> statusColor(PcStatus.ONLINE)
+    plugin.installed -> statusColor(PcStatus.UNKNOWN)
+    else -> statusColor(PcStatus.ERROR)
+}
+
+/**
+ * Detailseite eines Plugins: Zustand, Start/Stop, Entfernen und die letzten
+ * Ausgabezeilen (`GET /plugins/{id}/output?lines=...`). Damit bleiben die
+ * Aktionen der frueheren Karte in der Uebersicht erreichbar.
+ */
+@Composable
+private fun PluginDetailPage(
+    plugin: PluginInfo?,
+    output: String,
     busy: Boolean,
+    autoClose: Boolean,
+    onAutoCloseChange: (Boolean) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRemove: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
-    Appearing(index = index) {
-        val containerColor by animateColorAsState(
-            targetValue = if (plugin.running) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-            animationSpec = tween(320, easing = FastOutSlowInEasing),
-            label = "pluginCardColor"
-        )
-        Card(
+    if (plugin == null) {
+        Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+            Text(
+                text = stringResource(R.string.plugins_detail_missing),
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        return
+    }
+    val autoCloseHint = if (autoClose) {
+        stringResource(R.string.plugins_auto_close_off)
+    } else {
+        stringResource(R.string.plugins_auto_close_on)
+    }
+    val containerColor by animateColorAsState(
+        targetValue = if (plugin.running) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        animationSpec = tween(320, easing = FastOutSlowInEasing),
+        label = "pluginDetailColor"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = containerColor,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = containerColor)
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = plugin.name,
-                        fontSize = 15.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
                     )
                     Surface(
                         shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     ) {
                         Text(
-                            text = if (plugin.kind == "javascript") "JS" else "EXE",
+                            text = pluginKindLabel(plugin),
                             fontSize = 10.sp,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                         )
                     }
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusDot(color = pluginDotColor(plugin), pulsing = plugin.running)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = pluginStateText(plugin),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Version und Rechte nur zeigen, wenn der Agent sie meldet.
+                val extra = listOfNotNull(
+                    stringResource(R.string.plugins_detail_version, plugin.version),
+                    plugin.permissions.takeIf { it.isNotEmpty() }?.let {
+                        stringResource(R.string.plugins_detail_permissions, it.joinToString(", "))
+                    },
+                ).joinToString(" · ")
                 Text(
-                    text = pluginStateLabel(plugin),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = extra,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
                 )
                 if (plugin.description.isNotBlank()) {
                     Text(
                         text = plugin.description,
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.outline
+                        color = MaterialTheme.colorScheme.outline,
                     )
-                }
-                if (plugin.tail.isNotEmpty()) {
-                    Text(
-                        text = plugin.tail.takeLast(3).joinToString("\n"),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (plugin.running) {
-                        TextButton(
-                            enabled = !busy,
-                            onClick = onStop
-                        ) { Text(stringResource(R.string.plugins_stop)) }
-                    } else {
-                        TextButton(
-                            enabled = !busy && plugin.installed,
-                            onClick = onStart
-                        ) { Text(stringResource(R.string.plugins_start)) }
-                    }
-                    if (plugin.installed && !plugin.builtin) {
-                        TextButton(
-                            enabled = !busy,
-                            onClick = onRemove
-                        ) { Text(stringResource(R.string.plugins_remove)) }
-                    }
                 }
             }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (plugin.running) {
+                Button(
+                    enabled = !busy,
+                    onClick = onStop,
+                    modifier = Modifier.weight(1f),
+                ) { Text(stringResource(R.string.plugins_stop)) }
+            } else {
+                Button(
+                    enabled = !busy && plugin.installed,
+                    onClick = onStart,
+                    modifier = Modifier.weight(1f),
+                ) { Text(stringResource(R.string.plugins_start)) }
+            }
+            if (plugin.installed && !plugin.builtin) {
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = onRemove,
+                ) { Text(stringResource(R.string.plugins_remove)) }
+            }
+        }
+
+        // Der Schalter steht auch hier, weil er genau beim Start zaehlt.
+        SettingsGroup {
+            SettingsSwitchRow(
+                icon = Icons.Default.Build,
+                title = stringResource(R.string.plugins_auto_close),
+                subtitle = autoCloseHint,
+                checked = !autoClose,
+                enabled = true,
+                onCheckedChange = { keepOpen -> onAutoCloseChange(!keepOpen) },
+            )
+        }
+
+        Text(
+            text = stringResource(R.string.plugins_detail_output),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = output.ifBlank { stringResource(R.string.plugins_detail_output_empty) },
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+            )
+        }
+
+        OutlinedButton(
+            onClick = onRefresh,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.plugins_detail_refresh))
         }
     }
 }
@@ -4043,11 +4383,27 @@ sealed interface Route {
     data object Sensors : Route
     data object Steam : Route
     data object Plugins : Route
+
+    /** Detailseite eines Plugins (Zustand, Start/Stop, Entfernen, Ausgabe). */
+    data class PluginDetail(val id: String) : Route
+
+    /** Spiel-Optimierung: Spiele-Liste und Konfiguration (`GET /games`). */
+    data object GameOptimization : Route
     data object Market : Route
     data object Routines : Route
     data object History : Route
     data object Energy : Route
     data object Settings : Route
+}
+
+/**
+ * Ziel der Zurueck-Taste: Detailseiten fuehren zu ihrer Uebersicht zurueck,
+ * alle anderen Aktionsseiten zur Kachel-Startseite.
+ */
+private fun backTarget(route: Route): Route = when (route) {
+    is Route.PluginDetail -> Route.Plugins
+    Route.GameOptimization -> Route.Plugins
+    else -> Route.Home
 }
 
 /** Gemeinsamer Rahmen einer Aktionsseite: Zurueck-Pfeil, Titel, Untertitel. */
@@ -4939,6 +5295,324 @@ private fun etaLabel(seconds: Long): String {
             (value / 3600L).toInt(),
             ((value % 3600L) / 60L).toInt(),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Aktionsseite Spiele-Optimierung (`GET /games`, `GET/POST /game-config`)
+//
+// Ausblenden wirkt ueber die Liste `hidden` der Konfiguration: das Spiel bleibt
+// in der Suche, steht aber nur noch im Abschnitt "Ausgeblendet" und laesst sich
+// dort wieder einblenden. Manuell hinzugefuegte Spiele liegen in `custom` und
+// koennen zusaetzlich geloescht werden. Jede Aenderung ist ein kompletter
+// Zustand: GET /game-config -> Feld aendern -> POST /game-config.
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun GameOptimizationPage(
+    games: List<GameEntry>,
+    config: GameConfig?,
+    loading: Boolean,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onScan: () -> Unit,
+    onToggleHidden: (GameEntry) -> Unit,
+    onAddManual: (String, String) -> Unit,
+    onDeleteManual: (GameEntry) -> Unit,
+    onKillChange: (String, Boolean) -> Unit,
+) {
+    var showAdd by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    var newExe by remember { mutableStateOf("") }
+    var newKill by remember { mutableStateOf("") }
+
+    val hiddenEntries = config?.hidden.orEmpty()
+    val visible = games.filterNot { isHiddenGame(it, hiddenEntries) }
+    val hidden = games.filter { isHiddenGame(it, hiddenEntries) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.games_section_found),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Text(
+                    text = stringResource(R.string.games_count, games.size),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            IconButton(onClick = onRefresh, enabled = !busy) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.games_refresh),
+                )
+            }
+        }
+
+        Button(
+            enabled = !busy,
+            onClick = onScan,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.games_scan))
+        }
+
+        if (loading && games.isEmpty()) {
+            Text(
+                text = stringResource(R.string.games_loading),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        if (games.isEmpty()) {
+            Text(
+                text = stringResource(R.string.games_empty),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        visible.forEach { game ->
+            GameRow(
+                game = game,
+                hidden = false,
+                busy = busy,
+                configurable = config != null,
+                onToggleHidden = { onToggleHidden(game) },
+                onDelete = if (game.isManual) ({ onDeleteManual(game) }) else null,
+            )
+        }
+
+        if (hidden.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.games_section_hidden),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            // Wichtig fuer die Bedienung: ausgeblendet heisst nicht geloescht.
+            Text(
+                text = stringResource(R.string.games_hidden_hint),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            hidden.forEach { game ->
+                GameRow(
+                    game = game,
+                    hidden = true,
+                    busy = busy,
+                    configurable = config != null,
+                    onToggleHidden = { onToggleHidden(game) },
+                    onDelete = if (game.isManual) ({ onDeleteManual(game) }) else null,
+                )
+            }
+        }
+
+        Text(
+            text = stringResource(R.string.games_section_manual),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Text(
+            text = stringResource(R.string.games_manual_hint),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        OutlinedButton(
+            enabled = !busy,
+            onClick = {
+                newName = ""
+                newExe = ""
+                showAdd = true
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.games_manual_add))
+        }
+
+        Text(
+            text = stringResource(R.string.games_section_kill),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Text(
+            text = stringResource(R.string.games_kill_hint),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        if (config == null) {
+            Text(
+                text = stringResource(R.string.games_config_unavailable),
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            if (config.killList.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.games_kill_empty),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            config.killList.forEach { name ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = name,
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(enabled = !busy, onClick = { onKillChange(name, false) }) {
+                        Text(stringResource(R.string.games_kill_remove))
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = newKill,
+                    onValueChange = { newKill = it },
+                    label = { Text(stringResource(R.string.games_kill_name)) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    enabled = !busy && newKill.isNotBlank(),
+                    onClick = {
+                        onKillChange(newKill, true)
+                        newKill = ""
+                    },
+                ) { Text(stringResource(R.string.games_kill_add)) }
+            }
+        }
+    }
+
+    if (showAdd) {
+        AlertDialog(
+            onDismissRequest = { showAdd = false },
+            title = { Text(stringResource(R.string.games_manual_add)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text(stringResource(R.string.games_manual_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = newExe,
+                        onValueChange = { newExe = it },
+                        label = { Text(stringResource(R.string.games_manual_exe)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = newName.isNotBlank() && newExe.isNotBlank(),
+                    onClick = {
+                        showAdd = false
+                        onAddManual(newName, newExe)
+                    },
+                ) { Text(stringResource(R.string.games_manual_save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAdd = false }) {
+                    Text(stringResource(R.string.games_cancel))
+                }
+            },
+        )
+    }
+}
+
+/** Ein Spiel als Karte: Name, Quelle/Pfad, Laufstatus, Ausblenden und Loeschen. */
+@Composable
+private fun GameRow(
+    game: GameEntry,
+    hidden: Boolean,
+    busy: Boolean,
+    configurable: Boolean,
+    onToggleHidden: () -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = game.name,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (game.running) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.games_running),
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+            Text(
+                text = listOf(game.source, game.exe)
+                    .filter(String::isNotBlank)
+                    .joinToString(" · "),
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(enabled = !busy && configurable, onClick = onToggleHidden) {
+                    Text(
+                        stringResource(if (hidden) R.string.games_show else R.string.games_hide)
+                    )
+                }
+                if (onDelete != null) {
+                    TextButton(enabled = !busy && configurable, onClick = onDelete) {
+                        Text(stringResource(R.string.games_delete))
+                    }
+                }
+            }
+        }
     }
 }
 

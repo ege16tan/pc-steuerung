@@ -1070,13 +1070,21 @@ pub async fn plugin_output(
     crate::plugins::output(&app, &id, lines).into_response()
 }
 
-/// GET /games — zuletzt gescannte Spiele (aus `games.json`), inkl. "laeuft".
+/// GET /games — zuletzt gescannte Spiele (aus `games.json`) plus die manuell
+/// hinzugefuegten, jeweils inkl. `running` und `hidden`.
+///
+/// Die Konfiguration wird nur gelesen (`games::load_config`), der Endpunkt
+/// braucht deshalb weiterhin keine Schreibrechte. Ausgeblendete Spiele bleiben
+/// in der Antwort – die App filtert selbst.
 pub async fn games_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
-    let (games, scanned_at) = crate::games::cached(&app);
+    let (scanned, scanned_at) = crate::games::cached(&app);
+    let config = crate::games::load_config(&app);
+    let entries = crate::games::merge_games(&scanned, &config);
     let running = crate::games::running_exes();
-    let list: Vec<serde_json::Value> = games
+    let list: Vec<serde_json::Value> = entries
         .iter()
-        .map(|game| {
+        .map(|entry| {
+            let game = &entry.game;
             let is_running = crate::games::file_name(&game.exe)
                 .map(|name| running.contains(&name.to_ascii_lowercase()))
                 .unwrap_or(false);
@@ -1085,6 +1093,7 @@ pub async fn games_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
                 "exe": game.exe,
                 "source": game.source,
                 "running": is_running,
+                "hidden": entry.hidden,
             })
         })
         .collect();
@@ -1119,12 +1128,15 @@ pub async fn game_config_get(State(app): State<SharedApp>, _auth: Auth) -> Respo
     Json(crate::games::load_config(&app)).into_response()
 }
 
-/// POST /game-config — Kill-Liste, eigene Suchordner und Automatik speichern.
+/// POST /game-config — Kill-Liste, eigene Suchordner, Automatik, ausgeblendete
+/// und manuell hinzugefuegte Spiele speichern.
 pub async fn game_config_set(
     State(app): State<SharedApp>,
     _auth: WriteAuth,
-    Json(config): Json<crate::games::GameConfig>,
+    Json(mut config): Json<crate::games::GameConfig>,
 ) -> Response {
+    // Manuelle Spiele ohne Quelle eindeutig markieren, damit die App sie erkennt.
+    crate::games::fill_custom_source(&mut config);
     match crate::games::save_config(&app, &config) {
         Ok(()) => {
             let mut guard = app.inner.lock().expect("Zustands-Sperre");
@@ -1133,10 +1145,12 @@ pub async fn game_config_set(
                 &mut guard,
                 "game-config",
                 &format!(
-                    "{} Apps, {} Ordner, automatisch {}",
+                    "{} Apps, {} Ordner, automatisch {}, {} ausgeblendet, {} manuell",
                     config.kill_list.len(),
                     config.scan_paths.len(),
-                    if config.auto { "an" } else { "aus" }
+                    if config.auto { "an" } else { "aus" },
+                    config.hidden.len(),
+                    config.custom.len()
                 ),
                 true,
             );

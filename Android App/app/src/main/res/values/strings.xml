@@ -50,8 +50,6 @@
 
     <!-- Plugins des PC-Agenten (Markt+) -->
     <string name="plugins_section_title">PLUGINS AUF DEM PC</string>
-    <string name="plugins_steam_hint">Downloads, Tempo und Restzeit</string>
-    <string name="plugins_section_subtitle">Lokale Plugins im Agenten – laden, starten, entfernen</string>
     <string name="plugins_empty">Keine Plugins gefunden – läuft der Agent gerade?</string>
     <string name="plugins_catalog_title">KATALOG</string>
     <string name="plugins_refresh">Plugins aktualisieren</string>
@@ -60,6 +58,26 @@
     <string name="plugins_remove">Entfernen</string>
     <string name="plugins_install">Installieren</string>
     <string name="plugins_installed">installiert</string>
+    <!-- Kacheln im Plugin-Raster: Zustand, Art und Detailseite -->
+    <string name="plugins_state_active">Aktiv</string>
+    <string name="plugins_state_active_since">Aktiv · seit %1$s</string>
+    <string name="plugins_state_ready">Bereit</string>
+    <string name="plugins_state_missing">Fehlt</string>
+    <string name="plugins_tile_status">%1$s · %2$s</string>
+    <string name="plugins_tile_games">Spiele</string>
+    <string name="plugins_tile_games_status">%1$d Spiele · Optimierung</string>
+    <string name="plugins_tile_games_empty">Spiele suchen und ausblenden</string>
+    <string name="plugins_detail_subtitle">Zustand, Aktionen und Ausgabe</string>
+    <string name="plugins_detail_missing">Dieses Plugin ist nicht mehr vorhanden.</string>
+    <string name="plugins_detail_version">Version %1$s</string>
+    <string name="plugins_detail_permissions">Rechte: %1$s</string>
+    <string name="plugins_detail_output">AUSGABE</string>
+    <string name="plugins_detail_output_empty">Noch keine Ausgabe.</string>
+    <string name="plugins_detail_refresh">Aktualisieren</string>
+    <!-- Einstellung: nach dem Plugin-Start offen bleiben oder zurueck zur Uebersicht -->
+    <string name="plugins_auto_close">Manager offen lassen</string>
+    <string name="plugins_auto_close_on">An – die Detailseite bleibt nach dem Start eines Plugins offen</string>
+    <string name="plugins_auto_close_off">Aus – nach dem Start geht es zurueck zur Plugin-Uebersicht</string>
 
     <!-- Kachel-Startbildschirm (Home) -->
     <string name="home_title">PC Steuerung</string>
@@ -125,7 +143,7 @@
     <string name="steam_running">Steam läuft</string>
     <string name="steam_not_running">Steam ist aus</string>
     <string name="steam_downloads_title">DOWNLOADS</string>
-    <string name="steam_no_downloads">Keine aktiven Downloads.</string>
+    <string name="steam_no_downloads">Keine Downloads</string>
     <string name="steam_speed">%1$s pro Sekunde</string>
     <string name="steam_of">%1$s von %2$s</string>
     <!-- Download-Kachel: Prozent, Spiel und Tempo in einer Zeile. -->
@@ -183,4 +201,34 @@
     <string name="sensors_disk_free">%1$s frei von %2$s</string>
     <string name="sensors_down_up">↓ %1$s · ↑ %2$s</string>
     <string name="sensors_no_disks">Keine Datenträger gemeldet</string>
+
+    <!-- Aktionsseite Spiele-Optimierung (GET /games, GET/POST /game-config) -->
+    <string name="page_games_title">Spiele</string>
+    <string name="page_games_subtitle">Spiele-Optimierung auf dem PC</string>
+    <string name="games_section_found">SPIELE AUF DEM PC</string>
+    <string name="games_section_hidden">AUSGEBLENDET</string>
+    <string name="games_section_manual">MANUELL HINZUFÜGEN</string>
+    <string name="games_section_kill">PROZESSE SCHLIESSEN (KILL-LISTE)</string>
+    <string name="games_scan">Spiele suchen</string>
+    <string name="games_refresh">Spiele aktualisieren</string>
+    <string name="games_loading">Lade Spiele …</string>
+    <string name="games_empty">Keine Spiele gefunden. Starte eine Suche oder füge eins manuell hinzu.</string>
+    <string name="games_hidden_hint">Ausgeblendete Spiele bleiben in der Suche und lassen sich hier wieder einblenden.</string>
+    <string name="games_running">läuft</string>
+    <string name="games_hide">Ausblenden</string>
+    <string name="games_show">Einblenden</string>
+    <string name="games_delete">Löschen</string>
+    <string name="games_manual_add">Spiel manuell hinzufügen</string>
+    <string name="games_manual_hint">Name und EXE-Pfad eintragen (kein Datei-Picker).</string>
+    <string name="games_manual_name">Name</string>
+    <string name="games_manual_exe">EXE-Pfad, z. B. D:\\Spiele\\game.exe</string>
+    <string name="games_manual_save">Hinzufügen</string>
+    <string name="games_cancel">Abbrechen</string>
+    <string name="games_kill_hint">Diese Prozesse werden beim Optimieren beendet (z. B. Discord.exe).</string>
+    <string name="games_kill_name">Prozessname</string>
+    <string name="games_kill_add">Hinzufügen</string>
+    <string name="games_kill_remove">Entfernen</string>
+    <string name="games_kill_empty">Keine Prozesse eingetragen.</string>
+    <string name="games_config_unavailable">Konfiguration nicht verfügbar – der Agent kennt /game-config nicht.</string>
+    <string name="games_count">%1$d Spiele</string>
 </resources>

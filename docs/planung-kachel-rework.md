@@ -52,14 +52,28 @@ Regeln: `available: false` immer mit `reason`; fehlende Einzelwerte als `null`
 
 ## B) Plugins als Kachelraster
 
-- [ ] **B1** Plugin-Seite: Kacheln mit Status (aktiv/bereit/fehlt); Tippen oeffnet eine
+- [x] **B1** Plugin-Seite: Kacheln mit Status (aktiv/bereit/fehlt); Tippen oeffnet eine
       Detailseite (keine Knopf-Liste).
-- [ ] **B2** Steam-Detail: „aktiv“/„an“, laufende Downloads mit Name, Prozent, Tempo,
+- [x] **B2** Steam-Detail: „aktiv“/„an“, laufende Downloads mit Name, Prozent, Tempo,
       Restzeit; ohne Downloads „Keine Downloads“ (Quelle `GET /steam`).
-- [ ] **B3** Game-Optimization-Detail: Scan (Steam/Epic/GOG/eigene Ordner), manuell
+- [x] **B3** Game-Optimization-Detail: Scan (Steam/Epic/GOG/eigene Ordner), manuell
       hinzufuegen (EXE/Pfad), Eintraege loeschen oder ausblenden (ausgeblendete bleiben
       im Scan, wieder einblendbar), Kill-Liste verwalten.
-- [ ] **B4** Pro Plugin: „Manager offen lassen“ oder „automatisch schliessen“.
+- [x] **B4** Pro Plugin: „Manager offen lassen“ oder „automatisch schliessen“.
+
+**Vertrag `GET /games`** (neu: `hidden`, manuelle Spiele in der Liste):
+
+```json
+{ "scanned_at": "22.11.2026 13:16",
+  "games": [ { "name": "Team Fortress 2", "exe": "D:\\Steam\\...\\hl2.exe",
+               "source": "steam", "running": false, "hidden": false } ] }
+```
+
+`hidden` ist true, wenn EXE-Pfad oder Name in `game-config.json` → `hidden` steht.
+`POST /game-config` schreibt den **kompletten** Zustand
+(`kill_list`, `scan_paths`, `auto`, `hidden`, `custom`); manuelle Spiele haben
+`source: "manuell"`. Ausgeblendete Spiele bleiben in der Antwort, die Frontends
+filtern selbst.
 
 ## C) Systemwerte-Warnungen
 

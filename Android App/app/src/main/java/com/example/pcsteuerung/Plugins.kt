@@ -88,19 +88,21 @@ fun parsePluginCatalog(body: String): List<PluginCatalogEntry> {
     }.getOrDefault(emptyList())
 }
 
-/** Kurztext zum Zustand eines Plugins fuer die Oberflaeche. */
-fun pluginStateLabel(plugin: PluginInfo): String = when {
-    !plugin.installed -> "Nicht installiert"
-    plugin.running -> listOfNotNull(
-        "Aktiv",
-        plugin.status.ifBlank { null },
-        if (plugin.uptime > 0) "seit ${fmtDuration(plugin.uptime)}" else null,
-    ).joinToString(" · ")
-    else -> "Bereit"
-}
-
 /** Alles, was der Markt+ fuer Plugins braucht, in einer Antwort. */
 data class PluginSnapshot(
     val plugins: List<PluginInfo>,
     val catalog: List<PluginCatalogEntry>,
 )
+
+/** Art des Plugins als Kurzzeichen fuer die Oberflaeche ("JS" oder "EXE"). */
+fun pluginKindLabel(plugin: PluginInfo): String =
+    if (plugin.kind.equals("javascript", ignoreCase = true)) "JS" else "EXE"
+
+/**
+ * Ausgabe eines Plugins (`GET /plugins/{id}/output?lines=n`) aufbereiten.
+ *
+ * Der Agent antwortet mit reinem Text (eine Zeile je Eintrag, am Ende ein
+ * Zeilenumbruch). HTTP-Fehler kommen als "HTTP 404: ..." an und bleiben
+ * sichtbar; ueberzaehlige Leerzeilen am Ende fallen weg.
+ */
+fun parsePluginOutput(body: String): String = body.trimEnd()

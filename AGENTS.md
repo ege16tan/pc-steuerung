@@ -165,7 +165,9 @@ Status).
   Spiel-Prioritaet; auf `stop` wird der vorherige Energieplan zurueckgesetzt.
   Das alte EXE-Programm `src/bin/game-optimizer.rs` bleibt als Referenz/Notfall.
   Web-UI-Tab „Game Optimization“. Spiele-Scan (`src/games.rs`) liest Steam, Epic,
-  GOG und eigene Ordner.
+  GOG und eigene Ordner. `GET /games` liefert je Spiel `hidden` und mischt manuelle
+  Spiele aus `game-config.json` (`hidden`/`custom`) ein; ausgeblendete Eintraege
+  bleiben in der Antwort, die Frontends filtern selbst.
 - Datenordner: `%LOCALAPPDATA%\PC Steuerung` (per `PC_AGENT_DATA` überschreibbar).
   Dort liegen `credentials.json`, `token.json`, `device.json`, `routines.json`,
   `agent.log`, `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE

@@ -16,6 +16,11 @@ data class AppSettings(
     val updateInstallMethod: UpdateInstallMethod = UpdateInstallMethod.SYSTEM,
     /** Dauerkarte in der Statusleiste ("PC ist an" mit zwei Knoepfen). */
     val onlineCard: Boolean = true,
+    /**
+     * Plugin-Detailseite nach einem erfolgreichen Start automatisch schliessen
+     * (zurueck zur Uebersicht). Default aus = "Manager offen lassen".
+     */
+    val pluginAutoClose: Boolean = false,
 )
 
 object AppSettingsStore {
@@ -25,6 +30,7 @@ object AppSettingsStore {
     private const val KEY_REFRESH = "refresh_seconds"
     private const val KEY_UPDATE_INSTALL_METHOD = "update_install_method"
     private const val KEY_ONLINE_CARD = "online_card"
+    private const val KEY_PLUGIN_AUTO_CLOSE = "plugin_auto_close"
 
     /** Erlaubte Abstaende fuer die Status-Abfrage (Sekunden). */
     val REFRESH_CHOICES = listOf(2, 5, 10, 30)
@@ -44,6 +50,7 @@ object AppSettingsStore {
             refreshSeconds = refresh,
             updateInstallMethod = installMethod,
             onlineCard = prefs.getBoolean(KEY_ONLINE_CARD, true),
+            pluginAutoClose = prefs.getBoolean(KEY_PLUGIN_AUTO_CLOSE, false),
         )
     }
 
@@ -54,6 +61,7 @@ object AppSettingsStore {
             .putInt(KEY_REFRESH, settings.refreshSeconds)
             .putString(KEY_UPDATE_INSTALL_METHOD, settings.updateInstallMethod.name)
             .putBoolean(KEY_ONLINE_CARD, settings.onlineCard)
+            .putBoolean(KEY_PLUGIN_AUTO_CLOSE, settings.pluginAutoClose)
             .apply()
     }
 }

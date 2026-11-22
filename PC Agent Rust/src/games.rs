@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::app::App;
 use crate::commands::run;
 
+/// Quelle fuer manuell in der App hinzugefuegte Spiele.
+pub const SOURCE_MANUAL: &str = "manuell";
+
 /// Ein gefundenes Spiel (Anzeigename + EXE-Pfad).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Game {
@@ -22,6 +25,10 @@ pub struct Game {
 }
 
 /// Einstellungen der Spiel-Optimierung (`game-config.json`).
+///
+/// Die beiden letzten Felder kamen spaeter dazu; `#[serde(default)]` sorgt
+/// dafuer, dass aeltere Dateien ohne diese Schluessel weiter lesbar bleiben
+/// (dann sind beide Listen leer).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GameConfig {
@@ -31,6 +38,12 @@ pub struct GameConfig {
     pub scan_paths: Vec<String>,
     /// Laufendes Spiel automatisch erkennen, statt in der App auszuwaehlen.
     pub auto: bool,
+    /// Ausgeblendete Spiele: EXE-Pfad oder Anzeigename.
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    /// Manuell hinzugefuegte Spiele (nicht vom Scan gefunden).
+    #[serde(default)]
+    pub custom: Vec<Game>,
 }
 
 impl Default for GameConfig {
@@ -43,6 +56,8 @@ impl Default for GameConfig {
             ],
             scan_paths: Vec::new(),
             auto: false,
+            hidden: Vec::new(),
+            custom: Vec::new(),
         }
     }
 }
@@ -166,6 +181,84 @@ pub fn scan(app: &App) -> Vec<Game> {
     });
     games.sort_by_key(|game| game.name.to_ascii_lowercase());
     games
+}
+
+// ---------------- Liste fuer die App (Ausblenden + manuelle Spiele) ----------------
+
+/// Ein Eintrag der Spiele-Liste: Spiel plus Ausblende-Kennzeichen.
+///
+/// Die App filtert selbst – ausgeblendete Spiele bleiben in der Antwort,
+/// damit die Verwaltung sie wieder einblenden kann.
+#[derive(Clone, Debug)]
+pub struct GameEntry {
+    pub game: Game,
+    pub hidden: bool,
+}
+
+/// Vergleichsschluessel eines EXE-Pfads: getrimmt, `\` und `/` gleich, klein.
+pub fn path_key(exe: &str) -> String {
+    exe.trim().replace('/', "\\").to_ascii_lowercase()
+}
+
+/// Vergleichsschluessel eines Anzeigenamens: getrimmt, klein.
+pub fn name_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Steht das Spiel auf der Ausblende-Liste (EXE-Pfad **oder** Anzeigename)?
+///
+/// Beide Vergleiche sind unabhaengig von Gross-/Kleinschreibung und
+/// Leerzeichen am Rand; leere Eintraege werden ignoriert.
+pub fn is_hidden(game: &Game, hidden: &[String]) -> bool {
+    if hidden.is_empty() {
+        return false;
+    }
+    let exe = path_key(&game.exe);
+    let name = name_key(&game.name);
+    hidden.iter().any(|entry| {
+        let entry_exe = path_key(entry);
+        let entry_name = name_key(entry);
+        if entry_exe.is_empty() && entry_name.is_empty() {
+            return false;
+        }
+        (!exe.is_empty() && entry_exe == exe) || (!name.is_empty() && entry_name == name)
+    })
+}
+
+/// Ergibt die Spiele-Liste fuer `GET /games`: gescannte Spiele zuerst, danach
+/// die manuell hinzugefuegten aus der Konfiguration.
+///
+/// Doppelte Eintraege werden am EXE-Pfad erkannt (`\`/`/` und Schreibweise
+/// egal) – ein manuelles Spiel, das der Scan schon gefunden hat, faellt weg.
+/// Reine Funktion ohne Dateisystem, damit sie testbar bleibt.
+pub fn merge_games(scanned: &[Game], config: &GameConfig) -> Vec<GameEntry> {
+    let mut out = Vec::with_capacity(scanned.len() + config.custom.len());
+    let mut seen: HashSet<String> = HashSet::new();
+    for game in scanned {
+        let key = path_key(&game.exe);
+        if !key.is_empty() && !seen.insert(key) {
+            continue;
+        }
+        out.push(GameEntry { game: game.clone(), hidden: is_hidden(game, &config.hidden) });
+    }
+    for game in &config.custom {
+        let key = path_key(&game.exe);
+        if !key.is_empty() && !seen.insert(key) {
+            continue;
+        }
+        out.push(GameEntry { game: game.clone(), hidden: is_hidden(game, &config.hidden) });
+    }
+    out
+}
+
+/// Manuell hinzugefuegte Spiele ohne Quelle bekommen `source = "manuell"`,
+/// damit App und Plugin die Herkunft eindeutig erkennen.
+pub fn fill_custom_source(config: &mut GameConfig) {
+    for game in &mut config.custom {
+        if game.source.trim().is_empty() {
+            game.source = SOURCE_MANUAL.to_string();
+        }
+    }
 }
 
 // ---------------- Registry-Hilfen ----------------
@@ -667,5 +760,148 @@ mod tests {
             source: "Test".to_string(),
         }];
         assert!(find_running(&games).is_none());
+    }
+
+    // ---------------- Ausblenden und manuelle Spiele ----------------
+
+    fn spiel(name: &str, exe: &str) -> Game {
+        Game {
+            name: name.to_string(),
+            exe: exe.to_string(),
+            source: "Steam".to_string(),
+        }
+    }
+
+    fn manual(name: &str, exe: &str) -> Game {
+        Game {
+            name: name.to_string(),
+            exe: exe.to_string(),
+            source: SOURCE_MANUAL.to_string(),
+        }
+    }
+
+    #[test]
+    fn merge_haengt_manuelle_spiele_an() {
+        let scanned = vec![spiel("Alpha", r"C:\Spiele\Alpha\alpha.exe")];
+        let mut config = GameConfig::default();
+        config.custom.push(manual("Zeta", r"C:\Spiele\Zeta\zeta.exe"));
+
+        let entries = merge_games(&scanned, &config);
+        assert_eq!(entries.len(), 2);
+        // Reihenfolge: gescannt zuerst, manuell danach.
+        assert_eq!(entries[0].game.name, "Alpha");
+        assert_eq!(entries[1].game.name, "Zeta");
+        assert_eq!(entries[1].game.source, SOURCE_MANUAL);
+        assert!(!entries[0].hidden);
+        assert!(!entries[1].hidden);
+    }
+
+    #[test]
+    fn merge_erkennt_doppelte_pfade_ueber_die_schreibweise() {
+        let scanned = vec![spiel("Alpha", r"C:\Spiele\Alpha\alpha.exe")];
+        let mut config = GameConfig::default();
+        // Gleicher Pfad, andere Schreibweise und Schraegstriche.
+        config.custom.push(manual("Alpha (manuell)", "c:/spiele/alpha/ALPHA.EXE"));
+        // Ein echtes zweites Spiel bleibt erhalten.
+        config.custom.push(manual("Beta", r"C:\Spiele\Beta\beta.exe"));
+
+        let entries = merge_games(&scanned, &config);
+        assert_eq!(entries.len(), 2, "nur das unbekannte manuelle Spiel kommt dazu");
+        assert_eq!(entries[0].game.name, "Alpha");
+        assert_eq!(entries[1].game.name, "Beta");
+    }
+
+    #[test]
+    fn hidden_per_exe_pfad_und_name() {
+        let scanned = vec![
+            spiel("Alpha", r"C:\Spiele\Alpha\alpha.exe"),
+            spiel("Beta", r"C:\Spiele\Beta\beta.exe"),
+            spiel("Gamma", r"C:\Spiele\Gamma\gamma.exe"),
+        ];
+
+        // Per EXE-Pfad (andere Schreibweise, andere Schraegstriche).
+        let config = GameConfig {
+            hidden: vec!["c:/SPIELE/alpha/Alpha.exe".to_string()],
+            ..Default::default()
+        };
+        let entries = merge_games(&scanned, &config);
+        assert!(entries[0].hidden, "Pfadvergleich ignoriert \\, / und Gross-/Kleinschreibung");
+        assert!(!entries[1].hidden);
+
+        // Per Anzeigename, klein geschrieben und mit Leerzeichen am Rand.
+        let config = GameConfig {
+            hidden: vec!["  beta  ".to_string()],
+            ..Default::default()
+        };
+        let entries = merge_games(&scanned, &config);
+        assert!(!entries[0].hidden);
+        assert!(entries[1].hidden, "Namensvergleich ignoriert Schreibweise und Rand-Leerzeichen");
+        assert!(!entries[2].hidden);
+    }
+
+    #[test]
+    fn hidden_ignoriert_leere_eintraege() {
+        let game = spiel("Alpha", r"C:\Spiele\Alpha\alpha.exe");
+        assert!(!is_hidden(&game, &[]));
+        assert!(!is_hidden(&game, &["".to_string(), "   ".to_string()]));
+        assert!(is_hidden(&game, &["alpha".to_string()]));
+    }
+
+    #[test]
+    fn alte_konfiguration_ohne_neue_felder_bleibt_lesbar() {
+        let text = r#"{
+            "kill_list": ["Discord.exe"],
+            "scan_paths": ["D:\\Spiele"],
+            "auto": true
+        }"#;
+        let config: GameConfig = serde_json::from_str(text).expect("alte Datei muss lesbar sein");
+        assert_eq!(config.kill_list, vec!["Discord.exe".to_string()]);
+        assert_eq!(config.scan_paths, vec![r"D:\Spiele".to_string()]);
+        assert!(config.auto);
+        assert!(config.hidden.is_empty(), "fehlendes hidden -> leer");
+        assert!(config.custom.is_empty(), "fehlendes custom -> leer");
+    }
+
+    #[test]
+    fn leere_listen_liefern_leere_und_unveraenderte_liste() {
+        let config = GameConfig::default();
+        assert!(merge_games(&[], &config).is_empty());
+
+        let scanned = vec![spiel("Alpha", r"C:\Spiele\Alpha\alpha.exe")];
+        let entries = merge_games(&scanned, &config);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].game.name, "Alpha");
+        assert!(!entries[0].hidden);
+    }
+
+    #[test]
+    fn konfiguration_schreibt_und_liest_neue_felder() {
+        let config = GameConfig {
+            hidden: vec!["Beta".to_string(), r"C:\Spiele\Gamma\gamma.exe".to_string()],
+            custom: vec![manual("Delta", r"C:\Spiele\Delta\delta.exe")],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).expect("Serialisieren");
+        let back: GameConfig = serde_json::from_str(&json).expect("Deserialisieren");
+        assert_eq!(back.hidden, config.hidden);
+        assert_eq!(back.custom.len(), 1);
+        assert_eq!(back.custom[0].name, "Delta");
+        assert_eq!(back.custom[0].exe, r"C:\Spiele\Delta\delta.exe");
+        assert_eq!(back.custom[0].source, SOURCE_MANUAL);
+        assert_eq!(back.kill_list, config.kill_list);
+    }
+
+    #[test]
+    fn fehlende_quelle_wird_zu_manuell() {
+        let mut config = GameConfig {
+            custom: vec![
+                Game { name: "Ohne Quelle".to_string(), exe: r"C:\x\y.exe".to_string(), source: String::new() },
+                manual("Mit Quelle", r"C:\x\z.exe"),
+            ],
+            ..Default::default()
+        };
+        fill_custom_source(&mut config);
+        assert_eq!(config.custom[0].source, SOURCE_MANUAL);
+        assert_eq!(config.custom[1].source, SOURCE_MANUAL);
     }
 }
