@@ -93,8 +93,17 @@
 
   <div class="banner" id="banner" role="status" hidden></div>
 
+  <!-- Tab-Navigation -->
+  <nav class="tabs" role="tablist" aria-label="Bereiche">
+    <button type="button" class="tab on" data-tab="overview" role="tab" aria-selected="true">Übersicht</button>
+    <button type="button" class="tab" data-tab="routines" role="tab" aria-selected="false">Routinen</button>
+    <button type="button" class="tab" data-tab="plugins" role="tab" aria-selected="false">Plugins</button>
+    <button type="button" class="tab" data-tab="log" role="tab" aria-selected="false">Log</button>
+    <button type="button" class="tab" data-tab="settings" role="tab" aria-selected="false">Einstellungen</button>
+  </nav>
+
   <div class="grid">
-    <div class="tile w2 h2">
+    <div class="tile w2 h2" data-tab="overview">
       <div class="glow" id="statusGlow"></div>
       <div class="lab">Status</div>
       <div class="big" id="statusBig">…</div>
@@ -102,32 +111,32 @@
       <div class="btns" id="statusActions"></div>
     </div>
 
-    <div class="tile">
+    <div class="tile" data-tab="overview">
       <div class="lab">CPU</div>
       <div class="big" id="cpuVal">–</div>
       <div class="mut" id="cpuSub">Messwert wird geladen …</div>
       <svg class="spark" id="cpuSpark" viewBox="0 0 200 64" preserveAspectRatio="none" aria-hidden="true"></svg>
     </div>
 
-    <div class="tile">
+    <div class="tile" data-tab="overview">
       <div class="lab">RAM</div>
       <div class="big" id="ramVal">–</div>
       <div class="mut" id="ramSub">Messwert wird geladen …</div>
       <svg class="spark" id="ramSpark" viewBox="0 0 200 64" preserveAspectRatio="none" aria-hidden="true"></svg>
     </div>
 
-    <div class="tile">
+    <div class="tile" data-tab="overview">
       <div class="lab">Timer</div>
       <div id="timerBody"></div>
     </div>
 
-    <div class="tile">
+    <div class="tile" data-tab="overview">
       <div class="lab">Energieplan</div>
       <div class="big" style="font-size:22px" id="planName">…</div>
       <div class="plans" id="plans"></div>
     </div>
 
-    <div class="tile w2">
+    <div class="tile w2" data-tab="routines">
       <div class="lab">Routinen</div>
       <div class="mut">Uhrzeit oder Knopf. Der PC muss wach sein – verpasste Zeiten werden nicht nachgeholt.</div>
       <div class="devlist" id="routineList"></div>
@@ -164,7 +173,11 @@
       <p class="mut" id="routineHint" style="margin:8px 0 0"></p>
     </div>
 
-    <div class="tile w2">
+    <div class="tile w2" data-tab="overview">
+      <div class="lab">Steam-Downloads</div>
+      <div id="steamBody" class="mut">Keine Daten</div>
+    </div>
+    <div class="tile w2" data-tab="overview">
       <div class="lab">Game Optimization</div>
       <div class="mut">Energieplan hoch, Hintergrund-Apps zu, RAM frei – nur auf Knopfdruck.</div>
       <div class="field" style="margin-top:10px">
@@ -181,13 +194,13 @@
       <div class="gamestate" id="pluginLog"></div>
     </div>
 
-    <div class="tile w2">
+    <div class="tile w2" data-tab="plugins">
       <div class="lab">Plugins</div>
       <div class="mut">JavaScript-Plugins laufen direkt im Agenten. Nur was du startest, läuft auch.</div>
       <div id="pluginList" style="margin-top:8px"></div>
     </div>
 
-    <div class="tile w2">
+    <div class="tile w2" data-tab="settings">
       <div class="lab">Geräte</div>
       <div class="mut">Mehrere PCs in einer Oberfläche – der andere Agent muss diese Seite per
         <code>PC_AGENT_CORS</code> freischalten.</div>
@@ -202,7 +215,7 @@
       <p class="mut" id="deviceHint" style="margin:8px 0 0"></p>
     </div>
 
-    <div class="tile w2">
+    <div class="tile w2" data-tab="settings">
       <div class="lab">Benutzer &amp; Rechte</div>
       <div class="mut"><strong>admin</strong> darf alles, <strong>viewer</strong> nur lesen.</div>
       <div class="devlist" id="userList"></div>
@@ -220,12 +233,12 @@
       <p class="mut" id="usersHint" style="margin:8px 0 0"></p>
     </div>
 
-    <div class="tile w2">
+    <div class="tile w2" data-tab="log">
       <div class="lab">Ereignisse</div>
       <div class="log" id="events"></div>
     </div>
 
-    <div class="tile w4">
+    <div class="tile w4" data-tab="log">
       <div class="lab">Verlauf (Logdatei)</div>
       <pre class="log" id="fileLog">Wird geladen …</pre>
     </div>

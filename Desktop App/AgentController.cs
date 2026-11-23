@@ -126,11 +126,10 @@ internal sealed class AgentController
                 WindowStyle = ProcessWindowStyle.Hidden,
             };
             info.Environment["PC_AGENT_PORT"] = Port.ToString();
-            // Echtbetrieb ist Standard; Simulation nur, wenn ausdruecklich gesetzt.
-            if (string.IsNullOrEmpty(info.Environment["PC_AGENT_SIMULATE"]))
-            {
-                info.Environment["PC_AGENT_SIMULATE"] = "0";
-            }
+            // Echtbetrieb ist Standard; Simulation nur bewusst einschalten.
+            // Immer setzen (nicht nur wenn leer), damit ein global gesetztes
+            // PC_AGENT_SIMULATE=1 nicht den Echtbetrieb überschreibt.
+            info.Environment["PC_AGENT_SIMULATE"] = "0";
 
             using Process? started = Process.Start(info);
             return started != null
@@ -251,10 +250,30 @@ internal sealed class AgentController
                 return direct;
             }
 
+            // Entwicklung: pc-agent.exe liegt als Geschwister-Ordner "PC Agent Rust".
+            if (directory.Parent != null)
+            {
+                string sibling = Path.Combine(directory.Parent.FullName, "PC Agent Rust", ExeName);
+                if (File.Exists(sibling))
+                {
+                    return sibling;
+                }
+            }
+
             string inFolder = Path.Combine(directory.FullName, "PC Agent Rust", ExeName);
             if (File.Exists(inFolder))
             {
                 return inFolder;
+            }
+
+            // dist-Ordner neben der Repo-Wurzel.
+            if (directory.Parent != null)
+            {
+                string dist = Path.Combine(directory.Parent.FullName, "dist", ExeName);
+                if (File.Exists(dist))
+                {
+                    return dist;
+                }
             }
         }
 

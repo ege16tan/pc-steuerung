@@ -26,6 +26,7 @@ const state = {
   role: 'admin',
   live: false,
   status: null,
+  steam: null,
   events: [],
   games: [],
   scannedAt: null,
@@ -448,6 +449,7 @@ function render() {
   });
 
   renderStatusActions();
+  renderSteam();
   renderEvents();
   renderMetrics();
   renderTimer();
@@ -455,6 +457,29 @@ function render() {
   renderDevices();
   renderUsers();
   renderRoutines();
+}
+
+function renderSteam() {
+  const host = $('steamBody');
+  if (!host) return;
+  const s = state.steam;
+  if (!s || !s.detected) {
+    host.textContent = 'Steam nicht gefunden.';
+    return;
+  }
+  if (!s.downloading) {
+    host.innerHTML = '<div class="mut">Kein Download aktiv' + (s.running ? ' · Steam läuft' : '') + '.</div>';
+    return;
+  }
+  const pct = (s.progress_percent || 0).toFixed(1);
+  const speed = s.speed_bps ? (s.speed_bps / 1048576).toFixed(1) + ' MB/s' : '–';
+  const eta = s.eta_seconds ? Math.round(s.eta_seconds / 60) + ' min' : '–';
+  host.innerHTML =
+    '<div class="row" style="gap:8px;align-items:center">' +
+    '<div style="flex:1;height:8px;background:var(--line);border-radius:4px;overflow:hidden">' +
+    '<div style="width:' + pct + '%;height:100%;background:var(--primary)"></div></div>' +
+    '<span>' + pct + '%</span></div>' +
+    '<div class="mut" style="margin-top:4px">' + speed + ' · Restzeit ' + eta + '</div>';
 }
 
 function renderStatusActions() {
@@ -471,10 +496,7 @@ function renderStatusActions() {
     box.innerHTML =
       '<button type="button" class="stop" data-act="shutdown">Herunterfahren</button>' +
       '<button type="button" class="ghost" data-act="hibernate">Ruhezustand</button>' +
-      (pending > 0 ? '<button type="button" class="ghost" data-act="abort">Abbrechen</button>' : '') +
-      '<button type="button" class="ghost" data-act="wake"' +
-      (wol ? '' : ' disabled title="Wake-on-LAN ist nicht eingerichtet"') +
-      '>Einschalten</button>';
+      (pending > 0 ? '<button type="button" class="ghost" data-act="abort">Abbrechen</button>' : '');
   }
 
   box.querySelectorAll('button[data-act]').forEach((button) => {
@@ -930,6 +952,11 @@ async function tick() {
 
   if (state.connected) {
     await refreshMetrics();
+    try {
+      state.steam = await api('/steam');
+    } catch (error) {
+      state.steam = null;
+    }
     try {
       state.events = (await api('/events')).events || [];
     } catch (error) {
@@ -1565,6 +1592,27 @@ async function boot() {
       // Agent nicht erreichbar: Dashboard zeigen, Banner erklärt es
     }
   }
+
+  // Tab-Switching
+  document.querySelectorAll('.tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.tab').forEach((b) => {
+        b.classList.toggle('on', b === btn);
+        b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+      });
+      document.querySelectorAll('[data-tab]').forEach((el) => {
+        if (el.classList.contains('tab')) return;
+        el.hidden = el.dataset.tab !== tab;
+      });
+      try { localStorage.setItem('pcTab', tab); } catch (e) {}
+    });
+  });
+  // Gespeicherten Tab wiederherstellen
+  let savedTab = 'overview';
+  try { savedTab = localStorage.getItem('pcTab') || 'overview'; } catch (e) {}
+  const savedBtn = document.querySelector('.tab[data-tab="' + savedTab + '"]');
+  if (savedBtn) savedBtn.click();
 
   $('app').hidden = false;
   await refreshIdentity();

@@ -69,6 +69,11 @@ h1 { margin: 0; font-size: 22px; letter-spacing: -.3px; }
 .tile.empty .devlist { display: none; }
 
 /* Raster */
+[hidden] { display: none !important; }
+.tabs { display: flex; gap: 6px; margin: 0 0 14px; flex-wrap: wrap; }
+.tab { background: var(--card); border: 1px solid var(--border); color: var(--fg); padding: 8px 14px; border-radius: 8px; cursor: pointer; font: inherit; }
+.tab.on { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+.tab:hover { opacity: .85; }
 .grid { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); margin-bottom: 14px; }
 @media (min-width: 700px) { .grid { grid-template-columns: repeat(4, 1fr); } }
 .tile {

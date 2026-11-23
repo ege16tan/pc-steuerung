@@ -11,7 +11,21 @@ param([switch]$SelfContained)
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$dist = Join-Path (Split-Path -Parent $here) 'dist'
+$repo = Split-Path -Parent $here
+$dist = Join-Path $repo 'dist'
+$agentSrc = Join-Path $repo 'PC Agent Rust'
+
+# Rust-Agent bauen (falls noetig), damit pc-agent.exe in dist\ liegt.
+$agentExe = Join-Path $agentSrc 'target\release\pc-agent.exe'
+if (-not (Test-Path -LiteralPath $agentExe)) {
+    Write-Host "Baue Rust-Agent..."
+    Push-Location $agentSrc
+    try { & cargo build --release } finally { Pop-Location }
+}
+if (Test-Path -LiteralPath $agentExe) {
+    Copy-Item -LiteralPath $agentExe -Destination (Join-Path $dist 'pc-agent.exe') -Force
+    Write-Host "pc-agent.exe nach dist\ kopiert."
+}
 
 Push-Location $here
 try {
