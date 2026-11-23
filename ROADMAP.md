@@ -49,6 +49,13 @@
 - [x] **Kachel-Rework Phase A+B (22.11.2026):** Systemwerte (`GET /sensors` + Seite mit CPU/RAM/GPU/Netz/Datentraeger), Plugin-Raster mit Detailseiten, Steam- und Spiele-Optimierungs-Seite
 - [x] **Kachel-Rework Phase C+D (23.11.2026):** Warnregeln mit Dauer (`warnings.json`, `GET/POST /warnings`, Takt 30 s) inkl. Android-Benachrichtigung je Ereignis; Pflichtregeln D1-D3 (keine Dauerabfrage, Plugin-Idle-Timeout `idle_timeout_s` Standard 300 s)
 
+- [x] **Kachel-Rework v0.14.0 (23.11.2026):** Startseite ohne Plugin-Inhalte plus
+  Kachel „Systemwerte“ (`GET /sensors`), Plugins als Kachelraster mit Detailseiten
+  (Steam, Spiel-Optimierung mit Ausblenden/eigenen Spielen), Systemwerte-Warnungen
+  mit Dauer (`warnings.json`, Benachrichtigung je Ereignis), Plugin-Idle-Timeout,
+  Routinen mit Ereignis-Auslösern/Bedingungen/Ketten/Vorlagen, Verlauf mit Filter,
+  Suche und Export, Einstellungen mit Suche/Reset/Export und Plugin-Schema
+
 ## Geplant
 
 > **Neu ab 18.11.2026:** Steam-Plugin (Millennium), Kachel-Startbildschirm und
@@ -69,7 +76,9 @@
 
 - [x] Routinen (ersetzt den Zeitplan): Auslöser (Uhrzeit, App-Knopf) + Aktionen
   (Herunterfahren, Ruhezustand, Energieplan); PC muss dafür wach/entsperrt bleiben
-- [ ] Routinen erweitern: Ereignis-Auslöser, Android-Kachel
+- [x] Routinen erweitern: Ereignis-Auslöser (Spiel beendet, Download fertig, Idle),
+      Bedingungen, Aktionsketten, Vorlagen, Verlauf (v0.14.0); eigene Android-Kachel
+      bleibt offen
 - [ ] Plugin-Katalog per GitHub Release befüllen (Pakete liegen unter `plugin-catalog/`)
 - [ ] Web-UI: Plugin-Liste für alle Plugins (statt nur Game-Optimization-Kachel)
 
