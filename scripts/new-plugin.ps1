@@ -125,6 +125,8 @@ $bundle = [ordered]@{
     entry       = "main.js"
     permissions = @($Permissions)
     interval_ms = $IntervalMs
+    # Pflichtregel D2: ohne Abruf der Ausgabe nach 5 Minuten beenden (0 = nie).
+    idle_timeout_s = 300
     files       = [ordered]@{ "main.js" = $js }
 }
 $bundleJson = Clear-MaskedChars ($bundle | ConvertTo-Json -Depth 5 -Compress)

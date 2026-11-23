@@ -2,6 +2,7 @@
 //! GET /, GET /setup-status, POST /setup,
 //! POST /mode, GET /status,
 //! GET /sensors (CPU, RAM, GPU, Netzwerk, Datentraeger),
+//! GET/POST /warnings (Schwellen mit Dauer, Phase C),
 //! POST /shutdown, POST /abort, POST /hibernate, POST /power-plan,
 //! POST /wake, POST /ping, GET /events, GET /log,
 //! GET /plugins, POST /plugins/{id}/start, POST /plugins/{id}/stop,
@@ -626,6 +627,42 @@ pub async fn sensors_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Messwerte konnten nicht gelesen werden: {error}"),
         ),
+    }
+}
+
+/// GET /warnings — Warnregeln, aktive Warnungen und ausgeloeste Ereignisse
+/// (Phase C). Geprueft wird im Agenten (alle 30 s), auch bei geschlossener App;
+/// die Android-App zeigt nur an und schickt je Ereignis eine Benachrichtigung.
+pub async fn warnings_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
+    Json(crate::warnings::describe(&app)).into_response()
+}
+
+/// Body fuer `POST /warnings`: der komplette Regelsatz (wie `/game-config`).
+#[derive(Debug, Deserialize)]
+pub struct WarningsRequest {
+    #[serde(default)]
+    pub rules: Vec<crate::warnings::WarningRule>,
+}
+
+/// POST /warnings — Regeln ersetzen (nur `admin`); 422 bei ungueltigen Regeln.
+pub async fn warnings_save(
+    State(app): State<SharedApp>,
+    _auth: WriteAuth,
+    Json(body): Json<WarningsRequest>,
+) -> Response {
+    match crate::warnings::save(&app, body.rules) {
+        Ok(rules) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(
+                &app,
+                &mut guard,
+                "warnungen",
+                &format!("{} Regeln gespeichert", rules.len()),
+                true,
+            );
+            Json(json!({ "ok": true, "rules": rules })).into_response()
+        }
+        Err(message) => error_response(StatusCode::UNPROCESSABLE_ENTITY, message),
     }
 }
 

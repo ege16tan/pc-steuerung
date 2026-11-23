@@ -18,6 +18,7 @@ Datei: `plugin-catalog/<id>.json`
   "entry": "main.js",
   "permissions": ["log", "status"],
   "interval_ms": 2000,
+  "idle_timeout_s": 300,
   "files": {
     "main.js": "\n// Code hier\nfunction tick() { pc.log(\"hallo\"); }\n"
   }
@@ -33,6 +34,7 @@ Datei: `plugin-catalog/<id>.json`
 | `entry`        | Einstiegsdatei, Standard `main.js` (muss in `files` stehen).     |
 | `permissions`  | Freigegebene Host-Funktionen, siehe unten.                       |
 | `interval_ms`  | Takt fuer `tick()`; `0` = kein Takt.                             |
+| `idle_timeout_s`| Ohne Abruf der Ausgabe nach so vielen Sekunden beenden; `0` = nie. Ohne Angabe gelten 300 s (Pflichtregel D2). |
 | `files`        | Dateiname -> Inhalt (alles, was das Plugin braucht).             |
 
 Neue Plugins bestehen also **nur aus Manifest und `files`** – der Agent legt

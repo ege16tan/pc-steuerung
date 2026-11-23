@@ -33,6 +33,7 @@ mod routines;
 mod routes;
 mod sensors;
 mod steam;
+mod warnings;
 mod wol;
 
 use std::net::SocketAddr;
@@ -71,6 +72,8 @@ fn main() {
     games::ensure_config(shared.as_ref());
     // JavaScript-Plugins beim ersten Start in den Datenordner schreiben.
     jsplugins::ensure_builtins(shared.as_ref());
+    // Warnregeln (Phase C): Standardregeln einmal anlegen.
+    warnings::ensure_config(shared.as_ref());
 
     let credentials_missing = {
         let guard = shared.inner.lock().expect("Zustands-Sperre");
@@ -163,6 +166,10 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/status", axum::routing::get(routes::status_ep))
         .route("/metrics", axum::routing::get(routes::metrics_ep))
         .route("/sensors", axum::routing::get(routes::sensors_ep))
+        .route(
+            "/warnings",
+            axum::routing::get(routes::warnings_ep).post(routes::warnings_save),
+        )
         .route("/shutdown", axum::routing::post(routes::shutdown_ep))
         .route("/abort", axum::routing::post(routes::abort_ep))
         .route("/hibernate", axum::routing::post(routes::hibernate_ep))
@@ -215,6 +222,10 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
 
     // Live-Rundruf fuer `/events/stream` (schickt nur, wenn jemand zuhoert).
     tokio::spawn(crate::live::run_loop(app.clone()));
+    // Warnregeln: Schwellen mit Dauer, alle 30 s (Phase C).
+    tokio::spawn(crate::warnings::run_loop(app.clone()));
+    // Plugins ohne Nutzung beenden (Pflichtregel D2).
+    tokio::spawn(crate::jsplugins::idle_loop(app.clone()));
     // Routinen: prueft alle 10 s, ob eine Uhrzeit-Routine faellig ist.
     tokio::spawn(crate::routines::run_loop(app));
 

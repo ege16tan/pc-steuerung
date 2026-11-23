@@ -283,6 +283,45 @@ pub fn read(state: &Mutex<SensorsState>, app: &App) -> Sensors {
     read_impl(state, app)
 }
 
+/// Alle Datentraeger mit Groesse und Belegung (auch fuer Warnregeln, Phase C).
+pub fn disks() -> Vec<Disk> {
+    disks_impl()
+}
+
+#[cfg(windows)]
+fn disks_impl() -> Vec<Disk> {
+    read_disks()
+}
+
+#[cfg(not(windows))]
+fn disks_impl() -> Vec<Disk> {
+    Vec::new()
+}
+
+/// Auslastung der Grafikkarte in Prozent (`nvidia-smi`, 5 s zwischengespeichert).
+/// `None`, wenn keine NVIDIA-Karte bzw. kein `nvidia-smi` vorhanden ist.
+pub fn gpu_percent(state: &Mutex<SensorsState>) -> Option<f64> {
+    gpu_percent_impl(state)
+}
+
+#[cfg(windows)]
+fn gpu_percent_impl(state: &Mutex<SensorsState>) -> Option<f64> {
+    gpu_cached(state).percent
+}
+
+#[cfg(not(windows))]
+fn gpu_percent_impl(_state: &Mutex<SensorsState>) -> Option<f64> {
+    None
+}
+
+/// Niedrigster freier Anteil ueber alle Laufwerke (die knappste Platte).
+pub fn lowest_free_percent(disks: &[Disk]) -> Option<f64> {
+    disks
+        .iter()
+        .map(|disk| (100.0 - disk.percent).clamp(0.0, 100.0))
+        .reduce(f64::min)
+}
+
 #[cfg(windows)]
 fn read_impl(state: &Mutex<SensorsState>, app: &App) -> Sensors {
     let metrics = crate::metrics::read(&app.metrics);
@@ -683,6 +722,17 @@ mod tests {
         assert_eq!(percent_used(0, 0), None);
         assert_eq!(gb_from_bytes(1024 * 1024 * 1024), 1.0);
         assert_eq!(gb_from_bytes(1536 * 1024 * 1024), 1.5);
+    }
+
+    #[test]
+    fn knappste_platte_hat_wenig_frei() {
+        let disks = vec![
+            Disk { name: "C:".into(), total_gb: 100.0, free_gb: 50.0, percent: 50.0 },
+            Disk { name: "D:".into(), total_gb: 100.0, free_gb: 4.0, percent: 96.0 },
+        ];
+        assert_eq!(lowest_free_percent(&disks), Some(4.0));
+        // Ohne Laufwerke ehrlich `None` (keine Warnung ohne Messwert).
+        assert_eq!(lowest_free_percent(&[]), None);
     }
 
     #[test]

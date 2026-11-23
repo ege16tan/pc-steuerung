@@ -46,6 +46,9 @@
 - [x] **Plugin-System neu (15.11.2026):** JavaScript-Plugins laufen direkt im Agenten (Engine Boa, reines Rust – kein C-Toolchain nötig). Manifest + `main.js` im Datenordner, Freigaben pro Plugin (`log`, `status`, `metrics`, `power`, `games`, `process`), Host-API `pc.*`, `activate()`/`tick()`/`stop()`, Ausgabe im UI. Endpunkte `/plugins`, `/plugin-catalog`, `/plugins/{id}/install`, `DELETE /plugins/{id}`, `/plugins/{id}/bundle`. Eingebaute Plugins `game-optimizer` und `system-monitor`, Markt+ zeigt sie in der Android-App
 - [x] **Build-Härtung (15.11.2026):** `windows-link`-Patch erzeugt Alias-Importbibliotheken (`lib*.dll.a`), damit GNU-Toolchain und `cdylib` (boa_engine) ohne `dlltool` linken; `getrandom` fährt den Legacy-Backend (`advapi32`)
 
+- [x] **Kachel-Rework Phase A+B (22.11.2026):** Systemwerte (`GET /sensors` + Seite mit CPU/RAM/GPU/Netz/Datentraeger), Plugin-Raster mit Detailseiten, Steam- und Spiele-Optimierungs-Seite
+- [x] **Kachel-Rework Phase C+D (23.11.2026):** Warnregeln mit Dauer (`warnings.json`, `GET/POST /warnings`, Takt 30 s) inkl. Android-Benachrichtigung je Ereignis; Pflichtregeln D1-D3 (keine Dauerabfrage, Plugin-Idle-Timeout `idle_timeout_s` Standard 300 s)
+
 ## Geplant
 
 > **Neu ab 18.11.2026:** Steam-Plugin (Millennium), Kachel-Startbildschirm und

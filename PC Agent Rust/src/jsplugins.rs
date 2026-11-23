@@ -20,13 +20,17 @@
 //!
 //! Es gibt bewusst keinen Zugriff auf Dateien, Netzwerk oder Prozesse – nur die
 //! hier registrierten Host-Funktionen.
+//!
+//! Pflichtregel D2: Wird die Ausgabe eines Plugins laenger als
+//! `idle_timeout_s` (Manifest, Standard 5 Minuten, `0` = nie) nicht abgerufen,
+//! beendet der Agent es von selbst ([`idle_loop`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use boa_engine::{Context as JsContext, JsString, JsValue, NativeFunction, Source};
 use serde::{Deserialize, Serialize};
@@ -43,6 +47,12 @@ pub const DEFAULT_ENTRY: &str = "main.js";
 
 /// Standard-Takt in Millisekunden.
 pub const DEFAULT_INTERVAL_MS: u64 = 1000;
+
+/// Standard-Timeout ohne Abruf der Ausgabe (Pflichtregel D2).
+pub const DEFAULT_IDLE_TIMEOUT_S: u64 = 300;
+
+/// Takt der Idle-Pruefung im Agenten.
+const IDLE_CHECK: Duration = Duration::from_secs(30);
 
 /// Katalog der Plugins (Repository, oeffentlich) – wie beim Modul-Katalog.
 pub const CATALOG_URL: &str =
@@ -67,6 +77,9 @@ pub struct Manifest {
     pub permissions: Vec<String>,
     /// Abstand der `tick()`-Aufrufe; 0 = kein Takt.
     pub interval_ms: u64,
+    /// Beenden, wenn die Ausgabe so viele Sekunden nicht abgerufen wurde
+    /// (0 = nie). Ohne Angabe gelten [`DEFAULT_IDLE_TIMEOUT_S`] (Pflichtregel D2).
+    pub idle_timeout_s: u64,
     /// Vom Agenten mitgeliefert (wird beim ersten Start geschrieben).
     pub builtin: bool,
 }
@@ -81,6 +94,7 @@ impl Default for Manifest {
             entry: DEFAULT_ENTRY.to_string(),
             permissions: Vec::new(),
             interval_ms: DEFAULT_INTERVAL_MS,
+            idle_timeout_s: DEFAULT_IDLE_TIMEOUT_S,
             builtin: false,
         }
     }
@@ -119,6 +133,9 @@ pub struct Bundle {
     pub entry: String,
     pub permissions: Vec<String>,
     pub interval_ms: u64,
+    /// Siehe [`Manifest::idle_timeout_s`]; Teil des Pakets, damit der Marktplatz
+    /// den Wert mitliefern kann.
+    pub idle_timeout_s: u64,
     /// Pfad (relativ) -> Inhalt.
     pub files: HashMap<String, String>,
 }
@@ -133,6 +150,7 @@ impl Default for Bundle {
             entry: DEFAULT_ENTRY.to_string(),
             permissions: Vec::new(),
             interval_ms: DEFAULT_INTERVAL_MS,
+            idle_timeout_s: DEFAULT_IDLE_TIMEOUT_S,
             files: HashMap::new(),
         }
     }
@@ -149,6 +167,7 @@ impl Bundle {
             entry: self.entry.clone(),
             permissions: self.permissions.clone(),
             interval_ms: self.interval_ms,
+            idle_timeout_s: self.idle_timeout_s,
             builtin: false,
         }
     }
@@ -167,6 +186,10 @@ pub struct JsRun {
     pub auto: bool,
     /// Wird vom Thread gesetzt, sobald er fertig ist.
     pub done: Arc<AtomicBool>,
+    /// Manifest-Wert fuer den Idle-Timeout (0 = nie beenden).
+    pub idle_timeout_s: u64,
+    /// Letzter Abruf der Ausgabe bzw. Start (Pflichtregel D2).
+    pub last_seen: Arc<Mutex<Instant>>,
 }
 
 /// Zustand aller JavaScript-Plugins (ueber den Mutex in `App` geschuetzt).
@@ -258,6 +281,9 @@ fn game_optimizer_bundle() -> Bundle {
             "process".to_string(),
         ],
         interval_ms: 0,
+        // Laeuft absichtlich bis zum Stop: ein Timeout wuerde mitten im Spiel
+        // den Energieplan zuruecksetzen.
+        idle_timeout_s: 0,
         files: HashMap::from([(
             DEFAULT_ENTRY.to_string(),
             GAME_OPTIMIZER_JS.to_string(),
@@ -275,6 +301,7 @@ fn system_monitor_bundle() -> Bundle {
         entry: DEFAULT_ENTRY.to_string(),
         permissions: vec!["log".to_string(), "metrics".to_string()],
         interval_ms: 5000,
+        idle_timeout_s: DEFAULT_IDLE_TIMEOUT_S,
         files: HashMap::from([(
             DEFAULT_ENTRY.to_string(),
             SYSTEM_MONITOR_JS.to_string(),
@@ -423,6 +450,7 @@ pub fn bundle_of(app: &App, id: &str) -> Result<Bundle, String> {
         entry: manifest.entry,
         permissions: manifest.permissions,
         interval_ms: manifest.interval_ms,
+        idle_timeout_s: manifest.idle_timeout_s,
         files,
     })
 }
@@ -672,7 +700,15 @@ pub fn start(app: &Arc<App>, id: &str, game: Option<String>, auto: bool) -> Resu
         state.output.insert(manifest.id.clone(), VecDeque::new());
         state.runs.insert(
             manifest.id.clone(),
-            JsRun { tx, started_at, game: game.clone(), auto, done },
+            JsRun {
+                tx,
+                started_at,
+                game: game.clone(),
+                auto,
+                done,
+                idle_timeout_s: manifest.idle_timeout_s,
+                last_seen: Arc::new(Mutex::new(Instant::now())),
+            },
         );
     }
     let mut guard = app.inner.lock().expect("Zustands-Sperre");
@@ -715,6 +751,13 @@ pub fn stop(app: &Arc<App>, id: &str) -> Result<String, String> {
 /// Letzte Ausgabezeilen eines Plugins.
 pub fn output(app: &Arc<App>, id: &str, lines: usize) -> String {
     let state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+    // Ein Abruf gilt als Nutzung: solange die App die Ausgabe liest, laeuft das
+    // Plugin weiter (Pflichtregel D2).
+    if let Some(run) = state.runs.get(id) {
+        if let Ok(mut seen) = run.last_seen.lock() {
+            *seen = Instant::now();
+        }
+    }
     let Some(buffer) = state.output.get(id) else {
         return String::new();
     };
@@ -724,6 +767,48 @@ pub fn output(app: &Arc<App>, id: &str, lines: usize) -> String {
         text.push('\n');
     }
     text
+}
+
+// ---------------- Idle-Timeout (Pflichtregel D2) ----------------
+
+/// Reine Zeitpruefung: ist der Timeout ohne Abruf abgelaufen? (0 = nie)
+pub fn idle_expired(last_seen: Instant, now: Instant, timeout_s: u64) -> bool {
+    timeout_s > 0
+        && now.saturating_duration_since(last_seen) >= Duration::from_secs(timeout_s)
+}
+
+/// Beendet Plugins, deren Ausgabe zu lange niemand abgerufen hat.
+pub fn stop_idle(app: &Arc<App>) {
+    let due: Vec<(String, u64)> = {
+        let state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+        let now = Instant::now();
+        state
+            .runs
+            .iter()
+            .filter_map(|(id, run)| {
+                let last = *run.last_seen.lock().ok()?;
+                idle_expired(last, now, run.idle_timeout_s)
+                    .then(|| (id.clone(), run.idle_timeout_s))
+            })
+            .collect()
+    };
+    for (id, timeout_s) in due {
+        push_line(app, &id, &format!("> Nach {timeout_s} s ohne Abruf beendet"));
+        // `stop` protokolliert das Ende selbst; ein bereits beendetes Plugin
+        // liefert hier nur einen Fehler, der bewusst verworfen wird.
+        let _ = stop(app, &id);
+    }
+}
+
+/// Hintergrund-Schleife fuer [`stop_idle`] (Takt 30 s).
+pub async fn idle_loop(app: Arc<App>) {
+    let mut ticker = tokio::time::interval(IDLE_CHECK);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        let worker = Arc::clone(&app);
+        let _ = tokio::task::spawn_blocking(move || stop_idle(&worker)).await;
+    }
 }
 
 // ---------------- Host-Funktionen ----------------
@@ -1243,5 +1328,35 @@ mod tests {
         assert!(value.get("millennium").is_some());
         assert!(value.get("downloads").is_some());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn idle_timeout_prueft_nur_nach_ablauf() {
+        let start = Instant::now();
+        // Vor Ablauf: weiterlaufen.
+        assert!(!idle_expired(start, start + Duration::from_secs(299), 300));
+        // Genau abgelaufen: beenden.
+        assert!(idle_expired(start, start + Duration::from_secs(300), 300));
+        // 0 = nie beenden (z. B. Game Optimization laeuft bis zum Stop).
+        assert!(!idle_expired(start, start + Duration::from_secs(86_400), 0));
+    }
+
+    #[test]
+    fn paket_und_manifest_tragen_den_idle_timeout() {
+        let bundle = Bundle {
+            id: "demo".to_string(),
+            idle_timeout_s: 42,
+            files: HashMap::from([(DEFAULT_ENTRY.to_string(), "".to_string())]),
+            ..Default::default()
+        };
+        let manifest = bundle.manifest();
+        assert_eq!(manifest.idle_timeout_s, 42);
+        // Ohne Angabe im Paket gilt der Standard (5 Minuten).
+        let plain: Bundle = serde_json::from_str(
+            r#"{"id":"x","files":{"main.js":""}}"#,
+        )
+        .unwrap();
+        assert_eq!(plain.idle_timeout_s, DEFAULT_IDLE_TIMEOUT_S);
+        assert_eq!(plain.manifest().idle_timeout_s, DEFAULT_IDLE_TIMEOUT_S);
     }
 }

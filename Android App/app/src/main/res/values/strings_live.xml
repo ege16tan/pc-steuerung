@@ -56,4 +56,10 @@
     <string name="live_title_unknown">PC Steuerung</string>
     <string name="live_text_unknown">PC nicht erreichbar - Zustand unbekannt</string>
 
+    <!-- (e) Warnungen (Phase C): eine Benachrichtigung je Ereignis, kein Dauerton -->
+    <string name="live_warning_channel_name">PC Steuerung Warnungen</string>
+    <string name="live_warning_channel_desc">Schwellen aus warnings.json: CPU, Arbeitsspeicher, Datentraeger, Grafikkarte</string>
+    <string name="live_warning_title">Warnung: %1$s</string>
+    <string name="live_warning_plain">PC</string>
+
 </resources>

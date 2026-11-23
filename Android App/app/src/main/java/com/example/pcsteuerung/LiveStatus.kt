@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -42,6 +43,8 @@ import kotlin.math.roundToInt
  *  c) Startphase      -> "PC startet ...", bis `/status` antwortet
  *  d) Dauerkarte      -> Agent antwortet und es laeuft nichts: "PC ist an" mit
  *                        den Knoepfen "Herunterfahren" und "Ruhezustand"
+ *  e) Warnungen       -> `GET /warnings` (Phase C): je ausgeloestem Ereignis
+ *                        eine eigene, antippbare Benachrichtigung (kein Dauerlauf)
  *
  * Die Dauerkarte (d) ist bewusst eine normale ONGOING-Benachrichtigung ohne
  * Fortschrittsbalken (Kategorie STATUS): sie bleibt stehen, solange der PC
@@ -91,6 +94,9 @@ class LiveStatusService : Service() {
 
     /** Zeitpunkt der letzten Netzabfrage (fuer den ruhigen Poll-Takt). */
     private var lastPollAt = 0L
+
+    /** Zeitpunkt der letzten Warnungsabfrage (`/warnings`, Phase C). */
+    private var lastWarningsAt = 0L
 
     /** Diagnose fuer die Live-Updates-Freigabe nur einmal ins Log. */
     private var promotionLogged = false
@@ -232,6 +238,13 @@ class LiveStatusService : Service() {
         val total = status?.pendingTotal ?: 0
         idleCard = false
 
+        // Warnungen (Phase C): der Agent prueft alle 30 s. Ein eigener, ruhiger
+        // Takt reicht - ein Handy im Standby soll nicht dauernd fragen.
+        if (reachable && now - lastWarningsAt >= WARNINGS_POLL_MS) {
+            lastWarningsAt = now
+            checkWarnings(active, auth)
+        }
+
         return when {
             remaining > 0 -> {
                 clearGrace()
@@ -305,6 +318,66 @@ class LiveStatusService : Service() {
     }
 
     // -----------------------------------------------------------------------
+    // Warnungen (Phase C)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Neue Warnungen aus `GET /warnings` melden.
+     *
+     * Jedes Ereignis genau einmal: der Schluessel ist `since_epoch`. Beim ersten
+     * Lauf (nach Installation/Update) wird nur gemerkt, damit alte Eintraege aus
+     * frueheren Sitzungen keine Lawine ausloesen.
+     */
+    private suspend fun checkWarnings(active: Profile, auth: AuthHeader?) {
+        val response = httpGet(active.base, "/warnings", auth)
+        if (response.code !in 200..299) return
+        val alerts = parseWarningAlerts(response.body)
+        if (alerts.isEmpty()) return
+        val prefs = getSharedPreferences(WARNING_PREFS, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(WARNING_SEEN_READY, false)) {
+            saveSeenWarnings(prefs, warningEpochs(alerts))
+            return
+        }
+        val seen = prefs.getStringSet(WARNING_SEEN, emptySet())
+            .orEmpty()
+            .mapNotNull { it.toLongOrNull() }
+            .toSet()
+        val fresh = newWarningAlerts(alerts, seen)
+        saveSeenWarnings(prefs, seen + warningEpochs(alerts))
+        fresh.forEach { postWarning(it) }
+    }
+
+    private fun saveSeenWarnings(prefs: SharedPreferences, epochs: Set<Long>) {
+        prefs.edit()
+            .putBoolean(WARNING_SEEN_READY, true)
+            .putStringSet(WARNING_SEEN, epochs.map { it.toString() }.toSet())
+            .apply()
+    }
+
+    /** Eine Benachrichtigung je Warnung (antippbar = App), keine Dauerkarte. */
+    private fun postWarning(alert: WarningAlert) {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val label = alert.label.ifBlank { getString(R.string.live_warning_plain) }
+        val notification = Notification.Builder(this, WARNING_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setColor(0xFFC62828.toInt())
+            .setContentTitle(getString(R.string.live_warning_title, label))
+            .setContentText(alert.message)
+            .setStyle(Notification.BigTextStyle().bigText(alert.message))
+            .setAutoCancel(true)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setContentIntent(openAppIntent())
+            .build()
+        // Eigene ID je Ereignis, damit eine neue Warnung die alte nicht ersetzt.
+        runCatching {
+            manager.notify(
+                WARNING_NOTIFICATION_BASE + (alert.epoch % 1000).toInt(),
+                notification,
+            )
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Abbrechen (Action-Button der Karte)
     // -----------------------------------------------------------------------
 
@@ -369,19 +442,33 @@ class LiveStatusService : Service() {
 
     private fun ensureChannel() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            getString(R.string.live_channel_name),
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply {
-            description = getString(R.string.live_channel_desc)
-            setShowBadge(false)
-            enableVibration(false)
-            setSound(null, null)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.live_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = getString(R.string.live_channel_desc)
+                setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+            manager.createNotificationChannel(channel)
         }
-        manager.createNotificationChannel(channel)
+        // Eigener Kanal fuer Warnungen (Phase C): hoerbar, aber ohne Dauerkarte.
+        if (manager.getNotificationChannel(WARNING_CHANNEL_ID) == null) {
+            val warnings = NotificationChannel(
+                WARNING_CHANNEL_ID,
+                getString(R.string.live_warning_channel_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = getString(R.string.live_warning_channel_desc)
+                setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+            manager.createNotificationChannel(warnings)
+        }
     }
 
     private fun postForeground(notification: Notification) {
@@ -793,9 +880,12 @@ class LiveStatusService : Service() {
 
         /** Kanal-ID; Name/Beschreibung stehen in `res/values/strings_live.xml`. */
         const val CHANNEL_ID = "pc_steuerung_live"
+        /** Eigener Kanal fuer Warnungen (Phase C), ebenfalls in `strings_live.xml`. */
+        const val WARNING_CHANNEL_ID = "pc_steuerung_warnings"
         const val DEFAULT_WAIT_SECONDS = 120
 
         private const val NOTIFICATION_ID = 4711
+        private const val WARNING_NOTIFICATION_BASE = 7400
         private const val REQUEST_OPEN = 1
         private const val REQUEST_ABORT = 2
         private const val REQUEST_SHUTDOWN = 3
@@ -804,6 +894,12 @@ class LiveStatusService : Service() {
         private const val POLL_MS = 3_000L
         /** Dauerkarte: ruhiger Takt, damit die Abfrage nicht am Akku zieht. */
         private const val IDLE_POLL_MS = 15_000L
+        /** Warnungen: der Agent prueft alle 30 s (Phase C). */
+        private const val WARNINGS_POLL_MS = 30_000L
+        /** Merkt gemeldete Warnungen (Ereignis-Zeitpunkt) ueber Neustarts hinweg. */
+        private const val WARNING_PREFS = "pc_warnings"
+        private const val WARNING_SEEN = "seen_epochs"
+        private const val WARNING_SEEN_READY = "seen_ready"
         /** Countdown lokal jede Sekunde neu zeichnen (ohne Netzabfrage). */
         private const val COUNTDOWN_TICK_MS = 1_000L
         /** Antwortet der Agent nicht, nach 60 s aufgeben (kein Dauerlauf ohne Zweck). */

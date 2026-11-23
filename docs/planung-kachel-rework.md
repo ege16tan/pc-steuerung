@@ -77,17 +77,81 @@ filtern selbst.
 
 ## C) Systemwerte-Warnungen
 
-- [ ] **C1** Schwellen mit Dauer („CPU > 90 % fuer 30 s“) → Benachrichtigung auf dem
+- [x] **C1** Schwellen mit Dauer („CPU > 90 % fuer 30 s“) → Benachrichtigung auf dem
       Handy, eine je Ereignis.
-- [ ] **C2** Regeln liegen im Agenten (`warnings.json`), Auswertung auch bei
+- [x] **C2** Regeln liegen im Agenten (`warnings.json`), Auswertung auch bei
       geschlossener App; die App zeigt sie nur an.
+
+**Umgesetzt (23.11.2026):**
+
+- `src/warnings.rs`: Modell (`WarningRule`), Standardregeln (`cpu-high` 90 %/30 s,
+  `ram-high` 90 %/60 s, `disk-low` < 10 % frei/60 s), Validierung
+  (max. 20 Regeln, `>`/`<`, Dauer 0–3600 s, eindeutige IDs, fester Messwert-Katalog),
+  reine Auswertung `evaluate()` und die Schleife `run_loop()` (Takt 30 s).
+- Gemessen wird nur, was eine eingeschaltete Regel braucht: CPU/RAM aus `metrics`,
+  Datentraeger aus `sensors::disks()` (Minimum = knappste Platte), GPU nur bei
+  einer GPU-Regel (`nvidia-smi`, 5 s zwischengespeichert).
+- Ausgeloeste Warnungen landen **genau einmal** im Journal (`warnung`) und im
+  Verlauf `triggered` (30 Eintraege, neueste zuerst); beim Rueckfall in den
+  Normalbereich folgt ein `warnung`-Eintrag „wieder im Normalbereich“.
+- `GET /warnings` (auch `viewer`) liefert Regeln, aktive Warnungen, Verlauf,
+  `checked_at` und `interval_s`; `POST /warnings` ersetzt den kompletten Regelsatz
+  (nur `admin`, 422 bei ungueltigen Regeln, setzt Laufzeit-Zustand zurueck).
+- Android: `Warnings.kt` (Parser, Einmal-Meldung, Begrenzung) und
+  `LiveStatusService` fragt `/warnings` alle 30 s; je neuem Ereignis eine eigene
+  Benachrichtigung im Kanal „PC Steuerung Warnungen“ (IMPORTANCE_HIGH, antippbar,
+  kein Dauerlauf). Gemeldete Zeitpunkte liegen in SharedPreferences
+  (`pc_warnings`), ein Nachlauf nach Pause meldet hoechstens die 5 neuesten.
+  Hinweis: Die Meldungen kommen ueber den `LiveStatusService`. Ist die Dauerkarte
+  in den Einstellungen abgeschaltet und laeuft gerade nichts, beendet sich der
+  Dienst - dann werden auch keine Warnungen gemeldet (bewusst kein zweiter
+  Dauerlauf).
+- Tests: 13 neue Rust-Tests (10 in `warnings.rs`, 1 in `sensors.rs`, 2 in
+  `jsplugins.rs`) und 7 Kotlin-Tests (`WarningsTest.kt`).
+
+**JSON-Vertrag `GET /warnings`:**
+
+```json
+{
+  "rules": [ { "id": "cpu-high", "label": "CPU-Last", "metric": "cpu_percent",
+               "op": ">", "threshold": 90.0, "duration_s": 30, "enabled": true } ],
+  "active": [ { "id": "cpu-high", "label": "CPU-Last",
+                "message": "CPU-Last: 91.4 % > 90.0 % seit 30 s",
+                "value": 91.4, "threshold": 90.0, "op": ">", "duration_s": 30,
+                "since_s": 30, "since": "2026-11-23 12:00:00",
+                "since_epoch": 1763000000.0 } ],
+  "triggered": [ { "...": "wie active, neueste zuerst, max. 30" } ],
+  "checked_at": "2026-11-23 12:00:10",
+  "interval_s": 30,
+  "history_max": 30
+}
+```
+
+`since_epoch` ist der Schluessel der App: pro Zeitpunkt genau eine Meldung.
+Messwerte: `cpu_percent`, `ram_percent`, `gpu_percent`, `disk_free_percent`
+(freier Anteil der knappsten Platte).
 
 ## D) Dauerpruefung vermeiden (Pflichtregel)
 
-- [ ] **D1** Sensoren nur lesen, wenn eine Anzeige offen ist oder eine Warnregel sie
+- [x] **D1** Sensoren nur lesen, wenn eine Anzeige offen ist oder eine Warnregel sie
       braucht (dann Takt 30 s).
-- [ ] **D2** Plugins nur auf Anfrage, Stopp nach Inaktivitaets-Timeout.
-- [ ] **D3** Android: lange Intervalle, wenn die App im Hintergrund ist.
+- [x] **D2** Plugins nur auf Anfrage, Stopp nach Inaktivitaets-Timeout.
+- [x] **D3** Android: lange Intervalle, wenn die App im Hintergrund ist.
+
+**Stand (23.11.2026):**
+
+- **D1:** `/sensors`, `/metrics` und `/warnings` lesen nur beim Aufruf. Die
+  Systemwerte-Seite fragt nur solange sie offen ist (2 s, `repeatOnLifecycle`);
+  die Startseite alle 15 s im Vordergrund. Die Warn-Schleife liest je Takt nur
+  die Werte ihrer eingeschalteten Regeln.
+- **D2:** Manifest-Feld `idle_timeout_s` (Standard 300 s, `0` = nie). Ohne Abruf
+  von `GET /plugins/{id}/output` beendet der Agent das Plugin nach dieser Zeit
+  (`jsplugins::idle_loop`, Takt 30 s) und schreibt die Begruendung ins Plugin-Log.
+  Das eingebaute `game-optimizer` hat bewusst `0`, damit ein Timeout nicht mitten
+  im Spiel den Energieplan zuruecksetzt.
+- **D3:** Statusabfrage, Kachel-Auffrischung und Systemwerte haengen an
+  `repeatOnLifecycle(STARTED)`; im Hintergrund laeuft nur noch der
+  `LiveStatusService` (15 s im Leerlauf, 30 s fuer Warnungen).
 
 ## E) Routinen verbessern
 

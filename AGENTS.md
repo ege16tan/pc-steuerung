@@ -65,11 +65,11 @@ Status).
   `GET /plugins/{id}/output?lines=`, `GET /plugins/{id}/bundle`,
   `GET /plugin-catalog`, `POST /plugins/{id}/install`, `DELETE /plugins/{id}`,
   `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`,
-  `GET /steam`, `GET /downloads`.
+  `GET /steam`, `GET /downloads`, `GET /warnings`, `POST /warnings`.
 - **Plugins (neu, 15.11.2026):** `src/jsplugins.rs` betreibt JavaScript-Plugins mit
   der eingebetteten Engine **Boa** (reines Rust, kein C-Toolchain nötig). Ein Plugin
   ist ein Ordner im Datenordner: `<Datenordner>\plugins\<id>\plugin.json` (Manifest:
-  `id`, `name`, `entry`, `permissions`, `interval_ms`, `builtin`) plus `main.js`.
+  `id`, `name`, `entry`, `permissions`, `interval_ms`, `idle_timeout_s`, `builtin`) plus `main.js`.
   Der Agent startet Plugins nur auf Anforderung, jeder Thread bekommt eine eigene
   `boa_engine::Context` und die freigegebenen Host-Funktionen (`pc.log`, `pc.metrics`,
   `pc.status`, `pc.powerPlan`/`setPowerPlan`, `pc.shutdown`/`abort`/`hibernate`,
@@ -156,6 +156,26 @@ Status).
   (gleiche Simulation/Journal/pending-Werte). Web-UI-Kachel „Routinen“ mit
   An/Aus, „Jetzt“, Löschen und Formular (nur `admin`); eigener
   `<dialog>`-Bestätigungsdialog statt `window.confirm()`.
+- **Warnungen (Phase C, 23.11.2026):** `src/warnings.rs` prueft Schwellen **mit
+  Dauer** (`warnings.json`, Takt 30 s, auch bei geschlossener App). Standardregeln:
+  CPU > 90 % fuer 30 s, RAM > 90 % fuer 60 s, frei < 10 % auf der knappsten Platte
+  fuer 60 s. Messwerte nur, wenn eine Regel sie braucht (`cpu_percent`,
+  `ram_percent`, `gpu_percent`, `disk_free_percent`); Auswertung ist eine reine
+  Funktion (`evaluate`). `GET /warnings` liefert `rules`/`active`/`triggered`
+  (`since_epoch` = Schluessel), `POST /warnings` ersetzt den Regelsatz (nur
+  `admin`, max. 20 Regeln, 422 bei Unsinn). Jede ausgeloeste Warnung steht genau
+  einmal im Journal (`warnung`). Die Android-App meldet je Ereignis eine eigene
+  Benachrichtigung (Kanal „PC Steuerung Warnungen“, IMPORTANCE_HIGH, antippbar);
+  `LiveStatusService` fragt `/warnings` alle 30 s, gemeldete Zeitpunkte liegen in
+  SharedPreferences `pc_warnings` (Nachlauf hoechstens 5 Meldungen). Meldungen
+  setzen den Live-Dienst voraus: mit abgeschalteter Dauerkarte und ohne laufenden
+  Download/Countdown laeuft er nicht (bewusst kein zweiter Dauerlauf).
+- **Plugin-Idle-Timeout (Phase D2, 23.11.2026):** Manifest-/Paketfeld
+  `idle_timeout_s` (Standard 300 s, `0` = nie). Ohne Abruf von
+  `GET /plugins/{id}/output` beendet der Agent das Plugin selbst
+  (`jsplugins::idle_loop`, Takt 30 s). Nur der Ausgabe-Abruf gilt als Nutzung –
+  eigene Logzeilen halten ein Plugin nicht kuenstlich am Leben. `game-optimizer`
+  hat `0`, damit kein Timeout mitten im Spiel den Energieplan zuruecksetzt.
 - **Einschalten per Routine gibt es bewusst nicht:** Der Agent läuft nur, wenn der
   PC an ist; WoL bräuchte ein zweites Gerät oder einen RTC-Wake-Timer.
 - **Game Optimization:** JavaScript-Plugin `game-optimizer` (siehe oben), Quelltext
@@ -170,7 +190,7 @@ Status).
   bleiben in der Antwort, die Frontends filtern selbst.
 - Datenordner: `%LOCALAPPDATA%\PC Steuerung` (per `PC_AGENT_DATA` überschreibbar).
   Dort liegen `credentials.json`, `token.json`, `device.json`, `routines.json`,
-  `agent.log`, `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE
+  `warnings.json`, `agent.log`, `agent-manager.log`. Alte Daten aus `PC App/` oder neben der EXE
   werden beim Start einmalig übernommen.
 - Logdatei: `agent.log` im Datenordner (Datum/Uhrzeit, Rotation nach `agent.log.1`,
   gitignored).
@@ -222,7 +242,12 @@ Status).
 ## Testen
 
 - Agent per `curl` testen (`/status`, `/shutdown?delay=60`, `/abort`, `/power-plan`,
-  `/wake?mac=AA:BB:CC:DD:EE:FF&port=9`, …); Simulationsmodus ist Default.
+  `/wake?mac=AA:BB:CC:DD:EE:FF&port=9`, `/warnings`, …); Simulationsmodus ist Default.
+- **Warnungen (Phase C):** `curl http://127.0.0.1:8000/warnings` zeigt Regeln, aktive
+  Warnungen und Verlauf. Regeln ersetzen (nur `admin`):
+  `curl -X POST -H "X-PC-Steuerung: 1" -H "Content-Type: application/json" -d "{\"rules\":[{\"id\":\"cpu-high\",\"label\":\"CPU-Last\",\"metric\":\"cpu_percent\",\"op\":\">\",\"threshold\":90,\"duration_s\":30,\"enabled\":true}]}" http://127.0.0.1:8000/warnings`.
+  Messwerte werden echt gelesen (auch im Simulationsmodus); `warnings.json` liegt im
+  Datenordner.
 - **Plugins:** `curl http://127.0.0.1:8000/plugins`,
   `curl -X POST -H "X-PC-Steuerung: 1" http://127.0.0.1:8000/plugins/system-monitor/start`,
   danach `curl "http://127.0.0.1:8000/plugins/system-monitor/output?lines=20"`;
