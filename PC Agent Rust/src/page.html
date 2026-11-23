@@ -96,6 +96,8 @@
   <!-- Tab-Navigation -->
   <nav class="tabs" role="tablist" aria-label="Bereiche">
     <button type="button" class="tab on" data-tab="overview" role="tab" aria-selected="true">Übersicht</button>
+    <button type="button" class="tab" data-tab="system" role="tab" aria-selected="false">Systemwerte</button>
+    <button type="button" class="tab" data-tab="warnings" role="tab" aria-selected="false">Warnungen</button>
     <button type="button" class="tab" data-tab="routines" role="tab" aria-selected="false">Routinen</button>
     <button type="button" class="tab" data-tab="plugins" role="tab" aria-selected="false">Plugins</button>
     <button type="button" class="tab" data-tab="log" role="tab" aria-selected="false">Log</button>
@@ -136,17 +138,63 @@
       <div class="plans" id="plans"></div>
     </div>
 
+    <!-- Routinen (Phase 4 + Phase E): Liste mit Verlauf, Vorlagen, erweitertes Formular -->
     <div class="tile w2" data-tab="routines">
       <div class="lab">Routinen</div>
-      <div class="mut">Uhrzeit oder Knopf. Der PC muss wach sein – verpasste Zeiten werden nicht nachgeholt.</div>
+      <div class="mut">Uhrzeit, Ereignis oder Knopf. Der PC muss wach sein – verpasste Zeiten werden nicht nachgeholt.</div>
       <div class="devlist" id="routineList"></div>
+      <p class="mut" id="routineLastRun" style="margin:8px 0 0"></p>
+
+      <!-- Vorlagen aus GET /routine-templates; fehlt der Endpunkt, bleibt der Abschnitt aus -->
+      <div id="routineTemplates" hidden>
+        <div class="lab" style="margin-top:14px">Vorlagen</div>
+        <div class="mut">Fertige Routine anlegen – Name und Schritte bleiben danach frei änderbar.</div>
+        <div class="btns" id="routineTemplateBtns" style="margin-top:8px"></div>
+      </div>
+
       <div id="routineForm" hidden>
+        <div class="lab" style="margin-top:14px">Neue Routine</div>
         <div class="row">
           <input id="routineName" placeholder="Name (z. B. Abend)" maxlength="64"
                  autocomplete="off" aria-label="Name der Routine">
-          <input id="routineTime" type="time" value="23:30" aria-label="Uhrzeit der Routine">
+          <select id="routineTrigger" aria-label="Auslöser der Routine">
+            <option value="time">Uhrzeit</option>
+            <option value="manual">Nur manuell</option>
+            <option value="event">Ereignis</option>
+          </select>
         </div>
-        <div class="days" id="routineDays" role="group" aria-label="Wochentage">
+
+        <div id="routineTimeBox">
+          <div class="row">
+            <input id="routineTime" type="time" value="23:30" aria-label="Uhrzeit der Routine">
+          </div>
+          <div class="days" id="routineDays" role="group" aria-label="Wochentage">
+            <button type="button" data-day="1" aria-pressed="false">Mo</button>
+            <button type="button" data-day="2" aria-pressed="false">Di</button>
+            <button type="button" data-day="3" aria-pressed="false">Mi</button>
+            <button type="button" data-day="4" aria-pressed="false">Do</button>
+            <button type="button" data-day="5" aria-pressed="false">Fr</button>
+            <button type="button" data-day="6" aria-pressed="false">Sa</button>
+            <button type="button" data-day="7" aria-pressed="false">So</button>
+          </div>
+          <p class="mut" style="margin:6px 0 0">Kein Tag ausgewählt = täglich.</p>
+        </div>
+
+        <div id="routineEventBox" hidden>
+          <div class="row">
+            <select id="routineEvent" aria-label="Ereignis der Routine">
+              <option value="game_stopped">Spiel beendet</option>
+              <option value="download_done">Download fertig</option>
+              <option value="idle">PC inaktiv</option>
+            </select>
+            <input id="routineIdle" type="number" min="1" max="1440" step="1" value="30"
+                   aria-label="Minuten ohne Eingabe">
+          </div>
+          <p class="mut" style="margin:6px 0 0">„PC inaktiv“ zählt Minuten ohne Tastatur- oder Mausbenutzung.</p>
+        </div>
+
+        <div class="lab" style="margin-top:14px">Bedingungen (optional)</div>
+        <div class="days" id="routineCondDays" role="group" aria-label="Bedingung: Wochentage">
           <button type="button" data-day="1" aria-pressed="false">Mo</button>
           <button type="button" data-day="2" aria-pressed="false">Di</button>
           <button type="button" data-day="3" aria-pressed="false">Mi</button>
@@ -155,19 +203,23 @@
           <button type="button" data-day="6" aria-pressed="false">Sa</button>
           <button type="button" data-day="7" aria-pressed="false">So</button>
         </div>
-        <p class="mut" style="margin:6px 0 0">Kein Tag ausgewählt = täglich.</p>
         <div class="row">
-          <select id="routineAction" aria-label="Aktion der Routine">
-            <option value="shutdown">Herunterfahren</option>
-            <option value="hibernate">Ruhezustand</option>
-            <option value="power_plan">Energieplan</option>
+          <select id="routineCondPlugin" aria-label="Bedingung: Plugin läuft">
+            <option value="">Plugin: egal</option>
           </select>
-          <input id="routineDelay" type="number" min="0" max="86400" step="10" value="60"
-                 aria-label="Sekunden bis zum Herunterfahren">
-          <select id="routinePlan" aria-label="Energieplan der Routine" hidden></select>
+          <select id="routineCondPlan" aria-label="Bedingung: Energieplan">
+            <option value="">Energieplan: egal</option>
+          </select>
+        </div>
+        <p class="mut" style="margin:6px 0 0">Keine Bedingung ausgewählt = die Routine läuft immer.</p>
+
+        <div class="lab" style="margin-top:14px">Schritte (1–3)</div>
+        <div class="devlist" id="routineSteps"></div>
+        <div class="btns" style="margin-top:8px">
+          <button type="button" class="ghost" id="btnAddStep">Schritt hinzufügen</button>
         </div>
         <div class="btns" style="margin-top:10px">
-          <button type="button" class="ghost" id="btnAddRoutine">Hinzufügen</button>
+          <button type="button" class="go" id="btnAddRoutine">Hinzufügen</button>
         </div>
       </div>
       <p class="mut" id="routineHint" style="margin:8px 0 0"></p>
@@ -179,7 +231,8 @@
     </div>
     <div class="tile w2" data-tab="overview">
       <div class="lab">Game Optimization</div>
-      <div class="mut">Energieplan hoch, Hintergrund-Apps zu, RAM frei – nur auf Knopfdruck.</div>
+      <div class="mut">Energieplan hoch, Hintergrund-Apps zu, RAM frei – nur auf Knopfdruck.
+        Spiele und Kill-Liste verwaltest du im Tab „Plugins“.</div>
       <div class="field" style="margin-top:10px">
         <label class="sr-only" for="gameSelect">Spiel wählen</label>
         <select id="gameSelect"></select>
@@ -194,10 +247,84 @@
       <div class="gamestate" id="pluginLog"></div>
     </div>
 
-    <div class="tile w2" data-tab="plugins">
+    <!-- Plugins (Phasen B1/B2/B4): Raster der installierten Plugins + ein-/ausgeblendete Detailansicht -->
+    <div class="tile w4" data-tab="plugins" id="pluginOverview">
       <div class="lab">Plugins</div>
       <div class="mut">JavaScript-Plugins laufen direkt im Agenten. Nur was du startest, läuft auch.</div>
-      <div id="pluginList" style="margin-top:8px"></div>
+      <div class="ptiles" id="pluginTiles"></div>
+      <p class="mut" id="pluginHint" style="margin:8px 0 0"></p>
+    </div>
+
+    <!-- Detailansicht: Plugin (Ausgabe + Einstellungen), Steam oder Spiel-Optimierung -->
+    <div class="tile w4" data-tab="plugins" id="pluginDetail" hidden>
+      <div class="row" style="margin-top:0">
+        <button type="button" class="ghost" id="btnPluginBack" style="flex:0 0 auto">Zurück</button>
+        <div class="grow" style="min-width:0">
+          <div class="lab" id="detailKind">Plugin</div>
+          <strong id="detailTitle">…</strong>
+        </div>
+      </div>
+      <div class="mut" id="detailState"></div>
+      <div class="btns" id="detailActions"></div>
+
+      <!-- Ausgabe: Takt 3 s, nur solange diese Detailansicht offen ist -->
+      <div id="detailOutputBox" hidden>
+        <div class="lab" style="margin-top:12px">Ausgabe (letzte 40 Zeilen)</div>
+        <div class="gamestate" id="detailOutput" style="max-height:200px"></div>
+      </div>
+
+      <!-- Einstellungen aus dem Manifest-Schema; ohne Schema bleibt der Abschnitt aus -->
+      <div id="detailSettings" hidden>
+        <div class="lab" style="margin-top:14px">Einstellungen</div>
+        <div id="detailSettingsFields"></div>
+        <div class="btns" style="margin-top:10px">
+          <button type="button" class="go" id="btnSaveSettings">Speichern</button>
+        </div>
+        <p class="mut" id="detailSettingsHint" style="margin:8px 0 0"></p>
+      </div>
+
+      <!-- Steam (nur bei der Steam-Kachel) -->
+      <div id="detailSteam" hidden>
+        <div class="lab" style="margin-top:14px">Steam</div>
+        <div class="mut" id="steamStateLine"></div>
+        <div class="lab" style="margin-top:12px">Downloads</div>
+        <div class="devlist" id="steamDownloads"></div>
+      </div>
+
+      <!-- Spiel-Optimierung (nur bei dieser Kachel): Spiele, Ausblenden, Kill-Liste -->
+      <div id="detailGames" hidden>
+        <div class="btns" style="margin-top:12px">
+          <button type="button" class="go" id="btnScanDetail">Spiele suchen</button>
+          <button type="button" class="ghost" id="btnRefreshGames">Aktualisieren</button>
+        </div>
+        <p class="mut" id="gamesHint" style="margin:8px 0 0"></p>
+
+        <div class="lab" style="margin-top:12px">Gefundene Spiele</div>
+        <div class="devlist" id="gamesList" style="max-height:260px;overflow:auto"></div>
+
+        <div class="lab" style="margin-top:12px">Ausgeblendet</div>
+        <div class="devlist" id="gamesHidden"></div>
+
+        <div class="lab" style="margin-top:14px">Kill-Liste</div>
+        <div class="mut">Diese Programme werden beim Optimieren geschlossen.</div>
+        <div class="devlist" id="killList"></div>
+        <div class="row">
+          <input id="killInput" placeholder="z. B. Discord.exe" autocomplete="off"
+                 aria-label="Prozess für die Kill-Liste">
+          <button type="button" class="ghost" id="btnAddKill" style="flex:0 0 auto">Hinzufügen</button>
+        </div>
+
+        <div class="lab" style="margin-top:14px">Eigene Spiele</div>
+        <div class="mut">Manuell hinzugefügt, wenn der Scan ein Spiel nicht findet.</div>
+        <div class="devlist" id="customGames"></div>
+        <div class="row">
+          <input id="customName" placeholder="Name" autocomplete="off" aria-label="Name des eigenen Spiels">
+          <input id="customExe" placeholder="D:\Pfad\Spiel.exe" autocomplete="off"
+                 aria-label="EXE-Pfad des eigenen Spiels">
+          <button type="button" class="ghost" id="btnAddCustom" style="flex:0 0 auto">Hinzufügen</button>
+        </div>
+        <p class="mut" id="gameConfigHint" style="margin:8px 0 0"></p>
+      </div>
     </div>
 
     <div class="tile w2" data-tab="settings">
@@ -233,6 +360,101 @@
       <p class="mut" id="usersHint" style="margin:8px 0 0"></p>
     </div>
 
+    <!-- Systemwerte (Phase A2): Takt 5 s, nur solange der Tab offen ist -->
+    <div class="tile" data-tab="system">
+      <div class="lab">CPU</div>
+      <div class="big" id="sysCpuVal">…</div>
+      <div class="mut" id="sysCpuSub">wird geladen …</div>
+    </div>
+
+    <div class="tile" data-tab="system">
+      <div class="lab">Arbeitsspeicher</div>
+      <div class="big" id="sysRamVal">…</div>
+      <div class="mut" id="sysRamSub">wird geladen …</div>
+      <div class="meter" aria-hidden="true"><span id="sysRamBar" class=""></span></div>
+    </div>
+
+    <div class="tile" data-tab="system">
+      <div class="lab">Grafikkarte</div>
+      <div class="big" id="sysGpuVal">…</div>
+      <div class="mut" id="sysGpuName"></div>
+      <div class="mut" id="sysGpuSub"></div>
+    </div>
+
+    <div class="tile" data-tab="system">
+      <div class="lab">Netzwerk</div>
+      <div class="big txt" id="sysNetName">…</div>
+      <div class="mut" id="sysNetRx">Empfang –</div>
+      <div class="mut" id="sysNetTx">Senden –</div>
+    </div>
+
+    <div class="tile w2" data-tab="system">
+      <div class="lab">Datenträger</div>
+      <div class="devlist" id="sysDisks" style="max-height:220px;overflow:auto"></div>
+    </div>
+
+    <div class="tile" data-tab="system">
+      <div class="lab">Lüfter</div>
+      <div class="big txt" id="sysFansVal">…</div>
+      <div class="mut" id="sysFansSub"></div>
+    </div>
+
+    <div class="tile" data-tab="system">
+      <div class="lab">Temperaturen</div>
+      <div class="big txt" id="sysTempVal">…</div>
+      <div class="mut" id="sysTempSub"></div>
+    </div>
+
+    <!-- Warnungen (Phase C): Regeln, aktive Warnungen, Verlauf; Takt 30 s -->
+    <div class="tile w2" data-tab="warnings">
+      <div class="lab">Warnregeln</div>
+      <div class="mut">Geprüft wird im Agenten, auch bei geschlossener App.</div>
+      <div class="devlist" id="warnRules"></div>
+      <p class="mut" id="warnRulesHint" style="margin:8px 0 0"></p>
+    </div>
+
+    <div class="tile w2" data-tab="warnings">
+      <div class="lab">Aktuell ausgelöst</div>
+      <div class="devlist" id="warnActive"></div>
+    </div>
+
+    <div class="tile w2" data-tab="warnings">
+      <div class="lab">Neue Regel</div>
+      <div id="warnEditor">
+        <div class="row">
+          <select id="warnMetric" aria-label="Messwert der neuen Regel">
+            <option value="cpu_percent">CPU-Auslastung</option>
+            <option value="ram_percent">Arbeitsspeicher</option>
+            <option value="gpu_percent">GPU-Auslastung</option>
+            <option value="disk_free_percent">Freier Speicher</option>
+          </select>
+          <select id="warnOp" aria-label="Vergleich der neuen Regel">
+            <option value="&gt;">größer als (&gt;)</option>
+            <option value="&lt;">kleiner als (&lt;)</option>
+          </select>
+        </div>
+        <div class="row">
+          <input id="warnThreshold" type="number" min="0" max="100" step="1" value="90"
+                 aria-label="Schwelle in Prozent">
+          <input id="warnDuration" type="number" min="0" max="86400" step="5" value="30"
+                 aria-label="Dauer in Sekunden">
+        </div>
+        <div class="checkline">
+          <input id="warnEnabled" type="checkbox" checked>
+          <label for="warnEnabled">Regel sofort aktiv</label>
+        </div>
+        <div class="btns" style="margin-top:10px">
+          <button type="button" class="ghost" id="btnAddWarning">Regel anlegen</button>
+        </div>
+      </div>
+      <p class="mut" id="warnFormHint" style="margin:8px 0 0"></p>
+    </div>
+
+    <div class="tile w2" data-tab="warnings">
+      <div class="lab">Verlauf</div>
+      <div class="log" id="warnHistory"></div>
+    </div>
+
     <div class="tile w2" data-tab="log">
       <div class="lab">Ereignisse</div>
       <div class="log" id="events"></div>
@@ -244,7 +466,10 @@
     </div>
   </div>
 
-  <p class="foot">PC Steuerung · Dashboard (Phase 4: Routinen, Dialoge, Live-Updates)</p>
+  <!-- Stand der Systemwerte (nur im Tab „Systemwerte“ sichtbar) -->
+  <p class="mut" id="sensUpdated" data-tab="system" style="margin:0 0 14px">Systemwerte werden geladen …</p>
+
+  <p class="foot">PC Steuerung · Dashboard (Phase 4 + Systemwerte/Warnungen)</p>
 </div>
 
 <dialog id="dialog" class="dlg" aria-labelledby="dlgTitle">

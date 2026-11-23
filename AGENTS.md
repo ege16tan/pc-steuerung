@@ -149,6 +149,13 @@ Status).
   zurück), Geräteliste im Browser (localStorage `pcDevices`/`pcActiveDevice`, fremde
   Agenten brauchen `PC_AGENT_CORS`), Rollen `admin`/`viewer` in `credentials.json`
   (`users`-Liste, `WriteAuth` → 403 für viewer; Kachel „Benutzer & Rechte“).
+- **Web-UI (23.11.2026, Kachel-Rework gespiegelt):** Tabs Übersicht, **Systemwerte**
+  (`GET /sensors`, Takt 5 s nur bei offenem Tab), **Warnungen** (Regeln lesen,
+  bearbeiten mit `POST /warnings`, aktive und ausgelöste Warnungen, Takt 30 s),
+  Routinen (Ereignis-Auslöser, Bedingungen, Schritte mit Wartezeit, `next_run`,
+  Verlauf, Vorlagen aus `GET /routine-templates`), Plugins (Kachelraster, Detail mit
+  Ausgabe/Start/Stop/Entfernen, Einstellungen aus dem Manifest-Schema, Steam-Detail,
+  Spiel-Verwaltung mit Ausblenden/Kill-Liste/eigenen Spielen), Log, Einstellungen.
   Polling alle 2 s (Live-Modus aus), Status/Plan/Timer/Ereignisse/Verlauf und die
   Game-Kachel (Auswahl, Start, Stop, Scan).
   CPU/RAM kommen aus `GET /metrics` (erste Antwort `cpu_percent: null`, weil zwei

@@ -15,6 +15,16 @@ const POLL_MS = 2000;
 const SLOW_MS = 5000;
 const DEVICE_PING_MS = 15000;
 const LIVE_TIMEOUT_MS = 8000;
+// Systemwerte und Warnungen werden nur im jeweiligen Tab abgefragt (Regel D1).
+const SENSORS_MS = 5000;
+const WARNINGS_MS = 30000;
+const WARN_RULES_MAX = 20;
+// Plugins (Phasen B1/B2): Ausgabe nur bei offener Detailansicht, dann alle 3 s.
+const PLUGIN_OUTPUT_MS = 3000;
+const PLUGIN_OUTPUT_LINES = 40;
+// Routinen (Phase E): 1-3 Schritte, Wartezeit vor einem Schritt hoechstens 300 s.
+const ROUTINE_MAX_STEPS = 3;
+const ROUTINE_WAIT_MAX = 300;
 const DEVICES_KEY = 'pcDevices';
 const ACTIVE_DEVICE_KEY = 'pcActiveDevice';
 
@@ -52,6 +62,35 @@ const state = {
   slowTicks: 0,
   routines: [],
   routineSignature: '',
+  // Tab-gebundene Daten (Phase A2/C): nur abfragen, solange der Tab offen ist.
+  activeTab: 'overview',
+  sensors: null,
+  sensorsAt: 0,
+  sensorsError: '',
+  sensorsSignature: '',
+  // Wie oft hintereinander ein Sensor `null` lieferte (erste Messung ist normal).
+  sensorNulls: { cpu: 0, ram: 0, gpu: 0, net: 0 },
+  warnings: null,
+  warningsError: '',
+  warningsSignature: '',
+  // Plugins (Phasen B1/B2/B4): Raster und die eine offene Detailansicht.
+  // `pluginDetail` = null | { kind: 'plugin', id } | { kind: 'steam' } | { kind: 'game' }.
+  pluginDetail: null,
+  pluginTileSignature: '',
+  pluginOutput: '',
+  pluginOutputError: '',
+  pluginSettings: null,
+  pluginSettingsValues: {},
+  pluginSettingsError: '',
+  gameConfig: null,
+  gameConfigError: '',
+  gameDetailSignature: '',
+  // Routinen (Phase E): Schritte des Formulars (Rohtexte, geprueft beim Speichern),
+  // aufgeklappter Verlauf und die Vorlagen aus /routine-templates.
+  routineSteps: [],
+  routineTemplates: [],
+  routineTemplatesLoaded: false,
+  expandedRoutine: '',
 };
 
 /* ---------------- Darstellung: Hell/Dunkel/System ---------------- */
@@ -347,17 +386,41 @@ function mount() {
   $('btnAuto').onclick = () => runAction(autoOptimize);
   $('btnStopGame').onclick = () => runAction(stopOptimize);
   $('btnScan').onclick = () => runAction(scanGames);
-  $('pluginList').onclick = (event) => {
-    const button = event.target.closest('button');
-    if (!button || !guardWrite()) return;
-    const start = button.dataset.pluginStart;
-    const stop = button.dataset.pluginStop;
-    if (start) {
-      runAction(() => api('/plugins/' + encodeURIComponent(start) + '/start', { method: 'POST' }));
-    } else if (stop) {
-      runAction(() => api('/plugins/' + encodeURIComponent(stop) + '/stop', { method: 'POST' }));
-    }
+
+  // Plugins (Phasen B1/B2): Raster-Knoepfe oeffnen die Detailansicht im selben Tab.
+  $('pluginTiles').onclick = (event) => {
+    const button = event.target.closest('button[data-open]');
+    if (!button) return;
+    openPluginDetailFromKey(button.dataset.open);
   };
+  $('btnPluginBack').onclick = closePluginDetail;
+  $('btnSaveSettings').onclick = () => savePluginSettings();
+  // Spiel-Optimierung: Verwaltung der Spiele und der Konfiguration.
+  $('btnScanDetail').onclick = () => runAction(scanGamesFromDetail);
+  $('btnRefreshGames').onclick = () => refreshGameDetail();
+  $('btnAddKill').onclick = () => addKillEntry();
+  $('btnAddCustom').onclick = () => addCustomGame();
+  $('gamesList').onclick = (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    if (button.dataset.gameHide !== undefined) hideGame(button.dataset.gameHide, true);
+  };
+  $('gamesHidden').onclick = (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    if (button.dataset.gameShow !== undefined) hideGame(button.dataset.gameShow, false);
+  };
+  $('killList').onclick = (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    if (button.dataset.killRemove !== undefined) removeKillEntry(button.dataset.killRemove);
+  };
+  $('customGames').onclick = (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    if (button.dataset.customRemove !== undefined) removeCustomGame(button.dataset.customRemove);
+  };
+
   $('gameSelect').onchange = () => {
     state.selectedGame = $('gameSelect').value;
     renderPlugin();
@@ -378,18 +441,57 @@ function mount() {
   });
   $('btnAddUser').onclick = addUser;
 
-  const planSelect = $('routinePlan');
-  planSelect.innerHTML = Object.keys(PLANS).map((key) =>
+  const planSelect = $('routineCondPlan');
+  planSelect.innerHTML = '<option value="">Energieplan: egal</option>' + Object.keys(PLANS).map((key) =>
     '<option value="' + key + '">' + PLANS[key] + '</option>').join('');
-  $('routineAction').onchange = updateRoutineAction;
+  $('routineTrigger').onchange = updateRoutineTriggerForm;
   document.querySelectorAll('#routineDays button').forEach((button) => {
     button.onclick = () => {
       const on = button.classList.toggle('on');
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
     };
   });
+  // Bedingungen: eigene Tagesgruppe (getrennt von den Tagen des Auslösers).
+  document.querySelectorAll('#routineCondDays button').forEach((button) => {
+    button.onclick = () => {
+      const on = button.classList.toggle('on');
+      button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+  });
+  $('routineEvent').onchange = () => {
+    // Das Minutenfeld gilt nur fuer „PC inaktiv“.
+    $('routineIdle').hidden = $('routineEvent').value !== 'idle';
+  };
+  $('btnAddStep').onclick = () => {
+    if (state.routineSteps.length >= ROUTINE_MAX_STEPS) {
+      showBanner('Mehr als ' + ROUTINE_MAX_STEPS + ' Schritte sind nicht möglich.', 'warn');
+      return;
+    }
+    state.routineSteps.push({ type: 'hibernate', delay: '60', plan: 'high', wait: '0' });
+    renderRoutineSteps();
+  };
+  $('routineSteps').addEventListener('change', onRoutineStepInput);
+  $('routineSteps').addEventListener('input', onRoutineStepInput);
+  $('routineSteps').onclick = (event) => {
+    const button = event.target.closest('button[data-step-remove]');
+    if (!button) return;
+    const index = Number(button.dataset.stepRemove);
+    if (!isFinite(index)) return;
+    state.routineSteps.splice(index, 1);
+    renderRoutineSteps();
+  };
   $('btnAddRoutine').onclick = addRoutine;
-  updateRoutineAction();
+  $('routineTemplateBtns').onclick = (event) => {
+    const button = event.target.closest('button[data-template]');
+    if (!button) return;
+    createRoutineFromTemplate(button.dataset.template);
+  };
+  state.routineSteps = [{ type: 'hibernate', delay: '60', plan: 'high', wait: '0' }];
+  renderRoutineSteps();
+  updateRoutineTriggerForm();
+
+  // Warnregeln (Phase C): nur `admin` darf speichern.
+  $('btnAddWarning').onclick = addWarningRule;
 
   $('dlgOk').onclick = () => {
     const dlg = $('dialog');
@@ -406,9 +508,13 @@ function mount() {
     if (document.hidden) {
       stopLive();
       stopPolling();
+      stopSensors();
+      stopWarnings();
+      stopPluginDetailPolling();
     } else {
       startLive();
       if (!state.live) startPolling();
+      syncTabPolling();
       tick();
     }
   });
@@ -457,6 +563,8 @@ function render() {
   renderDevices();
   renderUsers();
   renderRoutines();
+  renderSensors();
+  renderWarnings();
 }
 
 function renderSteam() {
@@ -702,44 +810,1301 @@ function renderPlugin() {
       : 'Plugin ist nicht aktiv. Noch keine Spiele gescannt.';
   }
   $('pluginLog').textContent = plugin && plugin.tail ? plugin.tail.join('\n') : '';
-  renderPluginList();
+  renderPluginTiles();
+  renderPluginDetail();
 }
 
 function pluginStateText(item) {
+  if (!item) return 'wird geladen …';
   if (!item.available) return 'fehlt';
   return item.running ? 'aktiv' : 'bereit';
 }
 
-/// Liste aller Plugins (Game Optimization hat oben eine eigene Kachel).
-function renderPluginList() {
-  const host = $('pluginList');
+function pluginKindText(item) {
+  if (!item) return '–';
+  return item.kind === 'javascript' ? 'JS' : 'EXE';
+}
+
+/* ---------------- Plugins: Raster (Phase B1) ----------------
+   Installierte Plugins als Kacheln (2 Spalten) plus die zwei festen Kacheln
+   „Steam“ und „Spiel-Optimierung“. Das Plugin `game-optimizer` erscheint nicht
+   doppelt: seine Verwaltung liegt hinter der Kachel „Spiel-Optimierung“, die
+   Schnellaktionen bleiben in der Übersicht. */
+
+/// Kachel-Daten aus `/plugins` und `/steam` (reine Anzeige).
+function pluginTiles() {
+  const list = (state.plugins || []).filter((item) => item.id !== 'game-optimizer');
+  const tiles = list.map((item) => ({
+    key: 'plugin:' + item.id,
+    kind: 'plugin',
+    id: item.id,
+    kindText: pluginKindText(item) + ' · v' + (item.version || '1'),
+    name: item.name || item.id,
+    stateText: pluginStateText(item),
+    active: !!item.running,
+  }));
+
+  const steam = state.steam;
+  const downloads = steam && Array.isArray(steam.downloads) ? steam.downloads.length : 0;
+  tiles.push({
+    key: 'steam',
+    kind: 'steam',
+    id: '',
+    kindText: 'Downloads · Millennium',
+    name: 'Steam',
+    stateText: !steam ? 'wird geladen …'
+      : (!steam.detected ? 'nicht erkannt'
+        : (steam.downloading ? downloads + (downloads === 1 ? ' Download' : ' Downloads') : 'bereit')),
+    active: !!(steam && steam.detected && steam.downloading),
+  });
+
+  const optimizer = (state.plugins || []).find((item) => item.id === 'game-optimizer');
+  tiles.push({
+    key: 'game',
+    kind: 'game',
+    id: '',
+    kindText: 'Spiele · Kill-Liste',
+    name: 'Spiel-Optimierung',
+    stateText: optimizer ? pluginStateText(optimizer) : 'wird geladen …',
+    active: !!(optimizer && optimizer.running),
+  });
+  return tiles;
+}
+
+function renderPluginTiles() {
+  const host = $('pluginTiles');
   if (!host) return;
-  const list = state.plugins || [];
-  if (!list.length) {
-    host.innerHTML = '<div class="mut">Keine Plugins installiert.</div>';
+  const tiles = pluginTiles();
+  const signature = JSON.stringify(tiles) + '#' + canWrite() + '#' +
+    (state.pluginDetail ? state.pluginDetail.kind + ':' + state.pluginDetail.id : '');
+  if (signature === state.pluginTileSignature) return;
+  state.pluginTileSignature = signature;
+
+  host.innerHTML = tiles.map((tile) =>
+    '<div class="tile">' +
+    '<div class="lab">' + esc(tile.kindText) + '</div>' +
+    '<strong>' + esc(tile.name) + '</strong>' +
+    (tile.active ? '<span class="chip">' + esc(tile.stateText) + '</span>'
+      : '<span class="mut">' + esc(tile.stateText) + '</span>') +
+    '<div class="btns"><button type="button" class="ghost" data-open="' +
+    esc(tile.key) + '">Öffnen</button></div>' +
+    '</div>'
+  ).join('');
+
+  const hint = $('pluginHint');
+  if (hint) {
+    hint.textContent = 'Die Kachel „Spiel-Optimierung“ verwaltet Spiele, Kill-Liste und ' +
+      'eigene Einträge; gestartet wird sie weiterhin über die Übersicht.';
+  }
+}
+
+/* ---------------- Plugins: Detailansicht (Phasen B2/B4) ----------------
+   Im selben Tab eingeblendet (`#pluginDetail`), „Zurück“ führt zum Raster.
+   Die Ausgabe wird nur hier abgefragt (3 s) – nie im Hintergrund, nie in
+   einem anderen Tab (Regel D1). */
+
+function applyPluginDetailVisibility() {
+  const overview = $('pluginOverview');
+  const detail = $('pluginDetail');
+  if (!overview || !detail) return;
+  const onPluginsTab = state.activeTab === 'plugins';
+  overview.hidden = !onPluginsTab || !!state.pluginDetail;
+  detail.hidden = !onPluginsTab || !state.pluginDetail;
+}
+
+function openPluginDetailFromKey(key) {
+  const text = String(key || '');
+  const split = text.indexOf(':');
+  const kind = split < 0 ? text : text.slice(0, split);
+  const id = split < 0 ? '' : text.slice(split + 1);
+  openPluginDetail(kind, id);
+}
+
+async function openPluginDetail(kind, id) {
+  state.pluginDetail = { kind, id: id || '' };
+  state.pluginOutput = '';
+  state.pluginOutputError = '';
+  state.pluginSettings = null;
+  state.pluginSettingsValues = {};
+  state.pluginSettingsError = '';
+  state.gameDetailSignature = '';
+  state.pluginTileSignature = '';
+  applyPluginDetailVisibility();
+  syncPluginDetailPolling();
+  renderPluginDetail();
+  renderPluginTiles();
+
+  if (kind === 'plugin') {
+    await refreshPluginSettings();
+    await refreshPluginOutput();
+  } else if (kind === 'steam') {
+    await refreshSteamDetail();
+  } else if (kind === 'game') {
+    await refreshGameDetail();
+  }
+  renderPluginDetail();
+}
+
+function closePluginDetail() {
+  state.pluginDetail = null;
+  state.pluginOutput = '';
+  state.pluginOutputError = '';
+  state.pluginSettings = null;
+  state.pluginSettingsValues = {};
+  stopPluginDetailPolling();
+  state.pluginTileSignature = '';
+  applyPluginDetailVisibility();
+  renderPluginTiles();
+}
+
+/// Zustandszeile eines Plugins in der Detailansicht (nur Anzeige).
+function pluginDetailStateText(item, id) {
+  if (!item) return 'Plugin „' + id + '“ ist nicht gemeldet – läuft der Agent?';
+  if (!item.available) return 'Plugin ist nicht installiert (Ordner fehlt im Datenordner).';
+  if (!item.running) {
+    return pluginKindText(item) + ' · bereit · v' + (item.version || '1');
+  }
+  const parts = [pluginKindText(item), 'aktiv', 'seit ' + fmtUptime(item.uptime || 0)];
+  if (item.game) parts.push('Spiel: ' + String(item.game).split('\\').pop());
+  if (item.auto) parts.push('automatisch');
+  if (item.status) parts.push(item.status);
+  return parts.join(' · ');
+}
+
+function renderPluginDetail() {
+  if (!$('pluginDetail')) return;
+  applyPluginDetailVisibility();
+  const detail = state.pluginDetail;
+  if (!detail) return;
+
+  const isPlugin = detail.kind === 'plugin';
+  $('detailOutputBox').hidden = !isPlugin;
+  $('detailSteam').hidden = detail.kind !== 'steam';
+  $('detailGames').hidden = detail.kind !== 'game';
+  const write = canWrite();
+
+  if (isPlugin) {
+    const item = (state.plugins || []).find((entry) => entry.id === detail.id) || null;
+    $('detailKind').textContent = 'Plugin · ' + pluginKindText(item);
+    $('detailTitle').textContent = (item && (item.name || item.id)) || detail.id;
+    $('detailState').textContent = pluginDetailStateText(item, detail.id);
+
+    const running = !!(item && item.running);
+    let html = '';
+    if (running) {
+      html += '<button type="button" class="ghost" data-detail-act="stop"' +
+        (write ? '' : ' disabled') + '>Beenden</button>';
+    } else {
+      html += '<button type="button" class="go" data-detail-act="start"' +
+        (write && item && item.available ? '' : ' disabled') + '>Starten</button>';
+    }
+    html += '<button type="button" class="ghost" data-detail-act="refresh">Aktualisieren</button>';
+    // Entfernen gibt es nur fuer JavaScript-Plugins (Ordner im Datenordner).
+    if (item && item.kind === 'javascript') {
+      html += '<button type="button" class="ghost" data-detail-act="remove"' +
+        (write ? '' : ' disabled') + '>Entfernen</button>';
+    }
+    const box = $('detailActions');
+    box.innerHTML = html;
+    box.querySelectorAll('button[data-detail-act]').forEach((button) => {
+      const act = button.dataset.detailAct;
+      if (act === 'start') {
+        button.onclick = () => runAction(() => pluginCommand('start', detail.id));
+      } else if (act === 'stop') {
+        button.onclick = () => runAction(() => pluginCommand('stop', detail.id));
+      } else if (act === 'remove') {
+        button.onclick = () => runAction(() => removePlugin(detail.id));
+      } else if (act === 'refresh') {
+        button.onclick = () => { refreshPluginOutput(); refreshPluginSettings(); };
+      }
+    });
+    // Ohne Schema (404, alter Agent, leeres Schema) bleibt der Abschnitt aus.
+    $('detailSettings').hidden = !(state.pluginSettings && state.pluginSettings.length);
+    renderPluginOutput();
     return;
   }
-  host.innerHTML = list.map((item) => {
-    const running = !!item.running;
-    const kind = item.kind === 'javascript' ? 'JS' : 'EXE';
-    const tail = (item.tail || []).slice(-3);
-    return '<div class="pluginRow">' +
-      '<div class="row" style="gap:8px">' +
-      '<b>' + esc(item.name || item.id) + '</b>' +
-      '<span class="chip">' + pluginStateText(item) + '</span>' +
-      '<span class="mut">' + kind + ' · v' + esc(item.version || '1') + '</span>' +
-      (running && item.status ? '<span class="mut">' + esc(item.status) + '</span>' : '') +
-      '</div>' +
-      (item.description ? '<div class="mut">' + esc(item.description) + '</div>' : '') +
-      '<div class="btns" style="margin-top:6px">' +
-      (running
-        ? '<button type="button" class="ghost" data-plugin-stop="' + esc(item.id) + '">Beenden</button>'
-        : '<button type="button" class="go" data-plugin-start="' + esc(item.id) + '"' +
-        (canWrite() && item.available ? '' : ' disabled') + '>Starten</button>') +
-      '</div>' +
-      (tail.length ? '<div class="gamestate">' + tail.map(esc).join('<br>') + '</div>' : '') +
+
+  if (detail.kind === 'steam') {
+    $('detailKind').textContent = 'Steam · nur Lesen';
+    $('detailTitle').textContent = 'Steam + Downloads';
+    $('detailSettings').hidden = true;
+    const box = $('detailActions');
+    box.innerHTML = '<button type="button" class="ghost" data-detail-act="refresh">Aktualisieren</button>';
+    box.querySelector('button[data-detail-act="refresh"]').onclick = () => refreshSteamDetail();
+    renderSteamDetail();
+    return;
+  }
+
+  // Spiel-Optimierung: Verwaltung (Schnellaktionen bleiben in der Übersicht).
+  const optimizer = (state.plugins || []).find((item) => item.id === 'game-optimizer') || null;
+  $('detailKind').textContent = 'Spiel-Optimierung · Verwaltung';
+  $('detailTitle').textContent = 'Spiele und Kill-Liste';
+  $('detailState').textContent = 'Plugin: ' + pluginStateText(optimizer) +
+    ' · Gestartet wird es in der Übersicht mit Spielauswahl.';
+  $('detailSettings').hidden = true;
+  const box = $('detailActions');
+  if (optimizer && optimizer.running) {
+    box.innerHTML = '<button type="button" class="ghost" data-detail-act="stop"' +
+      (write ? '' : ' disabled') + '>Plugin beenden</button>';
+    box.querySelector('button[data-detail-act="stop"]').onclick =
+      () => runAction(() => pluginCommand('stop', 'game-optimizer'));
+  } else {
+    box.innerHTML = '<span class="mut">Das Optimierungs-Plugin läuft nicht.</span>';
+  }
+  renderGameDetail();
+}
+
+/// Start/Stop eines Plugins samt Nachladen der Liste.
+async function pluginCommand(action, id) {
+  await api('/plugins/' + encodeURIComponent(id) + '/' + action, { method: 'POST' });
+  await refreshPlugin();
+  if (state.pluginDetail && state.pluginDetail.kind === 'plugin') await refreshPluginOutput();
+}
+
+async function removePlugin(id) {
+  if (!guardWrite()) return;
+  const ok = await askConfirm({
+    title: 'Plugin entfernen',
+    text: 'Plugin „' + id + '“ entfernen?\nEingebaute Plugins legt der Agent beim nächsten Start neu an.',
+    ok: 'Entfernen',
+    danger: true,
+  });
+  if (!ok) return;
+  await api('/plugins/' + encodeURIComponent(id), { method: 'DELETE' });
+  await refreshPlugin();
+  if (state.pluginDetail && state.pluginDetail.id === id) closePluginDetail();
+  state.pluginTileSignature = '';
+  render();
+}
+
+/* ---- Plugin-Ausgabe (3 s, nur bei offener Detailansicht) ---- */
+
+let pluginDetailTimer = null;
+
+function stopPluginDetailPolling() {
+  if (pluginDetailTimer) {
+    window.clearInterval(pluginDetailTimer);
+    pluginDetailTimer = null;
+  }
+}
+
+/// Startet/stoppt den Ausgabe-Takt passend zu Tab, Detailansicht und Sichtbarkeit.
+function syncPluginDetailPolling() {
+  const active = !document.hidden && state.activeTab === 'plugins' &&
+    !!state.pluginDetail && state.pluginDetail.kind === 'plugin';
+  if (!active) {
+    stopPluginDetailPolling();
+    return;
+  }
+  if (!pluginDetailTimer) {
+    pluginDetailTimer = window.setInterval(refreshPluginOutput, PLUGIN_OUTPUT_MS);
+  }
+}
+
+async function refreshPluginOutput() {
+  const detail = state.pluginDetail;
+  if (!detail || detail.kind !== 'plugin') return;
+  // Pflichtregel D1: nie im Hintergrund, nie in einem anderen Tab.
+  if (document.hidden || state.activeTab !== 'plugins') return;
+  if (!state.connected) {
+    state.pluginOutputError = 'Keine Verbindung zum Agenten – keine Ausgabe.';
+    renderPluginOutput();
+    return;
+  }
+  try {
+    const text = await api('/plugins/' + encodeURIComponent(detail.id) +
+      '/output?lines=' + PLUGIN_OUTPUT_LINES);
+    state.pluginOutput = typeof text === 'string' ? text : String(text || '');
+    state.pluginOutputError = '';
+  } catch (error) {
+    state.pluginOutputError = 'Ausgabe konnte nicht geladen werden: ' + error.message;
+  }
+  renderPluginOutput();
+}
+
+function renderPluginOutput() {
+  const box = $('detailOutput');
+  if (!box) return;
+  const detail = state.pluginDetail;
+  if (!detail || detail.kind !== 'plugin') {
+    box.textContent = '';
+    return;
+  }
+  if (state.pluginOutputError) {
+    box.textContent = state.pluginOutputError;
+    return;
+  }
+  const text = (state.pluginOutput || '').trim();
+  box.textContent = text || 'Noch keine Ausgabe.';
+}
+
+/* ---- Plugin-Einstellungen (Schema aus dem Manifest) ---- */
+
+/// Wert eines Felds: gespeicherter Wert, sonst `default` aus dem Schema.
+function settingValue(field) {
+  const values = state.pluginSettingsValues || {};
+  if (Object.prototype.hasOwnProperty.call(values, field.key)) return values[field.key];
+  return field.default;
+}
+
+function renderPluginSettings() {
+  const box = $('detailSettings');
+  const host = $('detailSettingsFields');
+  if (!box || !host) return;
+  const schema = state.pluginSettings;
+  if (!schema || !schema.length) {
+    box.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  const write = canWrite();
+  host.innerHTML = schema.map((field) => {
+    const key = esc(field.key);
+    const label = esc(field.label || field.key);
+    const id = 'set_' + field.key;
+    const value = settingValue(field);
+    if (field.type === 'switch') {
+      return '<div class="checkline">' +
+        '<button type="button" class="switch" role="switch" aria-checked="' +
+        (value === true ? 'true' : 'false') + '" data-setting="' + key + '" aria-label="' +
+        label + '"' + (write ? '' : ' disabled') + '></button>' +
+        '<label>' + label + '</label></div>';
+    }
+    if (field.type === 'select') {
+      const options = Array.isArray(field.options) ? field.options : [];
+      return '<div class="field"><label for="' + id + '">' + label + '</label>' +
+        '<select id="' + id + '" data-setting="' + key + '"' + (write ? '' : ' disabled') + '>' +
+        options.map((option) => '<option value="' + esc(option) + '"' +
+          (option === value ? ' selected' : '') + '>' + esc(option) + '</option>').join('') +
+        '</select></div>';
+    }
+    if (field.type === 'number') {
+      const min = typeof field.min === 'number' ? ' min="' + field.min + '"' : '';
+      const max = typeof field.max === 'number' ? ' max="' + field.max + '"' : '';
+      const text = (value === null || value === undefined) ? '' : String(value);
+      return '<div class="field"><label for="' + id + '">' + label + '</label>' +
+        '<input id="' + id + '" data-setting="' + key + '" type="number" step="1"' + min + max +
+        ' value="' + esc(text) + '"' + (write ? '' : ' disabled') + '></div>';
+    }
+    const text = (value === null || value === undefined) ? '' : String(value);
+    return '<div class="field"><label for="' + id + '">' + label + '</label>' +
+      '<input id="' + id + '" data-setting="' + key + '" value="' + esc(text) + '"' +
+      (write ? '' : ' disabled') + '></div>';
+  }).join('');
+
+  // Schalter sind Knoepfe mit aria-checked (wie bei den Warnregeln).
+  host.querySelectorAll('button.switch[data-setting]').forEach((button) => {
+    button.onclick = () => {
+      const on = button.getAttribute('aria-checked') === 'true';
+      button.setAttribute('aria-checked', on ? 'false' : 'true');
+    };
+  });
+  $('btnSaveSettings').disabled = !write;
+  $('detailSettingsHint').textContent = state.pluginSettingsError
+    ? state.pluginSettingsError
+    : (write ? 'Die Werte gelten ab dem nächsten Start des Plugins.'
+      : 'Diese Sitzung hat nur Lesezugriff.');
+}
+
+async function refreshPluginSettings() {
+  const detail = state.pluginDetail;
+  if (!detail || detail.kind !== 'plugin') return;
+  if (!state.connected) return;
+  state.pluginSettingsError = '';
+  try {
+    const data = await api('/plugins/' + encodeURIComponent(detail.id) + '/settings');
+    const schema = data && Array.isArray(data.schema) ? data.schema : [];
+    // Leeres Schema (oder 404) = kein Einstellungs-Abschnitt.
+    state.pluginSettings = schema.length ? schema : null;
+    state.pluginSettingsValues = (schema.length && data && data.values &&
+      typeof data.values === 'object') ? data.values : {};
+  } catch (error) {
+    state.pluginSettings = null;
+    state.pluginSettingsValues = {};
+    if (error && error.status && error.status !== 404) {
+      state.pluginSettingsError = 'Einstellungen nicht lesbar: ' + error.message;
+    }
+  }
+  renderPluginSettings();
+}
+
+/// Liest die Felder, prueft Zahlen gegen min/max und speichert den ganzen Satz.
+async function savePluginSettings() {
+  const detail = state.pluginDetail;
+  if (!detail || detail.kind !== 'plugin' || !state.pluginSettings) return;
+  if (!guardWrite()) return;
+
+  const values = {};
+  const schema = state.pluginSettings;
+  for (let i = 0; i < schema.length; i++) {
+    const field = schema[i];
+    const input = document.querySelector('[data-setting="' + field.key + '"]');
+    if (!input) continue;
+    if (field.type === 'switch') {
+      values[field.key] = input.getAttribute('aria-checked') === 'true';
+    } else if (field.type === 'number') {
+      const raw = String(input.value || '').trim().replace(',', '.');
+      const number = raw === '' ? NaN : Number(raw);
+      if (!isFinite(number)) {
+        showBanner('„' + (field.label || field.key) + '“ braucht eine Zahl.', 'warn');
+        return;
+      }
+      if (typeof field.min === 'number' && number < field.min) {
+        showBanner('„' + (field.label || field.key) + '“ muss mindestens ' + field.min +
+          ' sein.', 'warn');
+        return;
+      }
+      if (typeof field.max === 'number' && number > field.max) {
+        showBanner('„' + (field.label || field.key) + '“ darf höchstens ' + field.max +
+          ' sein.', 'warn');
+        return;
+      }
+      values[field.key] = number;
+    } else {
+      values[field.key] = String(input.value || '');
+    }
+  }
+
+  $('btnSaveSettings').disabled = true;
+  try {
+    const answer = await api('/plugins/' + encodeURIComponent(detail.id) + '/settings', {
+      method: 'POST',
+      body: JSON.stringify({ values }),
+    });
+    // Der Agent antwortet mit dem vollstaendigen Satz – der gilt jetzt.
+    state.pluginSettingsValues = (answer && answer.values && typeof answer.values === 'object')
+      ? answer.values : values;
+    state.pluginSettingsError = '';
+    clearBanner();
+    renderPluginSettings();
+    $('detailSettingsHint').textContent = 'Gespeichert um ' +
+      new Date().toLocaleTimeString('de-DE') + '.';
+    await refreshPlugin();
+  } catch (error) {
+    // 400/422/404: `detail` des Agenten steht in `error.message`.
+    showBanner('Einstellungen nicht gespeichert: ' + error.message, 'warn');
+  } finally {
+    $('btnSaveSettings').disabled = !canWrite();
+    render();
+  }
+}
+
+/* ---------------- Steam-Detailansicht (Phase B4) ---------------- */
+
+async function refreshSteamDetail() {
+  if (!state.connected) return;
+  try {
+    state.steam = await api('/steam');
+  } catch (error) {
+    // Der nächste Tick versucht es erneut; die Anzeige bleibt stehen.
+  }
+  renderSteamDetail();
+}
+
+function steamDownloadRow(download) {
+  const percent = typeof download.percent === 'number' ? download.percent : 0;
+  const staged = typeof download.percent_staged === 'number' ? download.percent_staged : null;
+  const speed = (typeof download.speed_bps === 'number' && download.speed_bps > 0)
+    ? rateText(download.speed_bps) : '–';
+  const eta = (typeof download.eta_seconds === 'number' && download.eta_seconds > 0)
+    ? fmtTime(download.eta_seconds) : '–';
+  return '<div class="devrow cols">' +
+    '<div class="grow">' + esc(download.name || 'Download') +
+    '<div class="sub">' + num1(percent) + ' % · Tempo ' + esc(speed) +
+    ' · Restzeit ' + esc(eta) + '</div>' +
+    '<div class="meter"><span style="width:' + Math.max(0, Math.min(100, percent)).toFixed(1) +
+    '%"></span></div>' +
+    (staged !== null && staged > 0 && staged < 100
+      ? '<div class="sub">auf der Platte ' + num1(staged) + ' %</div>' : '') +
+    '</div>' +
+    '<span class="chip">' + num1(percent) + ' %</span>' +
+    '</div>';
+}
+
+let steamDetailSignature = '';
+
+function renderSteamDetail() {
+  const line = $('steamStateLine');
+  const box = $('steamDownloads');
+  if (!line || !box) return;
+  const steam = state.steam;
+  const signature = JSON.stringify(steam || null);
+  if (signature === steamDetailSignature) return;
+  steamDetailSignature = signature;
+  if (!steam) {
+    line.textContent = 'Steam-Status wird geladen …';
+    box.innerHTML = '<div class="mut">Keine Downloads</div>';
+    return;
+  }
+  line.textContent = steam.detected
+    ? 'Erkannt' + (steam.steam_path ? ' · ' + steam.steam_path : '') +
+      ' · ' + (steam.running ? 'Steam läuft' : 'Steam ist nicht gestartet') +
+      ' · Millennium ' + (steam.millennium ? 'erkannt' : 'nicht erkannt')
+    : 'Steam ist auf diesem PC nicht erkannt.';
+  const list = (steam.detected && Array.isArray(steam.downloads)) ? steam.downloads : [];
+  box.innerHTML = list.length
+    ? list.map(steamDownloadRow).join('')
+    : '<div class="mut">Keine Downloads</div>';
+}
+
+/* ---------------- Spiel-Optimierung: Spiele und Konfiguration (Phase B4) --- */
+
+function normalizeGameConfig(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const strings = (value) => (Array.isArray(value)
+    ? value.filter((entry) => typeof entry === 'string' && entry.trim() !== '')
+    : []);
+  const custom = Array.isArray(raw.custom)
+    ? raw.custom
+      .filter((entry) => entry && typeof entry.exe === 'string' && entry.exe.trim() !== '')
+      .map((entry) => ({
+        name: (typeof entry.name === 'string' && entry.name.trim()) ? entry.name : entry.exe,
+        exe: entry.exe,
+        source: (typeof entry.source === 'string' && entry.source) ? entry.source : 'manuell',
+      }))
+    : [];
+  return {
+    kill_list: strings(raw.kill_list),
+    scan_paths: strings(raw.scan_paths),
+    auto: raw.auto === true,
+    hidden: strings(raw.hidden),
+    custom,
+  };
+}
+
+async function refreshGameDetail() {
+  if (!state.connected) return;
+  await refreshGames();
+  try {
+    state.gameConfig = normalizeGameConfig(await api('/game-config'));
+    state.gameConfigError = '';
+  } catch (error) {
+    state.gameConfig = null;
+    state.gameConfigError = 'Spiel-Konfiguration nicht verfügbar: ' + error.message;
+  }
+  state.gameDetailSignature = '';
+  renderGameDetail();
+}
+
+function gameConfigOrEmpty() {
+  return state.gameConfig || {
+    kill_list: [], scan_paths: [], auto: false, hidden: [], custom: [],
+  };
+}
+
+/// Speichert den kompletten Satz (`POST /game-config` ersetzt alles).
+/// Liefert `true` bei Erfolg (die Aufrufer leeren danach ihre Eingabefelder).
+async function saveGameConfig(patch) {
+  if (!guardWrite()) return false;
+  // Ohne geladene Konfiguration nicht speichern: POST ersetzt den ganzen Satz,
+  // ein leerer Ersatz würde die echten Einstellungen überschreiben.
+  if (!state.gameConfig) {
+    showBanner('Spiel-Konfiguration ist nicht geladen – Änderungen sind gesperrt.', 'warn');
+    return false;
+  }
+  const body = Object.assign({}, gameConfigOrEmpty(), patch);
+  try {
+    await api('/game-config', { method: 'POST', body: JSON.stringify(body) });
+    state.gameConfig = normalizeGameConfig(body);
+    state.gameConfigError = '';
+    clearBanner();
+  } catch (error) {
+    showBanner('Spiel-Konfiguration nicht gespeichert: ' + error.message, 'warn');
+    return false;
+  }
+  await refreshGameDetail();
+  render();
+  return true;
+}
+
+async function scanGamesFromDetail() {
+  await api('/games/scan', { method: 'POST' });
+  await refreshGameDetail();
+}
+
+async function hideGame(exe, hide) {
+  if (!guardWrite()) return;
+  const config = gameConfigOrEmpty();
+  const hidden = config.hidden.filter((entry) => entry !== exe);
+  if (hide) hidden.push(exe);
+  await saveGameConfig({ hidden });
+}
+
+async function addKillEntry() {
+  if (!guardWrite()) return;
+  const input = $('killInput');
+  const name = String(input.value || '').trim();
+  if (!name) {
+    showBanner('Bitte einen Prozessnamen angeben, z. B. Discord.exe', 'warn');
+    return;
+  }
+  const config = gameConfigOrEmpty();
+  if (config.kill_list.some((entry) => entry.toLowerCase() === name.toLowerCase())) {
+    showBanner('„' + name + '“ steht schon in der Kill-Liste.', 'warn');
+    return;
+  }
+  const saved = await saveGameConfig({ kill_list: config.kill_list.concat([name]) });
+  if (saved) input.value = '';
+}
+
+async function removeKillEntry(name) {
+  if (!guardWrite()) return;
+  const config = gameConfigOrEmpty();
+  await saveGameConfig({ kill_list: config.kill_list.filter((entry) => entry !== name) });
+}
+
+async function addCustomGame() {
+  if (!guardWrite()) return;
+  const name = String($('customName').value || '').trim();
+  const exe = String($('customExe').value || '').trim();
+  if (!exe) {
+    showBanner('Bitte den Pfad zur EXE angeben.', 'warn');
+    return;
+  }
+  const config = gameConfigOrEmpty();
+  if (config.custom.some((entry) => entry.exe.toLowerCase() === exe.toLowerCase())) {
+    showBanner('Dieses Spiel steht schon in der Liste.', 'warn');
+    return;
+  }
+  const saved = await saveGameConfig({
+    custom: config.custom.concat([{ name: name || exe, exe, source: 'manuell' }]),
+  });
+  if (saved) {
+    $('customName').value = '';
+    $('customExe').value = '';
+  }
+}
+
+async function removeCustomGame(exe) {
+  if (!guardWrite()) return;
+  const config = gameConfigOrEmpty();
+  await saveGameConfig({ custom: config.custom.filter((entry) => entry.exe !== exe) });
+}
+
+/// Pfad für die Anzeige kürzen; der volle Pfad bleibt im `data`-Attribut.
+function shortExe(exe) {
+  const text = String(exe || '');
+  const parts = text.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 3) return text;
+  return '…\\' + parts.slice(-3).join('\\');
+}
+
+function renderGameDetail() {
+  const listBox = $('gamesList');
+  if (!listBox) return;
+  const write = canWrite();
+  const games = Array.isArray(state.games) ? state.games : [];
+  const config = gameConfigOrEmpty();
+  const signature = JSON.stringify(games) + '#' + JSON.stringify(config) + '#' +
+    state.scannedAt + '#' + write + '#' + state.gameConfigError;
+  if (signature === state.gameDetailSignature) return;
+  state.gameDetailSignature = signature;
+
+  const visible = games.filter((game) => !game.hidden);
+  const flagged = games.filter((game) => game.hidden);
+
+  listBox.innerHTML = visible.length
+    ? visible.map((game) =>
+      '<div class="devrow">' +
+      '<span class="dot ' + (game.running ? 'ok' : '') + '" aria-hidden="true"></span>' +
+      '<div class="grow">' + esc(game.name) +
+      '<div class="sub">' + esc(shortExe(game.exe)) + ' · ' + esc(game.source || 'unbekannt') +
+      (game.running ? ' · läuft' : '') + '</div></div>' +
+      (write ? '<button type="button" data-game-hide="' + esc(game.exe) + '">Ausblenden</button>'
+        : '<span class="chip">sichtbar</span>') +
+      '</div>').join('')
+    : '<div class="mut">Keine Spiele gefunden – „Spiele suchen“ startet den Scan.</div>';
+
+  // Ausgeblendet: die Konfiguration gewinnt, Markierungen aus /games kommen dazu.
+  const hiddenEntries = config.hidden.slice();
+  flagged.forEach((game) => {
+    if (hiddenEntries.indexOf(game.exe) < 0) hiddenEntries.push(game.exe);
+  });
+  $('gamesHidden').innerHTML = hiddenEntries.length
+    ? hiddenEntries.map((entry) =>
+      '<div class="devrow">' +
+      '<div class="grow">' + esc(entry) + '</div>' +
+      (write ? '<button type="button" data-game-show="' + esc(entry) + '">Einblenden</button>'
+        : '<span class="chip">ausgeblendet</span>') +
+      '</div>').join('')
+    : '<div class="mut">Nichts ausgeblendet.</div>';
+
+  $('killList').innerHTML = config.kill_list.length
+    ? config.kill_list.map((entry) =>
+      '<div class="devrow">' +
+      '<div class="grow">' + esc(entry) + '</div>' +
+      (write ? '<button type="button" data-kill-remove="' + esc(entry) + '">Entfernen</button>' : '') +
+      '</div>').join('')
+    : '<div class="mut">Kill-Liste ist leer.</div>';
+
+  $('customGames').innerHTML = config.custom.length
+    ? config.custom.map((entry) =>
+      '<div class="devrow">' +
+      '<div class="grow">' + esc(entry.name) +
+      '<div class="sub">' + esc(entry.exe) + '</div></div>' +
+      (write ? '<button type="button" data-custom-remove="' + esc(entry.exe) + '">Entfernen</button>'
+        : '') +
+      '</div>').join('')
+    : '<div class="mut">Noch kein eigenes Spiel.</div>';
+
+  $('gamesHint').textContent = 'Scan: ' + (state.scannedAt || 'noch nie') + ' · ' +
+    visible.length + ' sichtbar, ' + hiddenEntries.length + ' ausgeblendet.';
+
+  $('gameConfigHint').textContent = state.gameConfigError
+    ? state.gameConfigError
+    : (write
+      ? 'Kill-Liste und eigene Spiele gelten sofort. Automatik: ' +
+        (config.auto ? 'an' : 'aus') + '.'
+      : 'Diese Sitzung hat nur Lesezugriff.');
+}
+
+/* ---------------- Systemwerte (Phase A2) ----------------
+   Quelle: GET /sensors. Abgefragt wird nur, solange der Tab „Systemwerte“
+   offen ist (Takt 5 s) – im Hintergrund und in fremden Tabs nie (Regel D1).
+   Fehlende Werte bleiben fehlend: kein 0 %, keine Schätzung. */
+
+const SENSOR_UNAVAILABLE = 'Nicht verfügbar';
+
+/// Eine Nachkommastelle mit Komma (deutsche Schreibweise).
+function num1(value) {
+  return (Math.round(value * 10) / 10).toFixed(1).replace('.', ',');
+}
+
+function pctText(value) {
+  return num1(value) + ' %';
+}
+
+function mbText(mb) {
+  return Math.round(mb).toLocaleString('de-DE') + ' MB';
+}
+
+function gbText(gb) {
+  return num1(gb) + ' GB';
+}
+
+/// Der Agent liefert `rx_bps`/`tx_bps` als Bytes pro Sekunde (trotz „bps“).
+/// Deshalb durchgehend MB/s bzw. kB/s – nie Bits und Bytes gemischt.
+function rateText(bytesPerSecond) {
+  if (typeof bytesPerSecond !== 'number' || !isFinite(bytesPerSecond)) return '–';
+  const mb = bytesPerSecond / 1048576;
+  if (mb >= 1) return num1(mb) + ' MB/s';
+  const kb = bytesPerSecond / 1024;
+  if (kb >= 1) return Math.round(kb) + ' kB/s';
+  return Math.round(bytesPerSecond) + ' B/s';
+}
+
+/// Großer Wert in einer Kachel; `plain` nimmt die kleinere Textgröße (.txt).
+function setBigText(id, text, plain) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('txt', !!plain);
+}
+
+/// Farbe eines Balkens nach Auslastung (nur Darstellung, kein Messwert).
+function meterClass(percent) {
+  if (typeof percent !== 'number') return '';
+  if (percent >= 90) return 'danger';
+  return percent >= 75 ? 'warn' : '';
+}
+
+function setMeter(id, percent) {
+  const bar = $(id);
+  if (!bar) return;
+  const value = typeof percent === 'number' ? Math.max(0, Math.min(100, percent)) : null;
+  bar.className = value === null ? '' : meterClass(value);
+  bar.style.width = value === null ? '0%' : value.toFixed(1) + '%';
+}
+
+/// Lüfter/Temperaturen: nur `available` und `reason` – nie Werte erfinden.
+function renderSensorText(idVal, idSub, part, fallback) {
+  setBigText(idVal, SENSOR_UNAVAILABLE, true);
+  const sub = $(idSub);
+  if (sub) sub.textContent = (part && part.reason) || fallback;
+}
+
+/// Zählt aufeinanderfolgende Antworten ohne Wert. Der erste Durchlauf ist bei
+/// CPU/RAM/GPU/Netzwerk normal (noch keine zwei Stichproben); bleibt der Wert
+/// danach `null`, gilt er als nicht lesbar statt als „wird ermittelt“.
+function sensorNullRound(key, missing) {
+  const seen = missing ? (state.sensorNulls[key] || 0) + 1 : 0;
+  state.sensorNulls[key] = seen;
+  return seen;
+}
+
+function diskRow(disk) {
+  const used = typeof disk.percent === 'number'
+    ? Math.max(0, Math.min(100, disk.percent))
+    : null;
+  const cls = used === null ? '' : meterClass(used);
+  // Punkt: grün = reichlich frei, rot = fast voll, grau = dazwischen/unbekannt.
+  const dot = used === null ? '' : (used >= 90 ? 'off' : (used < 75 ? 'ok' : ''));
+  const free = typeof disk.free_gb === 'number' ? gbText(disk.free_gb) + ' frei' : 'frei unbekannt';
+  const total = typeof disk.total_gb === 'number' ? ' von ' + gbText(disk.total_gb) : '';
+  return '<div class="devrow">' +
+    '<span class="dot ' + dot + '" aria-hidden="true"></span>' +
+    '<div class="grow">' + esc(disk.name || 'Laufwerk') +
+    '<div class="sub">' + esc(free + total) + '</div>' +
+    '<div class="meter"><span class="' + cls + '" style="width:' +
+    (used === null ? '0' : used.toFixed(1)) + '%"></span></div>' +
+    '</div>' +
+    '<span class="chip">' + (used === null ? SENSOR_UNAVAILABLE : num1(used) + ' %') + '</span>' +
+    '</div>';
+}
+
+function renderSensors() {
+  if (!$('sysCpuVal')) return;
+  const signature = JSON.stringify(state.sensors) + '#' + state.sensorsAt +
+    '#' + state.sensorsError;
+  if (signature === state.sensorsSignature) return;
+  state.sensorsSignature = signature;
+
+  const data = state.sensors;
+  const hint = $('sensUpdated');
+  if (state.sensorsError) {
+    hint.textContent = state.sensorsError;
+  } else if (!data) {
+    hint.textContent = 'Systemwerte werden geladen …';
+  } else {
+    hint.textContent = 'Stand: ' + new Date(state.sensorsAt).toLocaleTimeString('de-DE') +
+      ' · Abfrage alle 5 s, nur solange dieser Tab offen ist.';
+  }
+
+  // CPU: die erste Antwort des Agenten hat `percent: null`.
+  const cpu = data && data.cpu;
+  if (!data) {
+    setBigText('sysCpuVal', '…', true);
+    $('sysCpuSub').textContent = 'wird geladen …';
+  } else if (!cpu || cpu.available === false) {
+    renderSensorText('sysCpuVal', 'sysCpuSub', cpu, 'Der Agent liefert keinen Prozessorwert.');
+  } else if (typeof cpu.percent !== 'number') {
+    if (sensorNullRound('cpu', true) <= 1) {
+      setBigText('sysCpuVal', 'Messwert wird ermittelt …', true);
+      $('sysCpuSub').textContent = cpu.cores ? cpu.cores + ' Kerne' : 'erste Messung läuft';
+    } else {
+      renderSensorText('sysCpuVal', 'sysCpuSub', cpu, 'Der Agent meldet keinen Prozessorwert.');
+    }
+  } else {
+    sensorNullRound('cpu', false);
+    setBigText('sysCpuVal', pctText(cpu.percent), false);
+    $('sysCpuSub').textContent = cpu.cores ? cpu.cores + ' Kerne' : 'Auslastung';
+  }
+
+  // Arbeitsspeicher
+  const ram = data && data.ram;
+  if (!data) {
+    setBigText('sysRamVal', '…', true);
+    $('sysRamSub').textContent = 'wird geladen …';
+    setMeter('sysRamBar', null);
+  } else if (!ram || ram.available === false) {
+    renderSensorText('sysRamVal', 'sysRamSub', ram, 'Der Agent liefert keinen Speicherwert.');
+    setMeter('sysRamBar', null);
+  } else if (typeof ram.percent !== 'number') {
+    if (sensorNullRound('ram', true) <= 1) {
+      setBigText('sysRamVal', 'Messwert wird ermittelt …', true);
+      $('sysRamSub').textContent = 'erste Messung läuft';
+    } else {
+      renderSensorText('sysRamVal', 'sysRamSub', ram, 'Der Agent meldet keinen Speicherwert.');
+    }
+    setMeter('sysRamBar', null);
+  } else {
+    sensorNullRound('ram', false);
+    setBigText('sysRamVal', pctText(ram.percent), false);
+    $('sysRamSub').textContent =
+      (typeof ram.used_mb === 'number' && typeof ram.total_mb === 'number')
+        ? mbText(ram.used_mb) + ' von ' + mbText(ram.total_mb)
+        : 'belegter Arbeitsspeicher';
+    setMeter('sysRamBar', ram.percent);
+  }
+
+  // Grafikkarte
+  const gpu = data && data.gpu;
+  if (!data) {
+    setBigText('sysGpuVal', '…', true);
+    $('sysGpuName').textContent = '';
+    $('sysGpuSub').textContent = 'wird geladen …';
+  } else if (!gpu || gpu.available === false) {
+    renderSensorText('sysGpuVal', 'sysGpuSub', gpu, 'Der Agent liefert keinen Grafikwert.');
+    $('sysGpuName').textContent = '';
+  } else if (typeof gpu.percent !== 'number') {
+    $('sysGpuName').textContent = gpu.name || '';
+    if (sensorNullRound('gpu', true) <= 1) {
+      setBigText('sysGpuVal', 'Messwert wird ermittelt …', true);
+      $('sysGpuSub').textContent = 'erste Messung läuft';
+    } else {
+      renderSensorText('sysGpuVal', 'sysGpuSub', gpu, 'Der Agent meldet keinen Grafikwert.');
+    }
+  } else {
+    sensorNullRound('gpu', false);
+    setBigText('sysGpuVal', pctText(gpu.percent), false);
+    $('sysGpuName').textContent = gpu.name || 'Grafikkarte';
+    $('sysGpuSub').textContent =
+      (typeof gpu.memory_used_mb === 'number' && typeof gpu.memory_total_mb === 'number')
+        ? 'Speicher ' + mbText(gpu.memory_used_mb) + ' von ' + mbText(gpu.memory_total_mb)
+        : 'Auslastung';
+  }
+
+  // Netzwerk
+  const net = data && data.network;
+  if (!data) {
+    setBigText('sysNetName', '…', true);
+    $('sysNetRx').textContent = 'Empfang –';
+    $('sysNetTx').textContent = 'Senden –';
+  } else if (!net || net.available === false) {
+    renderSensorText('sysNetName', 'sysNetRx', net, 'Der Agent liefert keine Netzwerkwerte.');
+    $('sysNetTx').textContent = '';
+  } else {
+    setBigText('sysNetName', net.name || 'Netzwerk', true);
+    // Erst die zweite Stichprobe ergibt eine Rate; bleibt sie aus: „nicht messbar“.
+    const hasRate = typeof net.rx_bps === 'number' || typeof net.tx_bps === 'number';
+    const unknown = sensorNullRound('net', !hasRate) <= 1
+      ? 'Messwert wird ermittelt …'
+      : 'nicht messbar';
+    $('sysNetRx').textContent = 'Empfang: ' +
+      (typeof net.rx_bps === 'number' ? rateText(net.rx_bps) : unknown);
+    $('sysNetTx').textContent = 'Senden: ' +
+      (typeof net.tx_bps === 'number' ? rateText(net.tx_bps) : unknown);
+  }
+
+  // Datenträger
+  const disks = (data && Array.isArray(data.disks)) ? data.disks : [];
+  const diskBox = $('sysDisks');
+  if (!data) {
+    diskBox.innerHTML = '<div class="mut">wird geladen …</div>';
+  } else if (!disks.length) {
+    diskBox.innerHTML = '<div class="mut">Keine Datenträger gemeldet.</div>';
+  } else {
+    diskBox.innerHTML = disks.map(diskRow).join('');
+  }
+
+  // Lüfter und Temperaturen: ohne Zusatzbibliothek nicht lesbar.
+  const fans = data && data.fans;
+  const temps = data && data.temperatures;
+  if (!data) {
+    setBigText('sysFansVal', '…', true);
+    $('sysFansSub').textContent = 'wird geladen …';
+    setBigText('sysTempVal', '…', true);
+    $('sysTempSub').textContent = 'wird geladen …';
+  } else {
+    renderSensorText('sysFansVal', 'sysFansSub', fans,
+      'Der Agent kann Lüfterdrehzahlen nicht lesen.');
+    renderSensorText('sysTempVal', 'sysTempSub', temps,
+      'Der Agent kann Temperaturen nicht lesen.');
+  }
+}
+
+let sensorsTimer = null;
+
+function startSensors() {
+  if (document.hidden) return;
+  if (!sensorsTimer) sensorsTimer = window.setInterval(refreshSensors, SENSORS_MS);
+  refreshSensors();
+}
+
+function stopSensors() {
+  if (sensorsTimer) {
+    window.clearInterval(sensorsTimer);
+    sensorsTimer = null;
+  }
+}
+
+async function refreshSensors() {
+  // Pflichtregel D1: nie im Hintergrund, nie in einem anderen Tab.
+  if (document.hidden || state.activeTab !== 'system') return;
+  if (!state.connected) {
+    state.sensors = null;
+    state.sensorsError = 'Keine Verbindung zum Agenten – keine Systemwerte.';
+    renderSensors();
+    return;
+  }
+  try {
+    state.sensors = await api('/sensors');
+    state.sensorsAt = Date.now();
+    state.sensorsError = '';
+  } catch (error) {
+    state.sensors = null;
+    state.sensorsError = 'Systemwerte konnten nicht geladen werden: ' + error.message;
+  }
+  renderSensors();
+}
+
+/* ---------------- Warnungen (Phase C) ----------------
+   Quelle: GET /warnings; speichern mit POST /warnings (immer der komplette
+   Regelsatz). Abgefragt wird nur im Tab „Warnungen“, Takt 30 s = interval_s. */
+
+const WARN_METRIC_SHORT = {
+  cpu_percent: 'CPU',
+  ram_percent: 'RAM',
+  gpu_percent: 'GPU',
+  disk_free_percent: 'Frei auf Platte',
+};
+
+function warnMetricShort(metric) {
+  return WARN_METRIC_SHORT[metric] || String(metric || 'Messwert');
+}
+
+/// Kurztext einer Regel, z. B. „> 90,0 % · 30 s“.
+function warnRuleText(rule) {
+  const op = rule.op === '<' ? '<' : '>';
+  const threshold = typeof rule.threshold === 'number' ? num1(rule.threshold) : '–';
+  const duration = typeof rule.duration_s === 'number' ? rule.duration_s : 0;
+  return op + ' ' + threshold + ' % · ' + duration + ' s';
+}
+
+function renderWarnings() {
+  if (!$('warnRules')) return;
+  const signature = JSON.stringify(state.warnings) + '#' + canWrite() + '#' +
+    state.warningsError;
+  if (signature !== state.warningsSignature) {
+    state.warningsSignature = signature;
+    renderWarnRules();
+    renderWarnActive();
+    renderWarnHistory();
+  }
+
+  const hint = $('warnRulesHint');
+  const data = state.warnings;
+  if (state.warningsError) {
+    hint.textContent = state.warningsError;
+  } else if (!data) {
+    hint.textContent = 'Warnungen werden geladen …';
+  } else {
+    const every = typeof data.interval_s === 'number' ? data.interval_s : WARNINGS_MS / 1000;
+    hint.textContent = 'Zuletzt geprüft: ' + (data.checked_at || 'noch nicht') +
+      ' · Takt ' + every + ' s';
+  }
+
+  $('warnEditor').hidden = !canWrite();
+  $('warnFormHint').textContent = canWrite()
+    ? 'Höchstens ' + WARN_RULES_MAX +
+      ' Regeln. Dauer in Sekunden – mehr als 3600 s lehnt der Agent ab.'
+    : 'Diese Sitzung hat nur Lesezugriff.';
+}
+
+function renderWarnRules() {
+  const box = $('warnRules');
+  const data = state.warnings;
+  if (!data) {
+    box.innerHTML = '<div class="mut">Wird geladen …</div>';
+    return;
+  }
+  const rules = Array.isArray(data.rules) ? data.rules : [];
+  if (!rules.length) {
+    box.innerHTML = '<div class="mut">Keine Regel angelegt – der Agent warnt dann nie.</div>';
+    return;
+  }
+  const write = canWrite();
+  box.innerHTML = rules.map((rule) => {
+    const label = rule.label || warnMetricShort(rule.metric);
+    return '<div class="devrow" data-warn="' + esc(rule.id) + '">' +
+      '<div class="grow">' + esc(label) +
+      '<div class="sub">' + esc(warnMetricShort(rule.metric)) + ' ' +
+      esc(warnRuleText(rule)) + '</div></div>' +
+      (write
+        ? '<button type="button" class="switch" role="switch" aria-checked="' +
+          (rule.enabled ? 'true' : 'false') + '" aria-label="Regel ein- oder ausschalten" ' +
+          'data-warn-toggle="' + esc(rule.id) + '"></button>' +
+          '<button type="button" data-warn-remove="' + esc(rule.id) + '">Löschen</button>'
+        : '<span class="chip">' + (rule.enabled ? 'an' : 'aus') + '</span>') +
       '</div>';
   }).join('');
+
+  box.querySelectorAll('[data-warn-toggle]').forEach((button) => {
+    const rule = rules.find((entry) => entry.id === button.dataset.warnToggle);
+    if (!rule) return;
+    button.onclick = () => saveWarningRules(rules.map((entry) => entry.id === rule.id
+      ? Object.assign({}, entry, { enabled: !rule.enabled })
+      : entry));
+  });
+  box.querySelectorAll('[data-warn-remove]').forEach((button) => {
+    const rule = rules.find((entry) => entry.id === button.dataset.warnRemove);
+    if (!rule) return;
+    button.onclick = () => removeWarningRule(rule, rules);
+  });
+}
+
+function renderWarnActive() {
+  const box = $('warnActive');
+  const data = state.warnings;
+  if (!data) {
+    box.innerHTML = '<div class="mut">Wird geladen …</div>';
+    return;
+  }
+  const list = Array.isArray(data.active) ? data.active : [];
+  if (!list.length) {
+    box.innerHTML = '<div class="mut">Keine aktive Warnung</div>';
+    return;
+  }
+  box.innerHTML = list.map((entry) =>
+    '<div class="devrow">' +
+    '<span class="dot off" aria-hidden="true"></span>' +
+    '<div class="grow">' + esc(entry.message) +
+    '<div class="sub">seit ' + esc(fmtTime(entry.since_s || 0)) + '</div></div>' +
+    '</div>').join('');
+}
+
+function renderWarnHistory() {
+  const box = $('warnHistory');
+  const data = state.warnings;
+  if (!data) {
+    box.textContent = 'Wird geladen …';
+    return;
+  }
+  const list = Array.isArray(data.triggered) ? data.triggered : [];
+  if (!list.length) {
+    box.textContent = 'Noch keine Warnung ausgelöst.';
+    return;
+  }
+  box.innerHTML = list.slice(0, 20).map((entry) => {
+    const time = entry.since ? String(entry.since).slice(11) : '–';
+    return '<div>' + esc(time) + ' · ' + esc(entry.message) + '</div>';
+  }).join('');
+}
+
+/// Eindeutige, erlaubte Regel-ID aus Messwert und Vergleich (a–z, 0–9, -_).
+function nextWarningId(rules, metric, op) {
+  const base = metric.replace(/_percent$/, '').replace(/_/g, '-') +
+    (op === '<' ? '-low' : '-high');
+  const used = rules.map((rule) => rule.id);
+  if (used.indexOf(base) < 0) return base;
+  for (let i = 2; i < 100; i++) {
+    const candidate = base + '-' + i;
+    if (candidate.length <= 40 && used.indexOf(candidate) < 0) return candidate;
+  }
+  return 'regel-' + Date.now().toString(36);
+}
+
+/// Speichert den kompletten Regelsatz und lädt danach neu.
+async function saveWarningRules(rules) {
+  if (!guardWrite()) return;
+  const button = $('btnAddWarning');
+  if (button) button.disabled = true;
+  try {
+    await api('/warnings', { method: 'POST', body: JSON.stringify({ rules }) });
+    clearBanner();
+  } catch (error) {
+    // 422 vom Agenten (z. B. Dauer zu lang) als Bannertext zeigen.
+    showBanner('Warnregeln nicht gespeichert: ' + error.message, 'warn');
+  } finally {
+    if (button) button.disabled = false;
+    await refreshWarnings();
+    render();
+  }
+}
+
+async function addWarningRule() {
+  if (!guardWrite()) return;
+  const metric = $('warnMetric').value;
+  const op = $('warnOp').value === '<' ? '<' : '>';
+  const thresholdRaw = $('warnThreshold').value.trim();
+  const durationRaw = $('warnDuration').value.trim();
+  const threshold = Number(thresholdRaw.replace(',', '.'));
+  const duration = parseInt(durationRaw, 10);
+  if (!thresholdRaw || !isFinite(threshold) || threshold < 0 || threshold > 100) {
+    showBanner('Die Schwelle muss eine Zahl zwischen 0 und 100 sein (Prozent).', 'warn');
+    return;
+  }
+  if (!durationRaw || !isFinite(duration) || duration < 0 || duration > 86400) {
+    showBanner('Die Dauer muss zwischen 0 und 86400 Sekunden liegen.', 'warn');
+    return;
+  }
+  const rules = ((state.warnings && state.warnings.rules) || []).slice();
+  if (rules.length >= WARN_RULES_MAX) {
+    showBanner('Mehr als ' + WARN_RULES_MAX + ' Regeln sind nicht möglich.', 'warn');
+    return;
+  }
+  rules.push({
+    id: nextWarningId(rules, metric, op),
+    // Leerer Name: der Agent setzt den deutschen Namen zum Messwert ein.
+    label: '',
+    metric,
+    op,
+    threshold,
+    duration_s: duration,
+    enabled: $('warnEnabled').checked,
+  });
+  await saveWarningRules(rules);
+}
+
+async function removeWarningRule(rule, rules) {
+  if (!guardWrite()) return;
+  const ok = await askConfirm({
+    title: 'Warnregel löschen',
+    text: 'Regel „' + (rule.label || warnMetricShort(rule.metric)) + '“ (' +
+      warnMetricShort(rule.metric) + ' ' + warnRuleText(rule) + ') löschen?',
+    ok: 'Löschen',
+    danger: true,
+  });
+  if (!ok) return;
+  await saveWarningRules(rules.filter((entry) => entry.id !== rule.id));
+}
+
+let warningsTimer = null;
+
+function startWarnings() {
+  if (document.hidden) return;
+  if (!warningsTimer) warningsTimer = window.setInterval(refreshWarnings, WARNINGS_MS);
+  refreshWarnings();
+}
+
+function stopWarnings() {
+  if (warningsTimer) {
+    window.clearInterval(warningsTimer);
+    warningsTimer = null;
+  }
+}
+
+async function refreshWarnings() {
+  // Pflichtregel D1: nie im Hintergrund, nie in einem anderen Tab.
+  if (document.hidden || state.activeTab !== 'warnings') return;
+  if (!state.connected) {
+    state.warningsError = 'Keine Verbindung zum Agenten – keine Warnungen.';
+    renderWarnings();
+    return;
+  }
+  try {
+    state.warnings = await api('/warnings');
+    state.warningsError = '';
+  } catch (error) {
+    state.warningsError = 'Warnungen konnten nicht geladen werden: ' + error.message;
+  }
+  renderWarnings();
+}
+
+/* ---------------- Tab-Wechsel steuert die Tab-Abfragen ---------------- */
+
+/// Startet/stoppt die Abfragen, die nur zum offenen Tab gehören (Regel D1).
+function syncTabPolling() {
+  if (state.activeTab === 'system') startSensors();
+  else stopSensors();
+  if (state.activeTab === 'warnings') startWarnings();
+  else stopWarnings();
+  // Plugins: Ausgabe-Takt nur bei offener Detailansicht (3 s), sonst gar nichts.
+  syncPluginDetailPolling();
+  // Routinen: Vorlagen und die Plugin-Auswahl der Bedingungen nachladen.
+  if (state.activeTab === 'routines') {
+    loadRoutineTemplates();
+    renderRoutinePluginOptions();
+  }
+}
+
+function selectTab(tab) {
+  state.activeTab = tab;
+  document.querySelectorAll('.tab').forEach((button) => {
+    const on = button.dataset.tab === tab;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-tab]').forEach((el) => {
+    if (el.classList.contains('tab')) return;
+    el.hidden = el.dataset.tab !== tab;
+  });
+  // Beide Plugin-Kacheln tragen data-tab="plugins" – die Detailansicht
+  // übersteuert das Raster, sobald sie offen ist.
+  applyPluginDetailVisibility();
+  try { localStorage.setItem('pcTab', tab); } catch (e) { /* privater Modus */ }
+  syncTabPolling();
 }
 
 /* ---------------- Aktionen ---------------- */
@@ -1250,6 +2615,34 @@ function resetData() {
   state.routines = [];
   state.routineSignature = '';
   state.deviceSignature = '';
+  // Tab-gebundene Daten gehören zum alten Agenten.
+  state.sensors = null;
+  state.sensorsAt = 0;
+  state.sensorsError = '';
+  state.sensorsSignature = '';
+  state.sensorNulls = { cpu: 0, ram: 0, gpu: 0, net: 0 };
+  state.warnings = null;
+  state.warningsError = '';
+  state.warningsSignature = '';
+  // Plugins (Raster/Detail) und Spiel-Konfiguration gehören zum alten Agenten.
+  state.pluginDetail = null;
+  state.pluginTileSignature = '';
+  state.pluginOutput = '';
+  state.pluginOutputError = '';
+  state.pluginSettings = null;
+  state.pluginSettingsValues = {};
+  state.pluginSettingsError = '';
+  state.gameConfig = null;
+  state.gameConfigError = '';
+  state.gameDetailSignature = '';
+  stopPluginDetailPolling();
+  // Routinen: Vorlagen erneut laden, Verlauf zuklappen.
+  state.routineTemplates = [];
+  state.routineTemplatesLoaded = false;
+  state.expandedRoutine = '';
+  condPluginSignature = '';
+  templateButtonsSignature = '';
+  steamDetailSignature = '';
   statusSignature = '';
   eventsSignature = '';
   usersSignature = '';
@@ -1284,16 +2677,33 @@ async function resume() {
   startLive();
   startSlow();
   startPolling();
+  syncTabPolling();
 }
 
 
-/* ---------------- Routinen (Phase 4) ---------------- */
+/* ---------------- Routinen (Phase 4 + Phase E) ----------------
+   Vertrag: GET /routines liefert `now`, `routines[]` mit `trigger`, `actions`,
+   `last_run`, `history` (max. 5), `next_run` und `next_in`. Auslöser sind
+   `time` (HH:MM + Wochentage), `manual` oder `event` (game_stopped /
+   download_done / idle); Bedingungen stehen unter `trigger.conditions`. */
 
 const DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+// Kurztexte der Ereignis-Auslöser (Spiegel von routines::EVENTS im Agenten).
+const ROUTINE_EVENTS = {
+  game_stopped: 'Spiel beendet',
+  download_done: 'Download fertig',
+  idle: 'PC inaktiv',
+};
 
+/// "Mo–Fr 18:00", "Bei Download fertig", "Manuell".
 function triggerText(routine) {
   const trigger = routine.trigger || {};
-  if (trigger.type !== 'time') return 'Nur manuell';
+  if (trigger.type === 'event') {
+    const label = ROUTINE_EVENTS[trigger.event] || trigger.event || 'Ereignis';
+    const minutes = typeof trigger.idle_minutes === 'number' ? trigger.idle_minutes : 0;
+    return 'Bei ' + label + (trigger.event === 'idle' && minutes ? ' (' + minutes + ' min)' : '');
+  }
+  if (trigger.type !== 'time') return 'Manuell';
   const days = Array.isArray(trigger.days) ? trigger.days : [];
   let dayText = 'Täglich';
   if (days.length && days.length < 7) {
@@ -1302,22 +2712,46 @@ function triggerText(routine) {
     dayText = workdays ? 'Mo–Fr'
       : (weekend ? 'Sa–So' : days.map((day) => DAY_LABELS[day - 1]).join(', '));
   }
-  return dayText + ' · ' + (trigger.at || '--:--');
+  return dayText + ' ' + (trigger.at || '--:--');
 }
 
+/// Kurztext der Bedingungen (leer = keine Einschränkung).
+function conditionsText(routine) {
+  const trigger = routine.trigger || {};
+  const conditions = trigger.conditions || {};
+  const parts = [];
+  const days = Array.isArray(conditions.days) ? conditions.days : [];
+  if (days.length) parts.push(days.map((day) => DAY_LABELS[day - 1]).join(', '));
+  if (conditions.plugin) parts.push('Plugin ' + conditions.plugin);
+  if (conditions.power_plan) {
+    parts.push('Plan ' + (PLANS[conditions.power_plan] || conditions.power_plan));
+  }
+  return parts.join(' · ');
+}
+
+/// "Nächster Lauf: 2026-11-24 18:00 (in 20 h)" aus `next_run`/`next_in`.
 function nextText(routine) {
   if (!routine.enabled) return 'aus';
-  if (routine.next_in === null || routine.next_in === undefined) return 'nur manuell';
-  return routine.next_in <= 1 ? 'jetzt' : 'in ' + fmtTime(routine.next_in);
+  const trigger = routine.trigger || {};
+  if (routine.next_run) {
+    const soon = (typeof routine.next_in === 'number' && routine.next_in > 0)
+      ? ' (in ' + fmtTime(routine.next_in) + ')' : '';
+    return 'Nächster Lauf: ' + routine.next_run + soon;
+  }
+  return trigger.type === 'time' ? 'Nächster Lauf: –' : 'kein fester Termin';
 }
 
 function actionListText(routine) {
   const actions = Array.isArray(routine.actions) ? routine.actions : [];
   return actions.map((action) => {
-    if (action.type === 'shutdown') return 'Herunterfahren in ' + action.delay + ' s';
-    if (action.type === 'hibernate') return 'Ruhezustand';
-    if (action.type === 'power_plan') return 'Energieplan ' + (PLANS[action.plan] || action.plan);
-    return action.type;
+    const wait = (typeof action.wait === 'number' && action.wait > 0)
+      ? ' (nach ' + action.wait + ' s)' : '';
+    if (action.type === 'shutdown') return 'Herunterfahren in ' + action.delay + ' s' + wait;
+    if (action.type === 'hibernate') return 'Ruhezustand' + wait;
+    if (action.type === 'power_plan') {
+      return 'Energieplan ' + (PLANS[action.plan] || action.plan) + wait;
+    }
+    return String(action.type) + wait;
   }).join(' · ');
 }
 
@@ -1339,11 +2773,13 @@ function renderRoutines() {
   if (!box) return;
   $('routineForm').hidden = !canWrite();
   $('routineHint').textContent = canWrite()
-    ? 'Zeiten gelten lokal für diesen PC. Höchstens 20 Routinen, drei Aktionen je Routine.'
+    ? 'Höchstens 20 Routinen, drei Schritte je Routine. Herunterfahren beendet den PC – deshalb nur als letzter Schritt.'
     : 'Diese Sitzung hat nur Lesezugriff.';
+  renderRoutinePluginOptions();
+  renderRoutineTemplates();
 
   const list = state.routines || [];
-  const signature = JSON.stringify(list) + '#' + canWrite();
+  const signature = JSON.stringify(list) + '#' + canWrite() + '#' + state.expandedRoutine;
   if (signature === state.routineSignature) return;
   state.routineSignature = signature;
 
@@ -1352,22 +2788,37 @@ function renderRoutines() {
     return;
   }
 
-  box.innerHTML = list.map((routine) =>
-    '<div class="devrow" data-id="' + esc(routine.id) + '">' +
-    '<span class="dot ' + (routine.enabled ? 'ok' : '') + '" aria-hidden="true"></span>' +
-    '<div class="grow">' + esc(routine.name) +
-    '<div class="sub">' + esc(triggerText(routine)) + ' · ' + esc(nextText(routine)) + '</div></div>' +
-    (canWrite()
-      ? '<button type="button" data-act="toggle">' + (routine.enabled ? 'Aus' : 'An') + '</button>' +
-        '<button type="button" data-act="run">Jetzt</button>' +
-        '<button type="button" data-act="remove">Entfernen</button>'
-      : '<span class="chip">' + (routine.enabled ? 'an' : 'aus') + '</span>') +
-    '</div>'
-  ).join('');
+  box.innerHTML = list.map((routine) => {
+    const open = state.expandedRoutine === routine.id;
+    const history = Array.isArray(routine.history) ? routine.history.slice(0, 5) : [];
+    const conditions = conditionsText(routine);
+    return '<div class="devrow cols" data-id="' + esc(routine.id) + '">' +
+      '<span class="dot ' + (routine.enabled ? 'ok' : '') + '" aria-hidden="true"></span>' +
+      '<div class="grow">' + esc(routine.name) +
+      '<div class="sub">' + esc(triggerText(routine)) + ' · ' + esc(nextText(routine)) + '</div>' +
+      '<div class="sub">' + esc(actionListText(routine)) +
+      (conditions ? ' · nur ' + esc(conditions) : '') + '</div></div>' +
+      '<button type="button" data-act="history" aria-expanded="' + (open ? 'true' : 'false') +
+      '">' + (open ? 'Verlauf ▲' : 'Verlauf ▼') + '</button>' +
+      (canWrite()
+        ? '<button type="button" data-act="toggle">' + (routine.enabled ? 'Aus' : 'An') + '</button>' +
+          '<button type="button" data-act="run">Jetzt</button>' +
+          '<button type="button" data-act="remove">Entfernen</button>'
+        : '<span class="chip">' + (routine.enabled ? 'an' : 'aus') + '</span>') +
+      (open
+        ? '<div class="full log">' + (history.length
+          ? history.map((entry) => esc(String(entry.at || '') + ' · ' + String(entry.text || '')))
+            .join('<br>')
+          : 'Noch kein Lauf.') + '</div>'
+        : '') +
+      '</div>';
+  }).join('');
 
   box.querySelectorAll('.devrow').forEach((row) => {
     const routine = list.find((entry) => entry.id === row.dataset.id);
     if (!routine) return;
+    const history = row.querySelector('[data-act="history"]');
+    if (history) history.onclick = () => toggleRoutineHistory(routine);
     const toggle = row.querySelector('[data-act="toggle"]');
     if (toggle) toggle.onclick = () => runAction(() => toggleRoutine(routine));
     const run = row.querySelector('[data-act="run"]');
@@ -1377,7 +2828,21 @@ function renderRoutines() {
   });
 }
 
+/// Klappt den Verlauf einer Routine auf oder zu (höchstens einer gleichzeitig).
+function toggleRoutineHistory(routine) {
+  state.expandedRoutine = state.expandedRoutine === routine.id ? '' : routine.id;
+  state.routineSignature = '';
+  renderRoutines();
+}
+
+/// Ergebnis eines Laufs/Anlegens unter der Liste anzeigen (kein Fehler-Banner).
+function showRoutineResult(text) {
+  const line = $('routineLastRun');
+  if (line) line.textContent = text || '';
+}
+
 async function toggleRoutine(routine) {
+  // Immer das ganze Objekt senden; `next_run`/`next_in` ignoriert der Agent.
   const body = Object.assign({}, routine, { enabled: !routine.enabled });
   await api('/routines', { method: 'POST', body: JSON.stringify(body) });
   await refreshRoutines();
@@ -1391,7 +2856,11 @@ async function runRoutine(routine) {
     danger: true,
   });
   if (!ok) return;
-  await api('/routines/' + encodeURIComponent(routine.id) + '/run', { method: 'POST' });
+  const answer = await api('/routines/' + encodeURIComponent(routine.id) + '/run',
+    { method: 'POST' });
+  // Antwort ist `{"ok":true,"detail":"..."}` (die Kette läuft danach weiter).
+  showRoutineResult('„' + routine.name + '“ gestartet: ' +
+    ((answer && answer.detail) || 'Aktionen laufen.'));
   await refreshRoutines();
 }
 
@@ -1404,7 +2873,9 @@ async function removeRoutine(routine) {
   });
   if (!ok) return;
   await api('/routines/' + encodeURIComponent(routine.id), { method: 'DELETE' });
+  if (state.expandedRoutine === routine.id) state.expandedRoutine = '';
   await refreshRoutines();
+  showRoutineResult('„' + routine.name + '“ entfernt.');
 }
 
 function selectedRoutineDays() {
@@ -1412,52 +2883,329 @@ function selectedRoutineDays() {
     .map((button) => Number(button.dataset.day));
 }
 
-function updateRoutineAction() {
-  const kind = $('routineAction').value;
-  $('routineDelay').hidden = kind !== 'shutdown';
-  $('routinePlan').hidden = kind !== 'power_plan';
+function selectedConditionDays() {
+  return Array.prototype.slice.call(document.querySelectorAll('#routineCondDays button.on'))
+    .map((button) => Number(button.dataset.day));
 }
+
+/// Zeigt nur die Felder des gewählten Auslösers (Uhrzeit oder Ereignis).
+function updateRoutineTriggerForm() {
+  const select = $('routineTrigger');
+  const kind = select ? select.value : 'time';
+  const timeBox = $('routineTimeBox');
+  const eventBox = $('routineEventBox');
+  if (timeBox) timeBox.hidden = kind !== 'time';
+  if (eventBox) eventBox.hidden = kind !== 'event';
+  const idle = $('routineIdle');
+  if (idle) idle.hidden = ($('routineEvent') && $('routineEvent').value !== 'idle');
+}
+
+/* ---- Schritte des Formulars (Phase E3: 1-3 Aktionen mit Wartezeit) ---- */
+
+const ROUTINE_STEP_LABELS = {
+  hibernate: 'Ruhezustand',
+  power_plan: 'Energieplan',
+  shutdown: 'Herunterfahren',
+};
+
+/// Baut die Schritt-Zeilen; die Werte stehen als Rohtext im Zustand, damit ein
+/// Neuzeichnen (z. B. nach einem Wechsel der Aktion) nichts verliert.
+function renderRoutineSteps() {
+  const box = $('routineSteps');
+  if (!box) return;
+  const steps = state.routineSteps || [];
+  const write = canWrite();
+  if (!steps.length) {
+    box.innerHTML = '<div class="mut">Kein Schritt – bitte „Schritt hinzufügen“ nutzen.</div>';
+    return;
+  }
+  box.innerHTML = steps.map((step, index) => {
+    const number = index + 1;
+    const options = Object.keys(ROUTINE_STEP_LABELS).map((value) =>
+      '<option value="' + value + '"' + (step.type === value ? ' selected' : '') + '>' +
+      ROUTINE_STEP_LABELS[value] + '</option>').join('');
+    const plans = Object.keys(PLANS).map((key) =>
+      '<option value="' + key + '"' + (step.plan === key ? ' selected' : '') + '>' +
+      PLANS[key] + '</option>').join('');
+    return '<div class="devrow cols" data-step-row="' + index + '">' +
+      '<div class="grow">Schritt ' + number +
+      '<div class="sub">' + esc(ROUTINE_STEP_LABELS[step.type] || step.type) +
+      (step.type === 'shutdown' ? ' in ' + esc(String(step.delay || '0')) + ' s' : '') +
+      ' · Wartezeit davor ' + esc(String(step.wait || '0')) + ' s</div></div>' +
+      (write && steps.length > 1
+        ? '<button type="button" data-step-remove="' + index + '">Entfernen</button>' : '') +
+      '<div class="row" style="margin-top:8px">' +
+      '<select data-step="' + index + '" data-field="type" aria-label="Aktion für Schritt ' +
+      number + '"' + (write ? '' : ' disabled') + '>' + options + '</select>' +
+      '<input data-step="' + index + '" data-field="wait" type="number" min="0" max="' +
+      ROUTINE_WAIT_MAX + '" step="1" value="' + esc(String(step.wait || '0')) +
+      '" aria-label="Wartezeit vor Schritt ' + number + ' in Sekunden"' +
+      (write ? '' : ' disabled') + '>' +
+      (step.type === 'shutdown'
+        ? '<input data-step="' + index + '" data-field="delay" type="number" min="0" max="86400" ' +
+          'step="10" value="' + esc(String(step.delay || '60')) +
+          '" aria-label="Countdown von Schritt ' + number + ' in Sekunden"' +
+          (write ? '' : ' disabled') + '>'
+        : '') +
+      (step.type === 'power_plan'
+        ? '<select data-step="' + index + '" data-field="plan" aria-label="Energieplan für Schritt ' +
+          number + '"' + (write ? '' : ' disabled') + '>' + plans + '</select>'
+        : '') +
+      '</div>' +
+      '<div class="full sub">Reihenfolge: Aktion · Wartezeit davor (0–' + ROUTINE_WAIT_MAX +
+      ' s) · Countdown · Energieplan. Herunterfahren nur als letzter Schritt.</div>' +
+      '</div>';
+  }).join('');
+}
+
+/// Eingaben der Schritte übernehmen; ein Wechsel der Aktion zeichnet neu.
+function onRoutineStepInput(event) {
+  const element = event.target.closest('[data-field]');
+  if (!element) return;
+  const index = Number(element.dataset.step);
+  const step = state.routineSteps[index];
+  if (!step) return;
+  const field = element.dataset.field;
+  step[field] = element.value;
+  if (field !== 'type') return;
+
+  // Herunterfahren beendet den PC: hoechstens einmal und nur am Ende.
+  if (step.type === 'shutdown') {
+    state.routineSteps.forEach((other, otherIndex) => {
+      if (otherIndex !== index && other.type === 'shutdown') other.type = 'hibernate';
+    });
+    if (index !== state.routineSteps.length - 1) {
+      state.routineSteps.splice(index, 1);
+      state.routineSteps.push(step);
+    }
+  }
+  renderRoutineSteps();
+}
+
+/// Rohtext aus einem Zahlenfeld pruefen; `null` = ungueltig.
+function stepNumber(raw, min, max, fallback) {
+  const text = String(raw === undefined || raw === null ? '' : raw).trim().replace(',', '.');
+  if (!text) return fallback;
+  const value = Number(text);
+  if (!isFinite(value) || value < min || value > max) return null;
+  return Math.round(value);
+}
+
+/// Baut `actions` aus den Formular-Schritten (mit Pruefung im UI).
+function routineActionsFromSteps() {
+  const steps = state.routineSteps || [];
+  if (!steps.length) {
+    showBanner('Bitte mindestens einen Schritt anlegen.', 'warn');
+    return null;
+  }
+  if (steps.length > ROUTINE_MAX_STEPS) {
+    showBanner('Höchstens ' + ROUTINE_MAX_STEPS + ' Schritte je Routine.', 'warn');
+    return null;
+  }
+  const actions = [];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const wait = stepNumber(step.wait, 0, ROUTINE_WAIT_MAX, 0);
+    if (wait === null) {
+      showBanner('Wartezeit vor Schritt ' + (i + 1) + ' muss zwischen 0 und ' +
+        ROUTINE_WAIT_MAX + ' Sekunden liegen.', 'warn');
+      return null;
+    }
+    if (step.type === 'shutdown') {
+      if (i + 1 !== steps.length) {
+        showBanner('Herunterfahren muss der letzte Schritt sein.', 'warn');
+        return null;
+      }
+      const delay = stepNumber(step.delay, 0, 86400, 60);
+      if (delay === null) {
+        showBanner('Der Countdown von Schritt ' + (i + 1) +
+          ' muss zwischen 0 und 86400 Sekunden liegen.', 'warn');
+        return null;
+      }
+      actions.push({ type: 'shutdown', delay, wait });
+    } else if (step.type === 'hibernate') {
+      actions.push({ type: 'hibernate', wait });
+    } else if (step.type === 'power_plan') {
+      actions.push({ type: 'power_plan', plan: step.plan || 'high', wait });
+    } else {
+      showBanner('Unbekannter Schritt ' + (i + 1) + '.', 'warn');
+      return null;
+    }
+  }
+  return actions;
+}
+
+/* ---- Bedingungen: Plugin-Auswahl aus GET /plugins ---- */
+
+let condPluginSignature = '';
+
+function renderRoutinePluginOptions() {
+  const select = $('routineCondPlugin');
+  if (!select) return;
+  const plugins = state.plugins || [];
+  const signature = plugins.map((item) => item.id).join(',');
+  if (signature === condPluginSignature) return;
+  condPluginSignature = signature;
+  const current = select.value;
+  select.innerHTML = '<option value="">Plugin: egal</option>' + plugins.map((item) =>
+    '<option value="' + esc(item.id) + '">' + esc(item.name || item.id) + '</option>').join('');
+  select.value = plugins.some((item) => item.id === current) ? current : '';
+}
+
+/* ---- Vorlagen (Phase E5, GET /routine-templates) ---- */
+
+/// Vorlagen einmal je Geraet laden; 404 = alter Agent, Abschnitt bleibt aus.
+async function loadRoutineTemplates() {
+  if (state.routineTemplatesLoaded || !state.connected) return;
+  try {
+    const data = await api('/routine-templates');
+    state.routineTemplates = Array.isArray(data && data.templates) ? data.templates : [];
+    state.routineTemplatesLoaded = true;
+  } catch (error) {
+    state.routineTemplates = [];
+    // 404 heisst „kennt der Agent nicht“ – kein zweiter Versuch, kein Fehler.
+    state.routineTemplatesLoaded = !!(error && error.status === 404);
+  }
+  renderRoutineTemplates();
+}
+
+let templateButtonsSignature = '';
+
+function renderRoutineTemplates() {
+  const box = $('routineTemplates');
+  const host = $('routineTemplateBtns');
+  if (!box || !host) return;
+  const templates = state.routineTemplates || [];
+  if (!templates.length) {
+    box.hidden = true;
+    host.innerHTML = '';
+    templateButtonsSignature = '';
+    return;
+  }
+  box.hidden = false;
+  const signature = templates.map((template) => template.id).join(',') + '#' + canWrite();
+  if (signature === templateButtonsSignature) return;
+  templateButtonsSignature = signature;
+  const write = canWrite();
+  host.innerHTML = templates.map((template) =>
+    '<button type="button" class="ghost" data-template="' + esc(template.id) + '"' +
+    (write ? '' : ' disabled') + '>' + esc(template.name || template.id) + '</button>').join('');
+}
+
+/// Frische Routine aus einer Vorlage: freie ID, kein Verlauf, eingeschaltet.
+function routineFromTemplate(template) {
+  const used = (state.routines || []).map((entry) => entry.id);
+  const base = String(template.id || 'routine').replace(/[^a-z0-9_-]/gi, '-') || 'routine';
+  let id = base;
+  if (used.indexOf(id) >= 0) {
+    id = '';
+    for (let i = 2; i < 100; i++) {
+      if (used.indexOf(base + '-' + i) < 0) { id = base + '-' + i; break; }
+    }
+    if (!id) id = base + '-' + Date.now().toString(36);
+  }
+  const trigger = Object.assign({
+    type: 'manual', at: '', days: [], event: '', idle_minutes: 30,
+    conditions: { days: [], plugin: '', power_plan: '' },
+  }, template.trigger || {});
+  const actions = Array.isArray(template.actions)
+    ? template.actions.map((action) => Object.assign(
+      { type: 'hibernate', delay: 60, plan: '', wait: 0 }, action))
+    : [];
+  return { id, name: template.name || base, enabled: true, trigger, actions };
+}
+
+async function createRoutineFromTemplate(templateId) {
+  if (!guardWrite()) return;
+  const template = (state.routineTemplates || []).find((entry) => entry.id === templateId);
+  if (!template) return;
+  const body = routineFromTemplate(template);
+  const ok = await askConfirm({
+    title: 'Vorlage anlegen',
+    text: 'Routine „' + body.name + '“ aus der Vorlage anlegen?\n' +
+      triggerText(body) + '\n' + actionListText(body),
+    ok: 'Anlegen',
+  });
+  if (!ok) return;
+  try {
+    await api('/routines', { method: 'POST', body: JSON.stringify(body) });
+    clearBanner();
+    showRoutineResult('Vorlage „' + body.name + '“ als „' + body.id + '“ angelegt.');
+    await refreshRoutines();
+  } catch (error) {
+    showBanner('Vorlage konnte nicht angelegt werden: ' + error.message, 'warn');
+  }
+  render();
+}
+
+/* ---- Neue Routine aus dem Formular (POST /routines mit dem ganzen Objekt) ---- */
 
 async function addRoutine() {
   if (!guardWrite()) return;
   const name = $('routineName').value.trim();
-  const at = $('routineTime').value;
   if (!name) {
     showBanner('Bitte einen Namen für die Routine angeben.', 'warn');
     return;
   }
-  if (!/^\d{2}:\d{2}$/.test(at)) {
-    showBanner('Bitte eine Uhrzeit wählen.', 'warn');
-    return;
-  }
-  const kind = $('routineAction').value;
-  let action;
-  if (kind === 'shutdown') {
-    const raw = parseInt($('routineDelay').value || '60', 10);
-    const delay = Math.max(0, Math.min(86400, isNaN(raw) ? 60 : raw));
-    action = { type: 'shutdown', delay };
-  } else if (kind === 'hibernate') {
-    action = { type: 'hibernate' };
-  } else {
-    action = { type: 'power_plan', plan: $('routinePlan').value };
-  }
-  const body = {
-    name,
-    enabled: true,
-    trigger: { type: 'time', at, days: selectedRoutineDays() },
-    actions: [action],
-  };
 
+  const kind = $('routineTrigger').value;
+  const trigger = {
+    type: kind === 'event' ? 'event' : (kind === 'manual' ? 'manual' : 'time'),
+    at: '',
+    days: [],
+    event: '',
+    idle_minutes: 30,
+    conditions: {
+      days: selectedConditionDays(),
+      plugin: $('routineCondPlugin').value,
+      power_plan: $('routineCondPlan').value,
+    },
+  };
+  if (trigger.type === 'time') {
+    const at = $('routineTime').value;
+    if (!/^\d{2}:\d{2}$/.test(at)) {
+      showBanner('Bitte eine Uhrzeit wählen (HH:MM).', 'warn');
+      return;
+    }
+    trigger.at = at;
+    trigger.days = selectedRoutineDays();
+  } else if (trigger.type === 'event') {
+    const event = $('routineEvent').value;
+    trigger.event = ROUTINE_EVENTS[event] ? event : 'game_stopped';
+    if (trigger.event === 'idle') {
+      const minutes = stepNumber($('routineIdle').value, 1, 1440, 30);
+      if (minutes === null) {
+        showBanner('Die Idle-Zeit muss zwischen 1 und 1440 Minuten liegen.', 'warn');
+        return;
+      }
+      trigger.idle_minutes = minutes;
+    }
+  }
+
+  const actions = routineActionsFromSteps();
+  if (!actions) return;
+
+  const body = { name, enabled: true, trigger, actions };
   $('btnAddRoutine').disabled = true;
   try {
-    await api('/routines', { method: 'POST', body: JSON.stringify(body) });
-    $('routineName').value = '';
-    document.querySelectorAll('#routineDays button.on').forEach((button) => {
-      button.classList.remove('on');
-      button.setAttribute('aria-pressed', 'false');
-    });
+    const answer = await api('/routines', { method: 'POST', body: JSON.stringify(body) });
     clearBanner();
+    const created = (answer && answer.routine) ? answer.routine : body;
+    // Formular zurücksetzen: Name, Tage, Bedingungen und Schritte.
+    $('routineName').value = '';
+    document.querySelectorAll('#routineDays button.on, #routineCondDays button.on')
+      .forEach((button) => {
+        button.classList.remove('on');
+        button.setAttribute('aria-pressed', 'false');
+      });
+    $('routineCondPlugin').value = '';
+    $('routineCondPlan').value = '';
+    state.routineSteps = [{ type: 'hibernate', delay: '60', plan: 'high', wait: '0' }];
+    renderRoutineSteps();
     await refreshRoutines();
+    const stored = (state.routines || []).find((entry) => entry.id === created.id) || created;
+    showRoutineResult('Routine „' + name + '“ angelegt · ' + triggerText(stored) +
+      ' · ' + nextText(stored));
   } catch (error) {
     showBanner('Routine konnte nicht gespeichert werden: ' + error.message, 'warn');
   } finally {
@@ -1593,35 +3341,34 @@ async function boot() {
     }
   }
 
-  // Tab-Switching
+  // Tab-Switching (selectTab startet/stoppt auch die Tab-Abfragen)
   document.querySelectorAll('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab;
-      document.querySelectorAll('.tab').forEach((b) => {
-        b.classList.toggle('on', b === btn);
-        b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
-      });
-      document.querySelectorAll('[data-tab]').forEach((el) => {
-        if (el.classList.contains('tab')) return;
-        el.hidden = el.dataset.tab !== tab;
-      });
-      try { localStorage.setItem('pcTab', tab); } catch (e) {}
-    });
+    btn.addEventListener('click', () => selectTab(btn.dataset.tab));
   });
-  // Gespeicherten Tab wiederherstellen
+  // Gespeicherten Tab wiederherstellen (nur bekannte Tabs übernehmen)
+  const knownTabs = Array.prototype.map.call(document.querySelectorAll('.tab'),
+    (el) => el.dataset.tab);
   let savedTab = 'overview';
-  try { savedTab = localStorage.getItem('pcTab') || 'overview'; } catch (e) {}
-  const savedBtn = document.querySelector('.tab[data-tab="' + savedTab + '"]');
+  try { savedTab = localStorage.getItem('pcTab') || 'overview'; } catch (e) { /* egal */ }
+  const savedBtn = knownTabs.indexOf(savedTab) >= 0
+    ? document.querySelector('.tab[data-tab="' + savedTab + '"]')
+    : null;
   if (savedBtn) savedBtn.click();
 
   $('app').hidden = false;
   await refreshIdentity();
   await tick();
+  await refreshPlugin();
   await refreshRoutines();
+  // Vorlagen und die Plugin-Auswahl der Routinen-Bedingungen einmal vorladen.
+  await loadRoutineTemplates();
+  renderRoutinePluginOptions();
   render();
   startLive();
   startSlow();
   startPolling();
+  // Tab-Abfragen erst jetzt – vorher ist die Verbindung noch unbekannt.
+  syncTabPolling();
 }
 
 document.addEventListener('DOMContentLoaded', boot);

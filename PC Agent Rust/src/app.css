@@ -202,6 +202,59 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
 :root[data-theme="light"] .days button.on { color: #ffffff; }
 :root[data-theme="light"] .dlg { background: #ffffff; }
 
+/* ---------------- Systemwerte und Warnungen (Phasen A2/C) ----------------
+   Balken für Datenträger/RAM, Schalter für Warnregeln. Beide nutzen die
+   vorhandenen Farbvariablen, damit Hell/Dunkel automatisch passt. */
+.big.txt { font-size: 20px; letter-spacing: 0; font-weight: 700; }
+
+.meter {
+  height: 8px; border-radius: 99px; background: var(--line); overflow: hidden;
+  margin-top: 6px; width: 100%;
+}
+.meter > span {
+  display: block; height: 100%; width: 0; border-radius: 99px; background: var(--teal);
+}
+.meter > span.warn { background: var(--amb); }
+.meter > span.danger { background: var(--red); }
+.devrow .meter { margin-top: 6px; min-width: 90px; }
+
+/* Ein/Aus-Schalter (Warnregeln) */
+.switch {
+  position: relative; width: 44px; height: 24px; padding: 0; flex: 0 0 auto;
+  border-radius: 99px; border: 1px solid var(--line); background: var(--line);
+}
+.switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; transition: left .15s;
+}
+.switch[aria-checked="true"] { background: var(--grn); border-color: var(--grn); }
+.switch[aria-checked="true"]::after { left: 22px; }
+/* .devrow button setzt Polsterung – beim Schalter soll der Knopf zentriert sein. */
+.devrow button.switch { padding: 0; }
+.switch:hover:not(:disabled) { transform: none; border-color: var(--line); }
+.switch[aria-checked="true"]:hover:not(:disabled) { border-color: var(--grn); }
+
+/* ---------------- Plugins-Raster und Routine-Schritte (Phasen B1/B2/E) ----------------
+   Das Raster nutzt bewusst dieselbe .tile-Optik wie die Übersicht, nur kleiner;
+   die Routine-Schritte sind .devrow-Zeilen mit umbrechenden Feldern. */
+.ptiles {
+  display: grid; gap: 10px; grid-template-columns: repeat(2, 1fr);
+  margin-top: 10px; align-items: stretch;
+}
+@media (max-width: 520px) { .ptiles { grid-template-columns: 1fr; } }
+.ptiles .tile { min-height: 0; border-radius: 16px; padding: 12px; gap: 4px; }
+.ptiles .tile strong { font-size: 14px; }
+.ptiles .tile .lab { font-size: 11px; }
+.ptiles .tile .btns { margin-top: 8px; }
+.ptiles .tile .btns button { padding: 8px 10px; font-size: 13px; }
+
+/* .devrow-Zeilen, die umbrechen dürfen (Routine-Schritte, aufgeklappter Verlauf). */
+.devrow.cols { flex-wrap: wrap; align-items: flex-start; }
+.devrow .full { flex: 0 0 100%; min-width: 0; }
+.devrow .full.log { max-height: 110px; }
+.devrow.cols .row { margin-top: 8px; flex-basis: 100%; }
+.devrow.cols .row > * { flex: 1 1 110px; }
+
 /* Barrierefreiheit */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
