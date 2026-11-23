@@ -172,7 +172,7 @@ Messwerte: `cpu_percent`, `ram_percent`, `gpu_percent`, `disk_free_percent`
 
 ## G) Einstellungen
 
-- [ ] **G1** Gruppiert mit Suche; Aenderungen wirken sofort, wo moeglich.
-- [ ] **G2** Zuruecksetzen je Bereich.
-- [ ] **G3** Export/Import als JSON, ohne Passwoerter und Tokens.
-- [ ] **G4** Plugin-Einstellungen aus dem Manifest-Schema (Text, Zahl, Schalter, Auswahl).
+- [x] **G1** Gruppiert mit Suche; Aenderungen wirken sofort, wo moeglich.
+- [x] **G2** Zuruecksetzen je Bereich.
+- [x] **G3** Export/Import als JSON, ohne Passwoerter und Tokens.
+- [x] **G4** Plugin-Einstellungen aus dem Manifest-Schema (Text, Zahl, Schalter, Auswahl).

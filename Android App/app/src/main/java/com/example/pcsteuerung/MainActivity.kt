@@ -111,6 +111,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
@@ -1269,6 +1270,13 @@ fun MainApp(
     // Plugin-Detailseite: Ausgabe der letzten Zeilen (`GET /plugins/{id}/output`).
     var pluginOutput by remember { mutableStateOf("") }
 
+    // Plugin-Detailseite (Phase G4): Schema und Werte aus
+    // `GET /plugins/{id}/settings`. Ohne Schema bleibt der Abschnitt aus.
+    var pluginSettings by remember { mutableStateOf<PluginSettingsSchema?>(null) }
+    var pluginSettingsValues by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var pluginSettingsNotice by remember { mutableStateOf<String?>(null) }
+    var pluginSettingsError by remember { mutableStateOf<String?>(null) }
+
     // Spiele-Optimierung (`GET /games` + `GET /game-config`). `gameConfig` bleibt
     // null, wenn der Agent /game-config nicht kennt - dann ist nur Lesen moeglich.
     var games by remember { mutableStateOf<List<GameEntry>>(emptyList()) }
@@ -1422,6 +1430,93 @@ fun MainApp(
             }
         }
     }
+
+    /**
+     * Einstellungen eines Plugins (`GET /plugins/{id}/settings`). Fehlt die
+     * Route (404, alter Agent) oder ist das Schema leer, bleibt [pluginSettings]
+     * null und die Detailseite zeigt keinen Einstellungs-Abschnitt.
+     */
+    suspend fun loadPluginSettings(id: String) {
+        // Neue Seite, neue Rueckmeldung: ein alter Hinweis darf nicht mitwandern.
+        pluginSettingsNotice = null
+        pluginSettingsError = null
+        val parsed = withContext(Dispatchers.IO) {
+            try {
+                parsePluginSettings(
+                    httpCall(active.base, "/plugins/$id/settings", active.authHeader())
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Plugin-Einstellungen nicht erreichbar", e)
+                null
+            }
+        }
+        pluginSettings = parsed
+        pluginSettingsValues = if (parsed == null) emptyMap() else pluginSettingValues(parsed)
+    }
+
+    /**
+     * Einstellungen speichern (`POST /plugins/{id}/settings`). Zahlenfelder
+     * werden vorher gegen min/max geprueft, damit ungueltige Eingaben erst gar
+     * nicht zum Agenten gehen. Schlaegt der Aufruf fehl (400/404/422), bleiben
+     * die Eingaben stehen und der Grund wird deutsch angezeigt.
+     */
+    fun savePluginSettings(id: String) {
+        val schema = pluginSettings ?: return
+        if (busy) return
+        val invalidNumber = schema.fields.any { field ->
+            field.type == PluginSettingType.NUMBER &&
+                checkPluginNumber(field, pluginSettingsValues[field.key].orEmpty()) != null
+        }
+        if (invalidNumber) {
+            pluginSettingsNotice = null
+            pluginSettingsError = context.getString(R.string.plugins_settings_invalid)
+            return
+        }
+        scope.launch {
+            busy = true
+            try {
+                val body = pluginSettingsBody(schema, pluginSettingsValues)
+                val answer = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(active.base, "/plugins/$id/settings", active.authHeader(), "POST", body)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Plugin-Einstellungen nicht speicherbar", e)
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
+                }
+                when (val result = parsePluginSettingsSave(answer)) {
+                    is PluginSettingsSave.Saved -> {
+                        // Antwort uebernehmen: sie enthaelt den vollstaendigen Satz.
+                        pluginSettingsValues = schema.fields.associate { field ->
+                            field.key to (result.values[field.key]
+                                ?: pluginSettingsValues[field.key]
+                                ?: field.defaultValue)
+                        }
+                        pluginSettingsError = null
+                        pluginSettingsNotice = context.getString(R.string.plugins_settings_saved)
+                    }
+
+                    is PluginSettingsSave.Rejected -> {
+                        pluginSettingsNotice = null
+                        pluginSettingsError = when {
+                            // Kein HTTP-Fehler, sondern gar keine Verbindung.
+                            answer.startsWith("Nicht erreichbar") -> answer
+                            result.detail.isNotBlank() -> result.detail
+                            result.code != null -> context.getString(
+                                R.string.plugins_settings_rejected,
+                                result.code,
+                            )
+
+                            else -> context.getString(R.string.plugins_settings_rejected_plain)
+                        }
+                    }
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
 
     /** Schreibende Spiele-Aktion (z. B. `POST /games/scan`), danach neu laden. */
     fun gameAction(path: String, method: String, body: String?, success: String) {
@@ -1654,6 +1749,7 @@ fun MainApp(
             is Route.PluginDetail -> {
                 loadPlugins()
                 loadPluginOutput(current.id)
+                loadPluginSettings(current.id)
             }
 
             Route.GameOptimization -> loadGames()
@@ -2049,6 +2145,16 @@ fun MainApp(
                                 onAutoCloseChange = {
                                     onSettingsChange(settings.copy(pluginAutoClose = it))
                                 },
+                                settingsSchema = pluginSettings,
+                                settingsValues = pluginSettingsValues,
+                                settingsNotice = pluginSettingsNotice,
+                                settingsError = pluginSettingsError,
+                                onSettingChange = { key, value ->
+                                    pluginSettingsValues = pluginSettingsValues + (key to value)
+                                    pluginSettingsNotice = null
+                                    pluginSettingsError = null
+                                },
+                                onSaveSettings = { savePluginSettings(screen.id) },
                                 onStart = { plugin?.let(::startPlugin) },
                                 onStop = { plugin?.let(::stopPlugin) },
                                 onRemove = { plugin?.let(::removePlugin) },
@@ -2224,7 +2330,13 @@ fun MainApp(
                             simulate = state.simulate,
                             busy = busy,
                             settings = settings,
+                            installedModules = installedModules,
                             onSettingsChange = onSettingsChange,
+                            onModulesChange = { ids ->
+                                // Import uebernimmt die Modul-IDs direkt in den Speicher.
+                                ModuleStore.save(context, ids)
+                                installedModules = ids
+                            },
                             onOpenWeb = ::openWebInterface,
                             versionName = versionName,
                             onSwitch = ::switchProfile,
@@ -3083,6 +3195,10 @@ private fun pluginDotColor(plugin: PluginInfo): Color = when {
  * Detailseite eines Plugins: Zustand, Start/Stop, Entfernen und die letzten
  * Ausgabezeilen (`GET /plugins/{id}/output?lines=...`). Damit bleiben die
  * Aktionen der frueheren Karte in der Uebersicht erreichbar.
+ *
+ * Phase G4: Meldet der Agent ein Manifest-Schema (`GET /plugins/{id}/settings`),
+ * erscheint zusaetzlich der Abschnitt "Einstellungen". Ohne Schema (404, alter
+ * Agent, leeres Schema) bleibt er aus und die Seite ist wie bisher bedienbar.
  */
 @Composable
 private fun PluginDetailPage(
@@ -3091,6 +3207,12 @@ private fun PluginDetailPage(
     busy: Boolean,
     autoClose: Boolean,
     onAutoCloseChange: (Boolean) -> Unit,
+    settingsSchema: PluginSettingsSchema?,
+    settingsValues: Map<String, String>,
+    settingsNotice: String?,
+    settingsError: String?,
+    onSettingChange: (String, String) -> Unit,
+    onSaveSettings: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRemove: () -> Unit,
@@ -3221,6 +3343,19 @@ private fun PluginDetailPage(
             )
         }
 
+        // Phase G4: Einstellungen aus dem Manifest-Schema (nur wenn vorhanden).
+        if (settingsSchema != null && !settingsSchema.isEmpty) {
+            PluginSettingsSection(
+                schema = settingsSchema,
+                values = settingsValues,
+                busy = busy,
+                notice = settingsNotice,
+                error = settingsError,
+                onChange = onSettingChange,
+                onSave = onSaveSettings,
+            )
+        }
+
         Text(
             text = stringResource(R.string.plugins_detail_output),
             fontSize = 11.sp,
@@ -3253,6 +3388,156 @@ private fun PluginDetailPage(
         }
     }
 }
+
+/**
+ * Abschnitt "Einstellungen" einer Plugin-Detailseite (Phase G4). Die Felder
+ * kommen aus dem Manifest-Schema des Agenten: Textfeld, Zahlenfeld mit
+ * min/max-Pruefung, Schalter und Auswahl (Filter-Chips statt Menue, damit keine
+ * zusaetzliche Bibliothek noetig ist). "Speichern" schickt alle Werte zusammen.
+ */
+@Composable
+private fun PluginSettingsSection(
+    schema: PluginSettingsSchema,
+    values: Map<String, String>,
+    busy: Boolean,
+    notice: String?,
+    error: String?,
+    onChange: (String, String) -> Unit,
+    onSave: () -> Unit,
+) {
+    Text(
+        text = stringResource(R.string.plugins_settings_title),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.outline,
+    )
+    SettingsDetailCard {
+        schema.fields.forEach { field ->
+            PluginSettingFieldRow(
+                field = field,
+                value = values[field.key] ?: field.defaultValue,
+                enabled = !busy,
+                onChange = { onChange(field.key, it) },
+            )
+        }
+        Button(
+            onClick = onSave,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Text(stringResource(R.string.plugins_settings_save))
+        }
+        Text(
+            text = stringResource(R.string.plugins_settings_hint),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        // Rueckmeldung: gespeichert (primaer) oder abgelehnt (Fehlerfarbe).
+        notice?.let {
+            Text(text = it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+        }
+        error?.let {
+            Text(text = it, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/** Ein Feld des Plugin-Schemas: Text, Zahl (mit Grenzen), Schalter oder Auswahl. */
+@Composable
+private fun PluginSettingFieldRow(
+    field: PluginSettingField,
+    value: String,
+    enabled: Boolean,
+    onChange: (String) -> Unit,
+) {
+    when (field.type) {
+        PluginSettingType.TEXT -> OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            label = { Text(field.label) },
+            singleLine = true,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        PluginSettingType.NUMBER -> {
+            val numberError = checkPluginNumber(field, value)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onChange,
+                    label = { Text(field.label) },
+                    singleLine = true,
+                    enabled = enabled,
+                    isError = numberError != null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (numberError != null) {
+                    Text(
+                        text = pluginNumberErrorText(field, numberError),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+
+        PluginSettingType.SWITCH -> Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text = field.label, fontSize = 15.sp, modifier = Modifier.weight(1f))
+            Switch(
+                checked = value == "true",
+                onCheckedChange = { onChange(if (it) "true" else "false") },
+                enabled = enabled,
+            )
+        }
+
+        PluginSettingType.SELECT -> Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = field.label,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                field.options.forEach { option ->
+                    FilterChip(
+                        selected = value == option,
+                        enabled = enabled,
+                        onClick = { onChange(option) },
+                        label = { Text(option) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Fehlertext eines Zahlenfelds (deutsche Texte aus `strings.xml`). */
+@Composable
+private fun pluginNumberErrorText(field: PluginSettingField, error: PluginNumberError): String =
+    when (error) {
+        PluginNumberError.EMPTY -> stringResource(R.string.plugins_settings_error_empty)
+        PluginNumberError.NOT_A_NUMBER -> stringResource(R.string.plugins_settings_error_number)
+        PluginNumberError.TOO_SMALL -> stringResource(
+            R.string.plugins_settings_error_min,
+            jsonScalarText(field.min),
+        )
+
+        PluginNumberError.TOO_LARGE -> stringResource(
+            R.string.plugins_settings_error_max,
+            jsonScalarText(field.max),
+        )
+    }
 
 /** Zeile im Plugin-Katalog: Name, Beschreibung, Installieren-Knopf. */
 @Composable
@@ -3576,7 +3861,9 @@ private fun SettingsTab(
     simulate: Boolean?,
     busy: Boolean,
     settings: AppSettings,
+    installedModules: Set<String>,
     onSettingsChange: (AppSettings) -> Unit,
+    onModulesChange: (Set<String>) -> Unit,
     onOpenWeb: () -> Unit,
     versionName: String,
     onSwitch: (String) -> Unit,
@@ -3636,11 +3923,14 @@ private fun SettingsTab(
                 busy = busy,
                 settings = settings,
                 versionName = versionName,
+                profiles = profiles,
+                modules = installedModules,
                 onOpenPage = { destination = it },
                 onOpenWeb = onOpenWeb,
                 onTestConnection = onTestConnection,
                 onModeChange = onModeChange,
                 onSettingsChange = onSettingsChange,
+                onModulesChange = onModulesChange,
             )
         } else {
             SettingsPageHeader(
@@ -4016,12 +4306,251 @@ private fun SettingsOverview(
     busy: Boolean,
     settings: AppSettings,
     versionName: String,
+    profiles: List<Profile>,
+    modules: Set<String>,
     onOpenPage: (SettingsDestination) -> Unit,
     onOpenWeb: () -> Unit,
     onTestConnection: () -> Unit,
     onModeChange: (Boolean) -> Unit,
     onSettingsChange: (AppSettings) -> Unit,
+    onModulesChange: (Set<String>) -> Unit,
 ) {
+    // G1: Suchbegriff; gefiltert wird mit der reinen Funktion aus Settings.kt.
+    var query by remember { mutableStateOf("") }
+    // G2: Bereich, dessen Zuruecksetzen gerade bestaetigt werden soll.
+    var resetArea by remember { mutableStateOf<SettingsArea?>(null) }
+    var resetNotice by remember { mutableStateOf<SettingsArea?>(null) }
+    // G3: Rueckmeldung der Datei-Aktionen und die zu bestaetigende Importdatei.
+    var fileNotice by remember { mutableIntStateOf(0) }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var pendingImport by remember { mutableStateOf<SettingsImportResult.Ok?>(null) }
+    var pendingExport by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Rueckmeldung des Resets nach ein paar Sekunden wieder ausblenden.
+    LaunchedEffect(resetNotice) {
+        if (resetNotice != null) {
+            delay(4000)
+            resetNotice = null
+        }
+    }
+
+    // G3 Export: System-Dateidialog (SAF), kein Speicher-Recht noetig.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri == null) {
+            fileNotice = R.string.settings_export_cancelled
+        } else {
+            val text = pendingExport
+            scope.launch {
+                val written = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val out = context.contentResolver.openOutputStream(uri)
+                            ?: return@runCatching false
+                        out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        true
+                    }.getOrDefault(false)
+                }
+                fileNotice = if (written) {
+                    R.string.settings_export_done
+                } else {
+                    R.string.settings_export_failed
+                }
+            }
+        }
+    }
+
+    // G3 Import: tolerant lesen (parseSettingsImport); Profile bleiben aussen vor.
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            fileNotice = R.string.settings_import_cancelled
+        } else {
+            scope.launch {
+                val body = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)
+                            ?.bufferedReader()?.use { it.readText() }
+                    }.getOrNull()
+                }
+                if (body == null) {
+                    importError = context.getString(R.string.settings_import_unreadable)
+                } else when (val result = parseSettingsImport(body)) {
+                    is SettingsImportResult.Ok -> pendingImport = result
+                    is SettingsImportResult.Failed -> importError = context.getString(
+                        when (result.error) {
+                            SettingsImportError.WRONG_VERSION -> R.string.settings_import_version
+                            else -> R.string.settings_import_invalid
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    // G1: Die Bereiche mit ihren Eintraegen. Gesucht wird in Titel, Untertitel
+    // und Bereichsname (reine Funktion `searchSettings` in Settings.kt).
+    val connectionSection = stringResource(R.string.settings_section_connection)
+    val appearanceSection = stringResource(R.string.settings_section_appearance)
+    val controlSection = stringResource(R.string.settings_section_control)
+    val pluginsSection = stringResource(R.string.settings_section_plugins)
+    val historySection = stringResource(R.string.settings_section_history)
+    val updatesSection = stringResource(R.string.settings_section_updates)
+    val dataSection = stringResource(R.string.settings_section_data)
+    val aboutSection = stringResource(R.string.settings_section_about)
+
+    fun searchEntry(key: String, title: String, subtitle: String, section: String) =
+        SettingsSearchEntry(key = key, title = title, subtitle = subtitle, section = section)
+
+    val profilesSubtitle = if (active.isComplete) {
+        active.name + "  ·  " + active.host + ":" + active.port
+    } else {
+        active.name + "  ·  " + stringResource(R.string.settings_profiles_not_setup)
+    }
+    val simulationSubtitle = when (simulate) {
+        true -> stringResource(R.string.settings_simulation_on)
+        false -> stringResource(R.string.settings_simulation_off)
+        null -> stringResource(R.string.settings_simulation_unknown)
+    }
+
+    // Bereich (fuer das Zuruecksetzen) plus seine Eintraege. `null` = Bereich
+    // ohne eigenen Reset-Knopf (Verbindung, Updates, Daten, Ueber die App).
+    val sections: List<Pair<SettingsArea?, SettingsSearchSection>> = listOf(
+        null to SettingsSearchSection(
+            title = connectionSection,
+            entries = listOf(
+                searchEntry(
+                    "profiles",
+                    stringResource(R.string.settings_profiles),
+                    profilesSubtitle,
+                    connectionSection,
+                ),
+                searchEntry(
+                    "test_connection",
+                    stringResource(R.string.settings_test_connection),
+                    stringResource(R.string.settings_test_connection_sub),
+                    connectionSection,
+                ),
+            ),
+        ),
+        SettingsArea.APPEARANCE to SettingsSearchSection(
+            title = appearanceSection,
+            entries = listOf(
+                searchEntry(
+                    "appearance",
+                    stringResource(R.string.settings_appearance),
+                    themeModeLabel(settings.themeMode),
+                    appearanceSection,
+                ),
+                searchEntry(
+                    "refresh",
+                    stringResource(R.string.settings_refresh),
+                    stringResource(R.string.settings_refresh_value, settings.refreshSeconds),
+                    appearanceSection,
+                ),
+            ),
+        ),
+        SettingsArea.CONTROL to SettingsSearchSection(
+            title = controlSection,
+            entries = listOf(
+                searchEntry(
+                    "online_card",
+                    stringResource(R.string.settings_online_card),
+                    if (settings.onlineCard) {
+                        stringResource(R.string.settings_online_card_on)
+                    } else {
+                        stringResource(R.string.settings_online_card_off)
+                    },
+                    controlSection,
+                ),
+                searchEntry(
+                    "simulation",
+                    stringResource(R.string.settings_simulation),
+                    simulationSubtitle,
+                    controlSection,
+                ),
+                searchEntry(
+                    "webui",
+                    stringResource(R.string.settings_webui),
+                    active.base,
+                    controlSection,
+                ),
+            ),
+        ),
+        SettingsArea.PLUGINS to SettingsSearchSection(
+            title = pluginsSection,
+            entries = listOf(
+                searchEntry(
+                    "plugin_auto_close",
+                    stringResource(R.string.plugins_auto_close),
+                    if (settings.pluginAutoClose) {
+                        stringResource(R.string.plugins_auto_close_on)
+                    } else {
+                        stringResource(R.string.plugins_auto_close_off)
+                    },
+                    pluginsSection,
+                ),
+            ),
+        ),
+        SettingsArea.HISTORY to SettingsSearchSection(
+            title = historySection,
+            entries = listOf(
+                searchEntry(
+                    "history",
+                    stringResource(R.string.settings_history),
+                    stringResource(R.string.settings_history_value, settings.historyLines),
+                    historySection,
+                ),
+            ),
+        ),
+        null to SettingsSearchSection(
+            title = updatesSection,
+            entries = listOf(
+                searchEntry(
+                    "updates",
+                    stringResource(R.string.settings_updates),
+                    "GitHub Releases · PC Steuerung " + versionName,
+                    updatesSection,
+                ),
+            ),
+        ),
+        null to SettingsSearchSection(
+            title = dataSection,
+            entries = listOf(
+                searchEntry(
+                    "export",
+                    stringResource(R.string.settings_export),
+                    stringResource(R.string.settings_export_sub),
+                    dataSection,
+                ),
+                searchEntry(
+                    "import",
+                    stringResource(R.string.settings_import),
+                    stringResource(R.string.settings_import_sub),
+                    dataSection,
+                ),
+            ),
+        ),
+        null to SettingsSearchSection(
+            title = aboutSection,
+            entries = listOf(
+                searchEntry(
+                    "about",
+                    stringResource(R.string.settings_about),
+                    "Version " + versionName,
+                    aboutSection,
+                ),
+            ),
+        ),
+    )
+
+    val visible = searchSettings(sections.map { it.second }, query)
+    // Bereich eines sichtbaren Abschnitts (fuer den Reset-Knopf).
+    val resetTargets = sections.associate { (area, section) -> section.title to area }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -4043,120 +4572,264 @@ private fun SettingsOverview(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        SettingsSectionLabel(stringResource(R.string.settings_section_connection))
-        SettingsGroup {
-            SettingsOverviewRow(
-                icon = Icons.Default.Settings,
-                title = stringResource(R.string.settings_profiles),
-                subtitle = if (active.isComplete) {
-                    active.name + "  ·  " + active.host + ":" + active.port
-                } else {
-                    active.name + "  ·  " + stringResource(R.string.settings_profiles_not_setup)
-                },
-                onClick = { onOpenPage(SettingsDestination.PROFILE) },
-            )
-            SettingsGroupDivider()
-            SettingsOverviewRow(
-                icon = Icons.Default.Refresh,
-                title = stringResource(R.string.settings_test_connection),
-                subtitle = stringResource(R.string.settings_test_connection_sub),
-                enabled = !busy,
-                onClick = onTestConnection,
-                trailing = if (busy) {
-                    {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
+        // G1: Suchfeld ueber den Bereichen. Filtert Titel, Untertitel, Bereich.
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text(stringResource(R.string.settings_search)) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.settings_search_clear),
                         )
                     }
-                } else {
-                    null
-                },
+                }
+            },
+        )
+
+        if (visible.isEmpty()) {
+            Text(
+                text = stringResource(R.string.settings_search_empty),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        SettingsSectionLabel(stringResource(R.string.settings_section_app))
-        SettingsGroup {
-            SettingsOverviewRow(
-                icon = Icons.Default.Star,
-                title = stringResource(R.string.settings_appearance),
-                subtitle = themeModeLabel(settings.themeMode),
-                onClick = { onOpenPage(SettingsDestination.APPEARANCE) },
-            )
-            SettingsGroupDivider()
-            SettingsOverviewRow(
-                icon = Icons.Default.Refresh,
-                title = stringResource(R.string.settings_refresh),
-                subtitle = stringResource(R.string.settings_refresh_value, settings.refreshSeconds),
-                onClick = { onOpenPage(SettingsDestination.APPEARANCE) },
-            )
-        }
+        visible.forEach { section ->
+            val area = resetTargets[section.title]
+            SettingsSectionLabel(section.title)
+            SettingsGroup {
+                section.entries.forEachIndexed { index, item ->
+                    if (index > 0) SettingsGroupDivider()
+                    when (item.key) {
+                        "profiles" -> SettingsOverviewRow(
+                            icon = Icons.Default.Settings,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            onClick = { onOpenPage(SettingsDestination.PROFILE) },
+                        )
 
-        SettingsSectionLabel(stringResource(R.string.settings_section_control))
-        SettingsGroup {
-            SettingsSwitchRow(
-                icon = Icons.Default.Build,
-                title = stringResource(R.string.settings_online_card),
-                subtitle = if (settings.onlineCard) {
-                    stringResource(R.string.settings_online_card_on)
-                } else {
-                    stringResource(R.string.settings_online_card_off)
-                },
-                checked = settings.onlineCard,
-                enabled = true,
-                onCheckedChange = { onSettingsChange(settings.copy(onlineCard = it)) },
-            )
-            SettingsGroupDivider()
-            SettingsSwitchRow(
-                icon = Icons.Default.Settings,
-                title = stringResource(R.string.settings_simulation),
-                subtitle = when (simulate) {
-                    true -> stringResource(R.string.settings_simulation_on)
-                    false -> stringResource(R.string.settings_simulation_off)
-                    null -> stringResource(R.string.settings_simulation_unknown)
-                },
-                checked = simulate == true,
-                enabled = simulate != null,
-                onCheckedChange = onModeChange,
-            )
-            SettingsGroupDivider()
-            SettingsOverviewRow(
-                icon = Icons.Default.Home,
-                title = stringResource(R.string.settings_webui),
-                subtitle = active.base,
-                onClick = onOpenWeb,
-            )
-        }
+                        "test_connection" -> SettingsOverviewRow(
+                            icon = Icons.Default.Refresh,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            enabled = !busy,
+                            onClick = onTestConnection,
+                            trailing = if (busy) {
+                                {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                        )
 
-        SettingsSectionLabel(stringResource(R.string.settings_section_history))
-        SettingsGroup {
-            SettingsOverviewRow(
-                icon = Icons.AutoMirrored.Filled.List,
-                title = stringResource(R.string.settings_history),
-                subtitle = stringResource(R.string.settings_history_value, settings.historyLines),
-                onClick = { onOpenPage(SettingsDestination.HISTORY) },
-            )
-        }
+                        "appearance", "refresh" -> SettingsOverviewRow(
+                            icon = if (item.key == "appearance") {
+                                Icons.Default.Star
+                            } else {
+                                Icons.Default.Refresh
+                            },
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            onClick = { onOpenPage(SettingsDestination.APPEARANCE) },
+                        )
 
-        SettingsSectionLabel("UPDATES")
-        SettingsGroup {
-            SettingsOverviewRow(
-                icon = Icons.Default.Refresh,
-                title = "Aktualisierungen",
-                subtitle = "GitHub Releases · PC Steuerung " + versionName,
-                onClick = { onOpenPage(SettingsDestination.UPDATES) },
-            )
-        }
+                        "online_card" -> SettingsSwitchRow(
+                            icon = Icons.Default.Build,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            checked = settings.onlineCard,
+                            enabled = true,
+                            onCheckedChange = {
+                                onSettingsChange(settings.copy(onlineCard = it))
+                            },
+                        )
 
-        SettingsSectionLabel("WEITERE INFORMATIONEN")
-        SettingsGroup {
-            SettingsOverviewRow(
-                icon = Icons.Default.Info,
-                title = "Über die App",
-                subtitle = "Version " + versionName,
-                onClick = { onOpenPage(SettingsDestination.ABOUT) },
-            )
+                        "simulation" -> SettingsSwitchRow(
+                            icon = Icons.Default.Settings,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            checked = simulate == true,
+                            enabled = simulate != null,
+                            onCheckedChange = onModeChange,
+                        )
+
+                        "webui" -> SettingsOverviewRow(
+                            icon = Icons.Default.Home,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            onClick = onOpenWeb,
+                        )
+
+                        "plugin_auto_close" -> SettingsSwitchRow(
+                            icon = Icons.Default.Build,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            // Der Schalter heisst "Manager offen lassen".
+                            checked = !settings.pluginAutoClose,
+                            enabled = true,
+                            onCheckedChange = { keepOpen ->
+                                onSettingsChange(settings.copy(pluginAutoClose = !keepOpen))
+                            },
+                        )
+
+                        "history" -> SettingsOverviewRow(
+                            icon = Icons.AutoMirrored.Filled.List,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            onClick = { onOpenPage(SettingsDestination.HISTORY) },
+                        )
+
+                        "updates" -> SettingsOverviewRow(
+                            icon = Icons.Default.Refresh,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            onClick = { onOpenPage(SettingsDestination.UPDATES) },
+                        )
+
+                        // G3: Inhalt vorbereiten, dann den System-Dialog oeffnen.
+                        "export" -> SettingsOverviewRow(
+                            icon = Icons.Default.Star,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            showChevron = false,
+                            onClick = {
+                                pendingExport = settingsExportJson(
+                                    settings = settings,
+                                    modules = modules,
+                                    profiles = profiles,
+                                    exportedAt = LocalDateTime.now()
+                                        .format(
+                                            DateTimeFormatter.ofPattern(
+                                                "yyyy-MM-dd HH:mm:ss",
+                                                Locale.GERMANY,
+                                            ),
+                                        ),
+                                )
+                                fileNotice = 0
+                                exportLauncher.launch(settingsExportFileName())
+                            },
+                        )
+
+                        "import" -> SettingsOverviewRow(
+                            icon = Icons.Default.Refresh,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            showChevron = false,
+                            onClick = {
+                                fileNotice = 0
+                                // Viele Dateimanager melden JSON als octet-stream,
+                                // deshalb bewusst alle Dateien anbieten.
+                                importLauncher.launch(arrayOf("*/*"))
+                            },
+                        )
+
+                        "about" -> SettingsOverviewRow(
+                            icon = Icons.Default.Info,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            onClick = { onOpenPage(SettingsDestination.ABOUT) },
+                        )
+
+                        else -> Unit
+                    }
+                }
+                // G2: Zuruecksetzen je Bereich - nur Felder dieses Bereichs.
+                if (area != null) {
+                    SettingsGroupDivider()
+                    SettingsResetRow(enabled = !busy, onClick = { resetArea = area })
+                }
+            }
+            // Kurze Rueckmeldung im Bereich: Reset bzw. Export/Import.
+            if (area != null && resetNotice == area) {
+                Text(
+                    text = stringResource(R.string.settings_reset_done, settingsAreaLabel(area)),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (section.title == dataSection && fileNotice != 0) {
+                Text(
+                    text = stringResource(fileNotice),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
+    }
+
+    // G2: Bestaetigung vor dem Zuruecksetzen (AlertDialog wie im Bestand).
+    resetArea?.let { area ->
+        AlertDialog(
+            onDismissRequest = { resetArea = null },
+            title = {
+                Text(stringResource(R.string.settings_reset_title, settingsAreaLabel(area)))
+            },
+            text = { Text(stringResource(R.string.settings_reset_text, settingsAreaLabel(area))) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        // Nur die Felder dieses Bereichs, sofort speichern.
+                        onSettingsChange(resetSettingsArea(settings, area))
+                        resetNotice = area
+                        fileNotice = 0
+                        resetArea = null
+                    },
+                ) { Text(stringResource(R.string.settings_reset)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { resetArea = null }) {
+                    Text(stringResource(R.string.settings_reset_cancel))
+                }
+            },
+        )
+    }
+
+    // G3: Import erst nach Bestaetigung uebernehmen (Profile bleiben aussen vor).
+    pendingImport?.let { imported ->
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text(stringResource(R.string.settings_import_title)) },
+            text = { Text(stringResource(R.string.settings_import_text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onSettingsChange(imported.settings)
+                        onModulesChange(imported.modules)
+                        fileNotice = R.string.settings_import_done
+                        pendingImport = null
+                    },
+                ) { Text(stringResource(R.string.settings_import_apply)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImport = null }) {
+                    Text(stringResource(R.string.settings_reset_cancel))
+                }
+            },
+        )
+    }
+
+    // G3: Die Datei war keine Einstellungsdatei (oder nicht lesbar).
+    importError?.let { text ->
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text(stringResource(R.string.settings_import)) },
+            text = { Text(text) },
+            confirmButton = {
+                TextButton(onClick = { importError = null }) {
+                    Text(stringResource(R.string.games_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -4244,6 +4917,8 @@ private fun SettingsOverviewRow(
     onClick: () -> Unit,
     enabled: Boolean = true,
     trailing: (@Composable () -> Unit)? = null,
+    /** false fuer reine Aktionen (Export/Import): kein Pfeil nach rechts. */
+    showChevron: Boolean = true,
 ) {
     Row(
         modifier = Modifier
@@ -4285,7 +4960,7 @@ private fun SettingsOverviewRow(
         Spacer(modifier = Modifier.width(8.dp))
         if (trailing != null) {
             trailing()
-        } else {
+        } else if (showChevron) {
             Text(
                 text = "›",
                 fontSize = 28.sp,
@@ -4294,6 +4969,32 @@ private fun SettingsOverviewRow(
             )
         }
     }
+}
+
+/**
+ * Zeile "Zuruecksetzen" am Ende eines Bereichs (Phase G2). Der Knopf oeffnet
+ * nur den Bestaetigungsdialog; gesetzt wird in [resetSettingsArea].
+ */
+@Composable
+private fun SettingsResetRow(enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = onClick, enabled = enabled) {
+            Text(stringResource(R.string.settings_reset), fontSize = 13.sp)
+        }
+    }
+}
+
+/** Deutscher Name eines Einstellungs-Bereichs (Dialog und Rueckmeldung). */
+@Composable
+private fun settingsAreaLabel(area: SettingsArea): String = when (area) {
+    SettingsArea.APPEARANCE -> stringResource(R.string.settings_area_appearance)
+    SettingsArea.CONTROL -> stringResource(R.string.settings_area_control)
+    SettingsArea.HISTORY -> stringResource(R.string.settings_area_history)
+    SettingsArea.PLUGINS -> stringResource(R.string.settings_area_plugins)
 }
 
 @Composable

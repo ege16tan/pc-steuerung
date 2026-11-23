@@ -33,7 +33,6 @@
     <string name="settings_profiles_not_setup">Noch nicht eingerichtet</string>
     <string name="settings_test_connection">Verbindung testen</string>
     <string name="settings_test_connection_sub">Erreichbarkeit des aktiven PCs prüfen</string>
-    <string name="settings_section_app">APP-OPTIONEN</string>
     <string name="settings_appearance">Darstellung</string>
     <string name="settings_refresh">Status-Aktualisierung</string>
     <string name="settings_refresh_value">Alle %1$d Sekunden</string>
@@ -55,6 +54,44 @@
     <string name="settings_history_value">%1$d Zeilen</string>
     <string name="settings_history_hint">So viele Zeilen lädt die App aus dem Log des Agenten (GET /log). Mehr Zeilen brauchen mehr Daten und etwas länger beim Laden.</string>
     <string name="settings_history_rotate">Der Agent rotiert die Logdatei selbst: Ist agent.log voll, wird sie zu agent.log.1 und eine neue agent.log beginnt. Gelöscht wird dabei nichts – ältere Zeilen stehen weiter in agent.log.1.</string>
+
+    <!-- Einstellungen Phase G: Suche, Zuruecksetzen je Bereich, Export/Import -->
+    <string name="settings_search">Einstellungen durchsuchen</string>
+    <string name="settings_search_clear">Suche löschen</string>
+    <string name="settings_search_empty">Keine Treffer.</string>
+    <string name="settings_section_appearance">DARSTELLUNG</string>
+    <string name="settings_section_plugins">PLUGINS</string>
+    <string name="settings_section_updates">UPDATES</string>
+    <string name="settings_updates">Aktualisierungen</string>
+    <string name="settings_section_data">SICHERN UND WIEDERHERSTELLEN</string>
+    <string name="settings_section_about">WEITERE INFORMATIONEN</string>
+    <string name="settings_about">Über die App</string>
+    <!-- Ein Knopf je Bereich; der Dialog erklaert, was zurueckgesetzt wird. -->
+    <string name="settings_reset">Zurücksetzen</string>
+    <string name="settings_reset_title">%1$s zurücksetzen?</string>
+    <string name="settings_reset_text">Nur die Einstellungen im Bereich „%1$s“ werden auf die Standardwerte gesetzt. Andere Bereiche und die PC-Profile bleiben unverändert.</string>
+    <string name="settings_reset_done">%1$s: Standardwerte wiederhergestellt.</string>
+    <string name="settings_reset_cancel">Abbrechen</string>
+    <string name="settings_area_appearance">Darstellung</string>
+    <string name="settings_area_control">Steuerung</string>
+    <string name="settings_area_history">Verlauf</string>
+    <string name="settings_area_plugins">Plugins</string>
+    <!-- Export/Import: JSON ohne Zugangsdaten, Profile bleiben aussen vor. -->
+    <string name="settings_export">Einstellungen exportieren</string>
+    <string name="settings_export_sub">JSON-Datei ohne Zugangsdaten</string>
+    <string name="settings_import">Einstellungen importieren</string>
+    <string name="settings_import_sub">JSON-Datei übernehmen (ohne Profile)</string>
+    <string name="settings_export_done">Einstellungen exportiert.</string>
+    <string name="settings_export_cancelled">Export abgebrochen.</string>
+    <string name="settings_export_failed">Export fehlgeschlagen.</string>
+    <string name="settings_import_cancelled">Import abgebrochen.</string>
+    <string name="settings_import_unreadable">Die Datei konnte nicht gelesen werden.</string>
+    <string name="settings_import_invalid">Die Datei ist keine PC-Steuerung-Einstellungsdatei.</string>
+    <string name="settings_import_version">Die Datei stammt aus einer anderen App-Version und wird nicht importiert.</string>
+    <string name="settings_import_title">Einstellungen importieren?</string>
+    <string name="settings_import_text">Übernommen werden Einstellungen und Module. Profile enthalten Zugangsdaten und werden nicht importiert.</string>
+    <string name="settings_import_apply">Importieren</string>
+    <string name="settings_import_done">Einstellungen importiert.</string>
 
     <!-- Plugins des PC-Agenten (Markt+) -->
     <string name="plugins_section_title">PLUGINS AUF DEM PC</string>
@@ -86,6 +123,18 @@
     <string name="plugins_auto_close">Manager offen lassen</string>
     <string name="plugins_auto_close_on">An – die Detailseite bleibt nach dem Start eines Plugins offen</string>
     <string name="plugins_auto_close_off">Aus – nach dem Start geht es zurueck zur Plugin-Uebersicht</string>
+    <!-- Plugin-Einstellungen aus dem Manifest-Schema (GET/POST /plugins/{id}/settings) -->
+    <string name="plugins_settings_title">EINSTELLUNGEN</string>
+    <string name="plugins_settings_hint">Diese Werte liest das Plugin über pc.settings().</string>
+    <string name="plugins_settings_save">Speichern</string>
+    <string name="plugins_settings_saved">Einstellungen gespeichert.</string>
+    <string name="plugins_settings_rejected">Der Agent hat die Eingaben abgelehnt (HTTP %1$d).</string>
+    <string name="plugins_settings_rejected_plain">Der Agent hat die Eingaben abgelehnt.</string>
+    <string name="plugins_settings_invalid">Bitte die markierten Zahlenfelder prüfen.</string>
+    <string name="plugins_settings_error_empty">Bitte einen Wert eingeben.</string>
+    <string name="plugins_settings_error_number">Bitte eine Zahl eingeben.</string>
+    <string name="plugins_settings_error_min">Wert ist zu klein (min. %1$s).</string>
+    <string name="plugins_settings_error_max">Wert ist zu groß (max. %1$s).</string>
 
     <!-- Kachel-Startbildschirm (Home) -->
     <string name="home_title">PC Steuerung</string>
