@@ -7,6 +7,7 @@
 //! POST /wake, POST /ping, GET /events, GET /log,
 //! GET /plugins, POST /plugins/{id}/start, POST /plugins/{id}/stop,
 //! GET /plugins/{id}/output,
+//! GET/POST /plugins/{id}/settings (Einstellungen aus dem Manifest, Phase G4),
 //! GET /games, POST /games/scan, GET/POST /game-config,
 //! GET /steam, GET /downloads (Steam, nur Lesen),
 //! GET/POST /routines, DELETE /routines/{id}, POST /routines/{id}/run,
@@ -974,6 +975,61 @@ pub async fn plugin_bundle(
     match crate::jsplugins::bundle_of(&app, &id) {
         Ok(bundle) => Json(bundle).into_response(),
         Err(message) => error_response(StatusCode::NOT_FOUND, message),
+    }
+}
+
+/// GET /plugins/{id}/settings — Schema und aktuelle Werte (Phase G4).
+///
+/// Lesen darf jeder Angemeldete (auch `viewer`); das Manifest und die Werte
+/// sind keine Geheimnisse.
+pub async fn plugin_settings_get(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: Auth,
+) -> Response {
+    match crate::jsplugins::describe_settings(&app, &id) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => error_response(StatusCode::NOT_FOUND, message),
+    }
+}
+
+/// Body fuer `POST /plugins/{id}/settings`.
+#[derive(Debug, Deserialize)]
+pub struct PluginSettingsRequest {
+    #[serde(default)]
+    pub values: serde_json::Map<String, Value>,
+}
+
+/// POST /plugins/{id}/settings — Werte pruefen und speichern (nur `admin`).
+///
+/// Unbekannter Schluessel -> 400, ungueltiger Wert -> 422, unbekanntes
+/// Plugin -> 404. Die Antwort enthaelt immer den vollstaendigen Satz.
+pub async fn plugin_settings_set(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: WriteAuth,
+    Json(body): Json<PluginSettingsRequest>,
+) -> Response {
+    match crate::jsplugins::save_values(&app, &id, &body.values) {
+        Ok(values) => {
+            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            log_event(
+                &app,
+                &mut guard,
+                "plugin",
+                &format!("{id}: Einstellungen gespeichert"),
+                true,
+            );
+            Json(json!({ "ok": true, "values": values })).into_response()
+        }
+        Err(problem) => {
+            let status = match problem {
+                crate::jsplugins::SettingsProblem::NotFound(_) => StatusCode::NOT_FOUND,
+                crate::jsplugins::SettingsProblem::UnknownKey(_) => StatusCode::BAD_REQUEST,
+                crate::jsplugins::SettingsProblem::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            };
+            error_response(status, problem.message().to_string())
+        }
     }
 }
 

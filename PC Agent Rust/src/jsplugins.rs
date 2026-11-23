@@ -34,7 +34,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use boa_engine::{Context as JsContext, JsString, JsValue, NativeFunction, Source};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::app::App;
 use crate::journal::log_event;
@@ -50,6 +50,19 @@ pub const DEFAULT_INTERVAL_MS: u64 = 1000;
 
 /// Standard-Timeout ohne Abruf der Ausgabe (Pflichtregel D2).
 pub const DEFAULT_IDLE_TIMEOUT_S: u64 = 300;
+
+/// Datei mit den gespeicherten Einstellungen eines Plugins (Phase G4).
+/// Sie wird bewusst **nicht** mit `GET /plugins/{id}/bundle` ausgeliefert.
+pub const SETTINGS_FILE: &str = "settings.json";
+
+/// Mehr Einstellungsfelder sind nicht sinnvoll (Rest wird verworfen).
+pub const SETTINGS_MAX_FIELDS: usize = 20;
+
+/// Laengster erlaubter Schluessel eines Einstellungsfelds.
+pub const SETTINGS_KEY_MAX: usize = 40;
+
+/// Laengster erlaubter Textwert.
+pub const SETTINGS_TEXT_MAX: usize = 500;
 
 /// Takt der Idle-Pruefung im Agenten.
 const IDLE_CHECK: Duration = Duration::from_secs(30);
@@ -82,6 +95,11 @@ pub struct Manifest {
     pub idle_timeout_s: u64,
     /// Vom Agenten mitgeliefert (wird beim ersten Start geschrieben).
     pub builtin: bool,
+    /// Einstellungs-Schema (Phase G4), **ungeprueft** gelesen: ein kaputtes
+    /// Feld darf das Plugin nicht unbrauchbar machen. Geprueft wird erst in
+    /// [`check_schema`]; verworfene Felder landen im Journal.
+    #[serde(default, deserialize_with = "flexible_list", skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<Value>,
 }
 
 impl Default for Manifest {
@@ -96,6 +114,7 @@ impl Default for Manifest {
             interval_ms: DEFAULT_INTERVAL_MS,
             idle_timeout_s: DEFAULT_IDLE_TIMEOUT_S,
             builtin: false,
+            settings: Vec::new(),
         }
     }
 }
@@ -121,6 +140,21 @@ fn safe_component(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
 }
 
+/// Liest `settings` als Liste. Ein einzelnes Objekt wird zur Ein-Feld-Liste,
+/// alles andere (Text, Zahl, `null`) landet als Eintrag bzw. bleibt leer –
+/// ein kaputtes Schema darf das ganze Manifest nicht unlesbar machen.
+fn flexible_list<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(match value {
+        Value::Array(items) => items,
+        Value::Null => Vec::new(),
+        other => vec![other],
+    })
+}
+
 /// Paket eines Plugins: Manifest plus Dateien (JSON statt ZIP, damit der Agent
 /// keine zusatzliche Crate braucht und das Handy es leicht nachladen kann).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,6 +170,9 @@ pub struct Bundle {
     /// Siehe [`Manifest::idle_timeout_s`]; Teil des Pakets, damit der Marktplatz
     /// den Wert mitliefern kann.
     pub idle_timeout_s: u64,
+    /// Einstellungs-Schema (Phase G4), ungeprueft wie im Manifest.
+    #[serde(default, deserialize_with = "flexible_list", skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<Value>,
     /// Pfad (relativ) -> Inhalt.
     pub files: HashMap<String, String>,
 }
@@ -151,6 +188,7 @@ impl Default for Bundle {
             permissions: Vec::new(),
             interval_ms: DEFAULT_INTERVAL_MS,
             idle_timeout_s: DEFAULT_IDLE_TIMEOUT_S,
+            settings: Vec::new(),
             files: HashMap::new(),
         }
     }
@@ -169,6 +207,7 @@ impl Bundle {
             interval_ms: self.interval_ms,
             idle_timeout_s: self.idle_timeout_s,
             builtin: false,
+            settings: self.settings.clone(),
         }
     }
 }
@@ -284,6 +323,7 @@ fn game_optimizer_bundle() -> Bundle {
         // Laeuft absichtlich bis zum Stop: ein Timeout wuerde mitten im Spiel
         // den Energieplan zuruecksetzen.
         idle_timeout_s: 0,
+        settings: Vec::new(),
         files: HashMap::from([(
             DEFAULT_ENTRY.to_string(),
             GAME_OPTIMIZER_JS.to_string(),
@@ -302,6 +342,7 @@ fn system_monitor_bundle() -> Bundle {
         permissions: vec!["log".to_string(), "metrics".to_string()],
         interval_ms: 5000,
         idle_timeout_s: DEFAULT_IDLE_TIMEOUT_S,
+        settings: Vec::new(),
         files: HashMap::from([(
             DEFAULT_ENTRY.to_string(),
             SYSTEM_MONITOR_JS.to_string(),
@@ -434,7 +475,7 @@ pub fn bundle_of(app: &App, id: &str) -> Result<Bundle, String> {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if name == "plugin.json" || !path.is_file() {
+        if name == "plugin.json" || name == SETTINGS_FILE || !path.is_file() {
             continue;
         }
         let Ok(content) = std::fs::read_to_string(&path) else {
@@ -451,6 +492,7 @@ pub fn bundle_of(app: &App, id: &str) -> Result<Bundle, String> {
         permissions: manifest.permissions,
         interval_ms: manifest.interval_ms,
         idle_timeout_s: manifest.idle_timeout_s,
+        settings: Vec::new(),
         files,
     })
 }
@@ -469,6 +511,491 @@ pub fn uninstall(app: &App, id: &str) -> Result<(), String> {
     state.output.remove(id);
     state.status.remove(id);
     Ok(())
+}
+
+// ---------------- Einstellungen (Phase G4) ----------------
+//
+// Das Manifest darf ein Feld `settings` mitbringen:
+//
+// ```json
+// "settings": [
+//   {"key": "refresh_s", "label": "Aktualisierung (s)", "type": "number", "default": 5, "min": 1, "max": 600},
+//   {"key": "mode", "label": "Modus", "type": "select", "default": "auto", "options": ["auto", "manuell"]},
+//   {"key": "notify", "label": "Benachrichtigen", "type": "switch", "default": true}
+// ]
+// ```
+//
+// Die Werte liegen in `<Datenordner>\plugins\<id>\settings.json` als flaches
+// Objekt `{"key": wert}`. Ein kaputtes Schema macht das Plugin **nicht**
+// unbrauchbar: das betroffene Feld wird verworfen und der Grund landet im
+// Journal ([`report_schema_problems`]).
+
+/// Erlaubte Typen eines Einstellungsfelds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingType {
+    Text,
+    Number,
+    Switch,
+    Select,
+}
+
+impl SettingType {
+    /// Typ aus dem Manifest; unbekannte Typen ergeben `None` (Feld verwerfen).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "text" => Some(Self::Text),
+            "number" => Some(Self::Number),
+            "switch" => Some(Self::Switch),
+            "select" => Some(Self::Select),
+            _ => None,
+        }
+    }
+
+    /// Schreibweise im Manifest und in `GET /plugins/{id}/settings`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Number => "number",
+            Self::Switch => "switch",
+            Self::Select => "select",
+        }
+    }
+}
+
+/// Ein geprueftes Einstellungsfeld.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SettingField {
+    /// Schluessel in `settings.json` und in `pc.settings()`.
+    pub key: String,
+    /// Beschriftung in der Oberflaeche (nie leer).
+    pub label: String,
+    pub kind: SettingType,
+    /// Standardwert; passt immer zum Feld.
+    pub default: Value,
+    /// Nur bei `number`.
+    pub min: Option<f64>,
+    /// Nur bei `number`.
+    pub max: Option<f64>,
+    /// Nur bei `select`, mindestens eine Option.
+    pub options: Vec<String>,
+}
+
+/// Ergebnis der Schema-Pruefung: brauchbare Felder und Gruende fuer Verworfenes.
+#[derive(Clone, Debug, Default)]
+pub struct Schema {
+    pub fields: Vec<SettingField>,
+    /// Deutsche Texte fuer das Journal (leer = alles in Ordnung).
+    pub problems: Vec<String>,
+}
+
+/// Fehler beim Speichern von Einstellungen (die Endpunkte antworten 400/404/422).
+#[derive(Clone, Debug)]
+pub enum SettingsProblem {
+    /// Plugin ist nicht installiert.
+    NotFound(String),
+    /// Schluessel steht nicht im Schema.
+    UnknownKey(String),
+    /// Wert passt nicht zum Feld.
+    Invalid(String),
+}
+
+impl SettingsProblem {
+    /// Deutscher Text fuer die Antwort.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::NotFound(message) | Self::UnknownKey(message) | Self::Invalid(message) => message,
+        }
+    }
+}
+
+/// Zahl als JSON-Wert; ganze Zahlen bleiben ganz (`5` statt `5.0`).
+fn number_value(value: f64) -> Value {
+    if value.fract() == 0.0 && value.abs() < 9.0e15 {
+        Value::from(value as i64)
+    } else {
+        Value::from(value)
+    }
+}
+
+/// Standardwert, wenn das Manifest keinen (gueltigen) nennt.
+fn fallback_default(kind: SettingType, min: Option<f64>, options: &[String]) -> Value {
+    match kind {
+        SettingType::Text => Value::String(String::new()),
+        SettingType::Number => number_value(min.unwrap_or(0.0)),
+        SettingType::Switch => Value::Bool(false),
+        SettingType::Select => Value::String(options.first().cloned().unwrap_or_default()),
+    }
+}
+
+/// Prueft einen Wert gegen Typ, Grenzen und Optionen. `None` = ungueltig.
+fn coerce_value(
+    kind: SettingType,
+    min: Option<f64>,
+    max: Option<f64>,
+    options: &[String],
+    value: &Value,
+) -> Option<Value> {
+    match kind {
+        SettingType::Text => value
+            .as_str()
+            .filter(|text| text.chars().count() <= SETTINGS_TEXT_MAX)
+            .map(|text| Value::String(text.to_string())),
+        SettingType::Number => {
+            let number = value.as_f64()?;
+            if !number.is_finite() {
+                return None;
+            }
+            if min.is_some_and(|min| number < min) || max.is_some_and(|max| number > max) {
+                return None;
+            }
+            Some(number_value(number))
+        }
+        SettingType::Switch => value.as_bool().map(Value::Bool),
+        SettingType::Select => value
+            .as_str()
+            .filter(|text| options.iter().any(|option| option == text))
+            .map(|text| Value::String(text.to_string())),
+    }
+}
+
+/// Prueft einen Wert gegen ein geprueftes Feld (`None` = ungueltig).
+pub fn checked_value(field: &SettingField, value: &Value) -> Option<Value> {
+    coerce_value(field.kind, field.min, field.max, &field.options, value)
+}
+
+/// Liest eine optionale Zahl aus dem Manifest-Feld; falsche Typen sind Fehler.
+fn optional_number(obj: &Map<String, Value>, name: &str) -> Result<Option<f64>, String> {
+    match obj.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => match value.as_f64() {
+            Some(number) if number.is_finite() => Ok(Some(number)),
+            _ => Err(format!("'{name}' ist keine Zahl")),
+        },
+    }
+}
+
+/// Ein einzelnes Feld pruefen. `Err` = Feld verwerfen (Text fuer das Journal).
+fn parse_field(raw: &Value) -> Result<SettingField, String> {
+    let Some(obj) = raw.as_object() else {
+        return Err("Eintrag ist kein Objekt".to_string());
+    };
+    let key = obj
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        return Err("Key fehlt".to_string());
+    }
+    if key.len() > SETTINGS_KEY_MAX {
+        return Err(format!(
+            "Key '{key}' ist zu lang (hoechstens {SETTINGS_KEY_MAX} Zeichen)"
+        ));
+    }
+    if !key
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+    {
+        return Err(format!(
+            "Key '{key}' enthaelt unerlaubte Zeichen (nur a-z, 0-9, _)"
+        ));
+    }
+    let label = obj
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if label.is_empty() {
+        return Err(format!("Einstellung '{key}' hat keine Beschriftung"));
+    }
+    let type_text = obj.get("type").and_then(Value::as_str).unwrap_or_default();
+    let Some(kind) = SettingType::parse(type_text) else {
+        return Err(format!(
+            "Einstellung '{key}': Typ '{}' ist unbekannt",
+            type_text.trim()
+        ));
+    };
+    let min = optional_number(obj, "min").map_err(|error| format!("Einstellung '{key}': {error}"))?;
+    let max = optional_number(obj, "max").map_err(|error| format!("Einstellung '{key}': {error}"))?;
+    if kind != SettingType::Number && (min.is_some() || max.is_some()) {
+        return Err(format!(
+            "Einstellung '{key}': min/max gibt es nur bei 'number'"
+        ));
+    }
+    if let (Some(min), Some(max)) = (min, max) {
+        if min > max {
+            return Err(format!("Einstellung '{key}': min ist groesser als max"));
+        }
+    }
+
+    let mut options: Vec<String> = Vec::new();
+    if kind == SettingType::Select {
+        let Some(Value::Array(items)) = obj.get("options") else {
+            return Err(format!(
+                "Einstellung '{key}': 'select' braucht mindestens eine Option"
+            ));
+        };
+        for item in items {
+            let Some(text) = item.as_str().map(str::trim) else {
+                return Err(format!("Einstellung '{key}': jede Option muss Text sein"));
+            };
+            if text.is_empty() {
+                return Err(format!("Einstellung '{key}': leere Option"));
+            }
+            if options.iter().any(|known| known == text) {
+                return Err(format!("Einstellung '{key}': Option '{text}' ist doppelt"));
+            }
+            options.push(text.to_string());
+        }
+        if options.is_empty() {
+            return Err(format!(
+                "Einstellung '{key}': 'select' braucht mindestens eine Option"
+            ));
+        }
+    }
+
+    let default = match obj.get("default") {
+        None | Some(Value::Null) => fallback_default(kind, min, &options),
+        Some(value) => match coerce_value(kind, min, max, &options, value) {
+            Some(value) => value,
+            None => {
+                return Err(format!(
+                    "Einstellung '{key}': Standardwert passt nicht zum Feld"
+                ))
+            }
+        },
+    };
+
+    Ok(SettingField {
+        key,
+        label,
+        kind,
+        default,
+        min,
+        max,
+        options,
+    })
+}
+
+/// Prueft das Schema aus dem Manifest. Ungueltige Felder werden verworfen
+/// (nie Panik, nie Abbruch) und mit Begruendung in `problems` gemeldet.
+pub fn check_schema(raw: &[Value]) -> Schema {
+    let mut schema = Schema::default();
+    for (index, item) in raw.iter().enumerate() {
+        if schema.fields.len() >= SETTINGS_MAX_FIELDS {
+            schema.problems.push(format!(
+                "Mehr als {SETTINGS_MAX_FIELDS} Einstellungen; der Rest wird ignoriert"
+            ));
+            break;
+        }
+        match parse_field(item) {
+            Ok(field) => {
+                if schema.fields.iter().any(|known| known.key == field.key) {
+                    schema.problems.push(format!(
+                        "Einstellung '{}' verworfen: Key ist doppelt",
+                        field.key
+                    ));
+                    continue;
+                }
+                schema.fields.push(field);
+            }
+            Err(message) => {
+                schema
+                    .problems
+                    .push(format!("Feld {} verworfen: {message}", index + 1));
+            }
+        }
+    }
+    schema
+}
+
+/// Schema als JSON (nur die Felder, die zum Typ passen).
+pub fn schema_json(fields: &[SettingField]) -> Vec<Value> {
+    fields
+        .iter()
+        .map(|field| {
+            let mut entry = Map::new();
+            entry.insert("key".to_string(), Value::String(field.key.clone()));
+            entry.insert("label".to_string(), Value::String(field.label.clone()));
+            entry.insert(
+                "type".to_string(),
+                Value::String(field.kind.as_str().to_string()),
+            );
+            entry.insert("default".to_string(), field.default.clone());
+            if field.kind == SettingType::Number {
+                if let Some(min) = field.min {
+                    entry.insert("min".to_string(), number_value(min));
+                }
+                if let Some(max) = field.max {
+                    entry.insert("max".to_string(), number_value(max));
+                }
+            }
+            if field.kind == SettingType::Select {
+                entry.insert(
+                    "options".to_string(),
+                    Value::Array(
+                        field
+                            .options
+                            .iter()
+                            .map(|option| Value::String(option.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+            Value::Object(entry)
+        })
+        .collect()
+}
+
+/// Standardwerte aller Felder (das sind die Werte ohne `settings.json`).
+#[cfg(test)]
+fn default_values(fields: &[SettingField]) -> Map<String, Value> {
+    fields
+        .iter()
+        .map(|field| (field.key.clone(), field.default.clone()))
+        .collect()
+}
+
+/// Laedt gespeicherte Werte und faellt je Feld **still** auf den Standardwert
+/// zurueck, wenn Typ, Grenze oder Option nicht passen (`settings.json` ist
+/// eine Nutzerdatei, kein Vertrauensbeweis).
+pub fn resolve_values(fields: &[SettingField], raw: &Map<String, Value>) -> Map<String, Value> {
+    fields
+        .iter()
+        .map(|field| {
+            let value = raw
+                .get(&field.key)
+                .and_then(|value| checked_value(field, value))
+                .unwrap_or_else(|| field.default.clone());
+            (field.key.clone(), value)
+        })
+        .collect()
+}
+
+/// Strengere Pruefung fuer `POST /plugins/{id}/settings`: unbekannte
+/// Schluessel und ungueltige Werte sind Fehler (kein stiller Rueckfall).
+pub fn validate_values(
+    fields: &[SettingField],
+    raw: &Map<String, Value>,
+) -> Result<Map<String, Value>, SettingsProblem> {
+    for key in raw.keys() {
+        if !fields.iter().any(|field| &field.key == key) {
+            return Err(SettingsProblem::UnknownKey(format!(
+                "Unbekannter Einstellungsschluessel '{key}'"
+            )));
+        }
+    }
+    let mut out = Map::new();
+    for field in fields {
+        let value = match raw.get(&field.key) {
+            None => field.default.clone(),
+            Some(value) => match checked_value(field, value) {
+                Some(value) => value,
+                None => {
+                    return Err(SettingsProblem::Invalid(format!(
+                        "Wert fuer '{}' ({}) ist ungueltig",
+                        field.label, field.key
+                    )))
+                }
+            },
+        };
+        out.insert(field.key.clone(), value);
+    }
+    Ok(out)
+}
+
+/// Manifest eines **installierten** Plugins (nur Datenordner, dort liegen die
+/// bearbeitbaren Einstellungen).
+pub fn installed_manifest(app: &App, id: &str) -> Option<Manifest> {
+    if !safe_component(id) {
+        return None;
+    }
+    read_manifest(&plugin_dir(app, id))
+}
+
+/// Pfad der gespeicherten Einstellungen eines Plugins.
+pub fn settings_file(app: &App, id: &str) -> PathBuf {
+    plugin_dir(app, id).join(SETTINGS_FILE)
+}
+
+/// Werte eines Plugins (fehlende/kaputte Datei = Standardwerte).
+fn load_values_with(app: &App, id: &str, fields: &[SettingField]) -> Map<String, Value> {
+    if fields.is_empty() {
+        return Map::new();
+    }
+    let raw = std::fs::read_to_string(settings_file(app, id))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Map<String, Value>>(&text).ok())
+        .unwrap_or_default();
+    resolve_values(fields, &raw)
+}
+
+/// Aktuelle Werte fuer `pc.settings()` – ohne Schema ein leeres Objekt.
+pub fn load_values(app: &App, id: &str) -> Map<String, Value> {
+    let Some(manifest) = installed_manifest(app, id) else {
+        return Map::new();
+    };
+    let schema = check_schema(&manifest.settings);
+    load_values_with(app, id, &schema.fields)
+}
+
+/// Antwort von `GET /plugins/{id}/settings`: Schema und aktuelle Werte.
+pub fn describe_settings(app: &App, id: &str) -> Result<Value, String> {
+    let manifest =
+        installed_manifest(app, id).ok_or_else(|| format!("Plugin '{id}' ist unbekannt"))?;
+    let schema = check_schema(&manifest.settings);
+    let values = load_values_with(app, id, &schema.fields);
+    Ok(json!({
+        "id": manifest.id,
+        "schema": schema_json(&schema.fields),
+        "values": values,
+    }))
+}
+
+/// Prueft, speichert und liefert die Werte (`POST /plugins/{id}/settings`).
+pub fn save_values(
+    app: &App,
+    id: &str,
+    raw: &Map<String, Value>,
+) -> Result<Map<String, Value>, SettingsProblem> {
+    let manifest = installed_manifest(app, id)
+        .ok_or_else(|| SettingsProblem::NotFound(format!("Plugin '{id}' ist unbekannt")))?;
+    let schema = check_schema(&manifest.settings);
+    let values = validate_values(&schema.fields, raw)?;
+    let text = serde_json::to_string_pretty(&Value::Object(values.clone())).map_err(|error| {
+        SettingsProblem::Invalid(format!("Einstellungen konnten nicht geschrieben werden: {error}"))
+    })?;
+    std::fs::write(settings_file(app, id), text).map_err(|error| {
+        SettingsProblem::Invalid(format!("Einstellungen konnten nicht geschrieben werden: {error}"))
+    })?;
+    Ok(values)
+}
+
+/// Schreibt verworfene Schema-Felder ins Journal (eine Meldung je Problem).
+/// Ohne Probleme passiert nichts.
+pub fn report_schema_problems(app: &Arc<App>, manifest: &Manifest) {
+    let schema = check_schema(&manifest.settings);
+    if schema.problems.is_empty() {
+        return;
+    }
+    let name = if manifest.name.trim().is_empty() {
+        manifest.id.clone()
+    } else {
+        manifest.name.clone()
+    };
+    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    for problem in schema.problems {
+        log_event(app, &mut guard, "plugin", &format!("{name}: {problem}"), false);
+    }
+}
+
+/// Prueft beim Agenten-Start alle installierten Plugins (Phase G4).
+pub fn report_all_schema_problems(app: &Arc<App>) {
+    for manifest in manifests(app) {
+        report_schema_problems(app, &manifest);
+    }
 }
 
 // ---------------- Katalog ----------------
@@ -661,6 +1188,8 @@ pub fn start(app: &Arc<App>, id: &str, game: Option<String>, auto: bool) -> Resu
         .into_iter()
         .find(|manifest| manifest.id == id)
         .ok_or_else(|| format!("Plugin '{id}' ist unbekannt"))?;
+    // Verworfene Einstellungsfelder einmal beim Laden ins Journal (Phase G4).
+    report_schema_problems(app, &manifest);
     let dir = plugin_dir(app, &manifest.id);
     let entry = dir.join(&manifest.entry);
     let source = std::fs::read_to_string(&entry)
@@ -877,6 +1406,7 @@ const PRELUDE: &str = r#"
     scanGames: function () { return call("scanGames", []); },
     gameConfig: function () { return call("gameConfig", []); },
     steam: function () { return call("steam", []); },
+    settings: function () { return call("settings", []); },
     events: function () { return call("events", []); },
     killProcesses: function (names) { return call("killProcesses", [names]); },
     boost: function (exe) { return call("boost", [String(exe)]); },
@@ -965,11 +1495,17 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         "powerPlan" | "setPowerPlan" | "shutdown" | "abort" | "hibernate" => Some("power"),
         "games" | "scanGames" => Some("games"),
         "steam" => Some("steam"),
+        "settings" => Some("settings"),
         "killProcesses" | "boost" | "cleanMemory" | "isAdmin" => Some("process"),
         _ => None,
     };
     if let Some(needed) = permission {
         if !host.permissions.contains(needed) {
+            // Ohne Freigabe `settings` liefert `pc.settings()` bewusst ein
+            // leeres Objekt statt eines Fehlers (Phase G4).
+            if name == "settings" {
+                return Ok(json!({}));
+            }
             return Err(format!(
                 "Plugin '{}' darf '{}' nicht (Berechtigung '{}' fehlt)",
                 host.plugin_id, name, needed
@@ -1046,6 +1582,8 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         }
         // Steam nur lesen: Pfad, Millennium, Downloads, Tempo (src/steam.rs).
         "steam" => Ok(serde_json::to_value(crate::steam::status(app)).unwrap_or(Value::Null)),
+        // Einstellungen aus `settings.json` (Phase G4), nur lesend.
+        "settings" => Ok(Value::Object(load_values(app, &host.plugin_id))),
         "events" => {
             let guard = app.inner.lock().expect("Zustands-Sperre");
             Ok(json!(guard.events.iter().collect::<Vec<_>>()))
@@ -1359,4 +1897,360 @@ mod tests {
         assert_eq!(plain.idle_timeout_s, DEFAULT_IDLE_TIMEOUT_S);
         assert_eq!(plain.manifest().idle_timeout_s, DEFAULT_IDLE_TIMEOUT_S);
     }
+    // ---------------- Einstellungen (Phase G4) ----------------
+
+    /// Beispiel-Schema der Aufgabe: number, select, switch, text.
+    fn sample_schema() -> Vec<Value> {
+        vec![
+            json!({"key": "refresh_s", "label": "Aktualisierung (s)", "type": "number", "default": 5, "min": 1, "max": 600}),
+            json!({"key": "mode", "label": "Modus", "type": "select", "default": "auto", "options": ["auto", "manuell"]}),
+            json!({"key": "notify", "label": "Benachrichtigen", "type": "switch", "default": true}),
+            json!({"key": "name", "label": "Name", "type": "text", "default": ""}),
+        ]
+    }
+
+    /// Installiert ein Test-Plugin im Datenordner (ohne Agent-Start).
+    fn write_plugin(app: &App, id: &str, settings: Vec<Value>) {
+        let manifest = Manifest {
+            id: id.to_string(),
+            name: "Test".to_string(),
+            entry: DEFAULT_ENTRY.to_string(),
+            permissions: vec!["log".to_string()],
+            interval_ms: 0,
+            settings,
+            ..Default::default()
+        };
+        let dir = plugin_dir(app, id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plugin.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join(DEFAULT_ENTRY), "function activate() {}").unwrap();
+    }
+
+    #[test]
+    fn schema_akzeptiert_das_beispiel() {
+        let schema = check_schema(&sample_schema());
+        assert!(schema.problems.is_empty(), "{:?}", schema.problems);
+        assert_eq!(schema.fields.len(), 4);
+        let keys: Vec<&str> = schema.fields.iter().map(|field| field.key.as_str()).collect();
+        assert_eq!(keys, vec!["refresh_s", "mode", "notify", "name"]);
+        // Nur `number` traegt Grenzen, nur `select` Optionen.
+        assert_eq!(schema.fields[0].min, Some(1.0));
+        assert_eq!(schema.fields[0].max, Some(600.0));
+        assert_eq!(schema.fields[0].default, json!(5));
+        assert_eq!(schema.fields[1].options, vec!["auto", "manuell"]);
+        assert!(schema.fields[2].options.is_empty());
+        assert_eq!(schema.fields[2].default, json!(true));
+        // Die JSON-Ausgabe nennt nur die passenden Felder.
+        let json_schema = schema_json(&schema.fields);
+        assert_eq!(json_schema[0]["type"], json!("number"));
+        assert_eq!(json_schema[0]["min"], json!(1));
+        assert_eq!(json_schema[0]["max"], json!(600));
+        assert!(json_schema[1].get("min").is_none());
+        assert!(json_schema[2].get("options").is_none());
+        assert_eq!(json_schema[1]["options"], json!(["auto", "manuell"]));
+    }
+
+    #[test]
+    fn schema_verwirft_ungueltige_felder_ohne_absturz() {
+        let raw = vec![
+            json!({"key": "Refresh", "label": "Gross", "type": "number", "default": 1}),
+            json!({"key": "", "label": "Leer", "type": "text"}),
+            json!({"key": "ok", "label": "Gut", "type": "text", "default": "x"}),
+            json!({"key": "zahl", "label": "Unbekannter Typ", "type": "farbe", "default": 1}),
+            json!({"key": "ohne_label", "label": "  ", "type": "switch", "default": true}),
+            json!({"label": "Kein Key", "type": "text"}),
+            json!("kein objekt"),
+        ];
+        let schema = check_schema(&raw);
+        // Nur das saubere Feld bleibt uebrig, der Rest wird verworfen.
+        assert_eq!(schema.fields.len(), 1);
+        assert_eq!(schema.fields[0].key, "ok");
+        assert_eq!(schema.problems.len(), 6);
+        assert!(schema.problems.iter().all(|text| text.contains("verworfen")));
+    }
+
+
+    #[test]
+    fn schema_verwirft_doppelte_keys() {
+        let raw = vec![
+            json!({"key": "mode", "label": "Modus", "type": "text", "default": ""}),
+            json!({"key": "mode", "label": "Nochmal", "type": "text", "default": ""}),
+        ];
+        let schema = check_schema(&raw);
+        assert_eq!(schema.fields.len(), 1);
+        assert_eq!(schema.problems.len(), 1);
+        assert!(schema.problems[0].contains("doppelt"));
+    }
+
+    #[test]
+    fn select_ohne_optionen_ist_ungueltig() {
+        let ohne = vec![json!({"key": "mode", "label": "Modus", "type": "select", "default": "a"})];
+        let schema = check_schema(&ohne);
+        assert!(schema.fields.is_empty());
+        assert!(schema.problems[0].contains("Option"));
+
+        let leer = vec![json!({"key": "mode", "label": "Modus", "type": "select", "options": []})];
+        assert!(check_schema(&leer).fields.is_empty());
+
+        // Standardwert ausserhalb der Optionen ist widerspruechlich.
+        let fremd = vec![json!({
+            "key": "mode", "label": "Modus", "type": "select",
+            "options": ["auto"], "default": "hand"
+        })];
+        assert!(check_schema(&fremd).fields.is_empty());
+    }
+
+    #[test]
+    fn number_grenzen_werden_geprueft() {
+        // min/max nur bei `number`.
+        let text_mit_grenzen = vec![json!({"key": "name", "label": "Name", "type": "text", "min": 1})];
+        let schema = check_schema(&text_mit_grenzen);
+        assert!(schema.fields.is_empty());
+        assert!(schema.problems[0].contains("min/max"));
+
+        // min groesser als max.
+        let verdreht = vec![json!({
+            "key": "dauer", "label": "Dauer", "type": "number", "min": 10, "max": 5
+        })];
+        assert!(check_schema(&verdreht).fields.is_empty());
+
+        // Standardwert ausserhalb der Grenzen.
+        let zu_gross = vec![json!({
+            "key": "dauer", "label": "Dauer", "type": "number", "default": 900, "max": 600
+        })];
+        assert!(check_schema(&zu_gross).fields.is_empty());
+
+        // Ohne Standardwert gilt min (bzw. 0).
+        let ohne_default = vec![json!({"key": "dauer", "label": "Dauer", "type": "number", "min": 2})];
+        let schema = check_schema(&ohne_default);
+        assert_eq!(schema.fields[0].default, json!(2));
+        let bare = vec![json!({"key": "dauer", "label": "Dauer", "type": "number"})];
+        assert_eq!(check_schema(&bare).fields[0].default, json!(0));
+    }
+
+    #[test]
+    fn hoechstens_zwanzig_felder() {
+        let raw: Vec<Value> = (0..25)
+            .map(|index| json!({"key": format!("feld_{index}"), "label": "Feld", "type": "text"}))
+            .collect();
+        let schema = check_schema(&raw);
+        assert_eq!(schema.fields.len(), SETTINGS_MAX_FIELDS);
+        assert!(schema.problems.iter().any(|text| text.contains("Mehr als")));
+    }
+
+
+    #[test]
+    fn defaults_ohne_settings_datei() {
+        let (app, dir) = test_app("settings-defaults");
+        write_plugin(&app, "demo", sample_schema());
+        assert!(!settings_file(&app, "demo").exists());
+        let values = load_values(&app, "demo");
+        assert_eq!(values["refresh_s"], json!(5));
+        assert_eq!(values["mode"], json!("auto"));
+        assert_eq!(values["notify"], json!(true));
+        assert_eq!(values["name"], json!(""));
+        // Genau die Standardwerte aus dem Schema.
+        let schema = check_schema(&sample_schema());
+        assert_eq!(values, default_values(&schema.fields));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn falsche_typen_fallen_auf_den_default_zurueck() {
+        let (app, dir) = test_app("settings-fallback");
+        write_plugin(&app, "demo", sample_schema());
+        // Absichtlich falsche Typen und Werte ausserhalb der Grenzen.
+        std::fs::write(
+            settings_file(&app, "demo"),
+            json!({
+                "refresh_s": 9999,
+                "mode": "gibtesnicht",
+                "notify": "ja",
+                "name": 42,
+                "unbekannt": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let values = load_values(&app, "demo");
+        assert_eq!(values["refresh_s"], json!(5));
+        assert_eq!(values["mode"], json!("auto"));
+        assert_eq!(values["notify"], json!(true));
+        assert_eq!(values["name"], json!(""));
+        // Unbekannte Schluessel aus der Datei werden verworfen.
+        assert!(!values.contains_key("unbekannt"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn speichern_und_laden_ist_ein_rundlauf() {
+        let (app, dir) = test_app("settings-roundtrip");
+        write_plugin(&app, "demo", sample_schema());
+        let mut wanted = Map::new();
+        wanted.insert("refresh_s".to_string(), json!(30));
+        wanted.insert("mode".to_string(), json!("manuell"));
+        wanted.insert("notify".to_string(), json!(false));
+        wanted.insert("name".to_string(), json!("Wohnzimmer"));
+
+        let saved = save_values(&app, "demo", &wanted).unwrap();
+        assert_eq!(saved["refresh_s"], json!(30));
+        assert_eq!(saved["mode"], json!("manuell"));
+
+        // Datei liegt im Plugin-Ordner und ist ein flaches Objekt.
+        let text = std::fs::read_to_string(settings_file(&app, "demo")).unwrap();
+        let raw: Map<String, Value> = serde_json::from_str(&text).unwrap();
+        assert_eq!(raw.len(), 4);
+        assert_eq!(raw["name"], json!("Wohnzimmer"));
+
+        // Erneut laden liefert dieselben Werte (auch ueber den Endpunkt-Bauer).
+        assert_eq!(load_values(&app, "demo"), saved);
+        let described = describe_settings(&app, "demo").unwrap();
+        assert_eq!(described["values"]["refresh_s"], json!(30));
+        assert_eq!(described["schema"].as_array().unwrap().len(), 4);
+
+        // Teil-Update: fehlende Schluessel bleiben auf dem Standard.
+        let mut partial = Map::new();
+        partial.insert("notify".to_string(), json!(true));
+        let saved = save_values(&app, "demo", &partial).unwrap();
+        assert_eq!(saved["notify"], json!(true));
+        assert_eq!(saved["refresh_s"], json!(5));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+
+    #[test]
+    fn unbekannter_key_wird_abgelehnt() {
+        let (app, dir) = test_app("settings-unknown-key");
+        write_plugin(&app, "demo", sample_schema());
+        let mut wanted = Map::new();
+        wanted.insert("gibtesnicht".to_string(), json!(1));
+        let error = save_values(&app, "demo", &wanted).unwrap_err();
+        assert!(error.message().contains("Unbekannter Einstellungsschluessel"));
+        // Nichts geschrieben.
+        assert!(!settings_file(&app, "demo").exists());
+
+        // Bekannter Schluessel, falscher Typ.
+        let mut bad = Map::new();
+        bad.insert("refresh_s".to_string(), json!("viel"));
+        let error = save_values(&app, "demo", &bad).unwrap_err();
+        assert!(error.message().contains("ungueltig"));
+
+        // Unbekanntes Plugin.
+        let error = save_values(&app, "fehlt", &Map::new()).unwrap_err();
+        assert!(error.message().contains("ist unbekannt"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn einstellungen_stehen_nicht_im_paket() {
+        let (app, dir) = test_app("settings-bundle");
+        write_plugin(&app, "demo", sample_schema());
+        let mut wanted = Map::new();
+        wanted.insert("name".to_string(), json!("geheim"));
+        save_values(&app, "demo", &wanted).unwrap();
+        let bundle = bundle_of(&app, "demo").unwrap();
+        assert!(!bundle.files.contains_key(SETTINGS_FILE));
+        assert!(bundle.files.contains_key(DEFAULT_ENTRY));
+        // Deinstallieren loescht auch die Einstellungen.
+        uninstall(&app, "demo").unwrap();
+        assert!(!settings_file(&app, "demo").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn schema_ohne_settings_verhaelt_sich_wie_bisher() {
+        let (app, dir) = test_app("settings-none");
+        write_plugin(&app, "demo", Vec::new());
+        let described = describe_settings(&app, "demo").unwrap();
+        assert_eq!(described["schema"], json!([]));
+        assert_eq!(described["values"], json!({}));
+        assert!(load_values(&app, "demo").is_empty());
+        // Leerer Body ist erlaubt (nichts zu speichern).
+        assert!(save_values(&app, "demo", &Map::new()).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn kaputtes_settings_feld_macht_das_manifest_nicht_unlesbar() {
+        let (app, dir) = test_app("settings-broken-manifest");
+        let plugin_path = plugin_dir(&app, "demo");
+        std::fs::create_dir_all(&plugin_path).unwrap();
+        std::fs::write(plugin_path.join(DEFAULT_ENTRY), "function activate() {}").unwrap();
+
+        // `settings` ist hier kein Array, sondern ein einzelnes Feld.
+        std::fs::write(
+            plugin_path.join("plugin.json"),
+            r#"{"id":"demo","name":"Test","entry":"main.js","settings":{"key":"mode","label":"Modus","type":"text","default":"x"}}"#,
+        )
+        .unwrap();
+        let manifest = installed_manifest(&app, "demo").expect("Manifest bleibt lesbar");
+        assert_eq!(manifest.settings.len(), 1);
+        let schema = check_schema(&manifest.settings);
+        assert_eq!(schema.fields.len(), 1);
+        assert_eq!(load_values(&app, "demo")["mode"], json!("x"));
+
+        // Voelliger Unsinn wird zu einem Eintrag, der beim Pruefen verworfen wird.
+        std::fs::write(
+            plugin_path.join("plugin.json"),
+            r#"{"id":"demo","name":"Test","entry":"main.js","settings":"kaputt"}"#,
+        )
+        .unwrap();
+        let manifest = installed_manifest(&app, "demo").expect("Manifest bleibt lesbar");
+        let schema = check_schema(&manifest.settings);
+        assert!(schema.fields.is_empty());
+        assert_eq!(schema.problems.len(), 1);
+
+        // Ohne Feld ist alles wie bisher.
+        std::fs::write(
+            plugin_path.join("plugin.json"),
+            r#"{"id":"demo","name":"Test","entry":"main.js"}"#,
+        )
+        .unwrap();
+        let manifest = installed_manifest(&app, "demo").expect("Manifest bleibt lesbar");
+        assert!(manifest.settings.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pc_settings_ohne_freigabe_ist_leer() {
+        let (app, dir) = test_app("settings-deny");
+        write_plugin(&app, "x", sample_schema());
+        let host = HostCtx {
+            app: Arc::clone(&app),
+            plugin_id: "x".to_string(),
+            permissions: HashSet::new(),
+        };
+        // Ohne Freigabe kein Fehler, sondern ein leeres Objekt.
+        let value = host_call(&host, "settings", &Value::Null).unwrap();
+        assert_eq!(value, json!({}));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pc_settings_mit_freigabe_liefert_werte() {
+        let (app, dir) = test_app("settings-allow");
+        write_plugin(&app, "x", sample_schema());
+        let host = HostCtx {
+            app: Arc::clone(&app),
+            plugin_id: "x".to_string(),
+            permissions: HashSet::from(["settings".to_string()]),
+        };
+        let value = host_call(&host, "settings", &Value::Null).unwrap();
+        assert_eq!(value["refresh_s"], json!(5));
+        assert_eq!(value["mode"], json!("auto"));
+
+        // Nach dem Speichern liest das Plugin die neuen Werte.
+        let mut wanted = Map::new();
+        wanted.insert("refresh_s".to_string(), json!(120));
+        save_values(&app, "x", &wanted).unwrap();
+        let value = host_call(&host, "settings", &Value::Null).unwrap();
+        assert_eq!(value["refresh_s"], json!(120));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+
 }

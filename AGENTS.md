@@ -63,6 +63,7 @@ Status).
   `GET /app.css`, `GET /app.js`,
   `GET /plugins`, `POST /plugins/{id}/start?game=&auto=`, `POST /plugins/{id}/stop`,
   `GET /plugins/{id}/output?lines=`, `GET /plugins/{id}/bundle`,
+  `GET /plugins/{id}/settings`, `POST /plugins/{id}/settings`,
   `GET /plugin-catalog`, `POST /plugins/{id}/install`, `DELETE /plugins/{id}`,
   `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`,
   `GET /steam`, `GET /downloads`, `GET /warnings`, `POST /warnings`.
@@ -74,8 +75,13 @@ Status).
   `boa_engine::Context` und die freigegebenen Host-Funktionen (`pc.log`, `pc.metrics`,
   `pc.status`, `pc.powerPlan`/`setPowerPlan`, `pc.shutdown`/`abort`/`hibernate`,
   `pc.games`/`scanGames`/`gameConfig`, `pc.killProcesses`/`boost`/`cleanMemory`,
-  `pc.setStatus`, `pc.now`, `pc.isAdmin`) als `pc.*`; Dateien, Netzwerk und Prozesse
+  `pc.setStatus`, `pc.now`, `pc.isAdmin`, `pc.settings`) als `pc.*`; Dateien, Netzwerk und Prozesse
   bleiben unzugänglich. Aufrufe sind JSON über die Brücke `__pc_host(name, json)`.
+  Einstellungen je Plugin: Manifestfeld `settings` (Felder `text`/`number`/`switch`/`select`,
+  max. 20, Validierung beim Laden; ungültige Felder werden verworfen und geloggt),
+  Werte in `<Datenordner>\plugins\<id>\settings.json`, Freigabe `settings` für
+  `pc.settings()`, Endpunkte `GET/POST /plugins/{id}/settings` (POST nur `admin`,
+  `settings.json` ist nicht im Bundle).
   Lebenszyklus: `activate()` beim Start, `tick()` alle `interval_ms`, `stop()` beim
   Beenden; der vorherige Energieplan wird von `game-optimizer` zurückgesetzt.
   Verzeichnis: `<Datenordner>\plugins\<id>` (Datenordner hat Vorrang vor `<EXE>\plugins`).

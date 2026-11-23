@@ -35,6 +35,7 @@ Datei: `plugin-catalog/<id>.json`
 | `permissions`  | Freigegebene Host-Funktionen, siehe unten.                       |
 | `interval_ms`  | Takt fuer `tick()`; `0` = kein Takt.                             |
 | `idle_timeout_s`| Ohne Abruf der Ausgabe nach so vielen Sekunden beenden; `0` = nie. Ohne Angabe gelten 300 s (Pflichtregel D2). |
+| `settings`     | Optionales Einstellungs-Schema, siehe unten. Ohne den Block gibt es keine Einstellungen. |
 | `files`        | Dateiname -> Inhalt (alles, was das Plugin braucht).             |
 
 Neue Plugins bestehen also **nur aus Manifest und `files`** – der Agent legt
@@ -52,9 +53,56 @@ Dateien an. Es gibt keinen Installer und keine EXE.
 | `games`   | `pc.games()`, `pc.scanGames()`                        |
 | `process` | `pc.killProcesses()`, `pc.boost()`, `pc.cleanMemory()`, `pc.isAdmin()` |
 | `steam`   | `pc.steam()` (Steam-Pfad, Millennium, Downloads)       |
+| `settings`| `pc.settings()` (die eigenen Einstellungen als Objekt)  |
 
 Ohne passendes Recht wirft der Aufruf einen Fehler. Zusaetzlich gibt es immer
-`pc.setStatus(text)` und `pc.now()`.
+`pc.setStatus(text)` und `pc.now()`. Ausnahme: `pc.settings()` ohne Freigabe
+`settings` liefert ein **leeres Objekt** statt eines Fehlers.
+
+## Einstellungen (`settings`)
+
+Ein Plugin darf Felder beschreiben, die die App einstellen kann. Das Schema
+steht im Manifest/Paket, die Werte liegen im Plugin-Ordner in `settings.json`
+(flaches Objekt `{"key": wert}`) – diese Datei gehoert dem Nutzer, sie wird
+**nicht** mit `GET /plugins/<id>/bundle` exportiert und beim Deinstallieren
+mit geloescht.
+
+```json
+"settings": [
+  {"key": "refresh_s", "label": "Aktualisierung (s)", "type": "number", "default": 5, "min": 1, "max": 600},
+  {"key": "mode", "label": "Modus", "type": "select", "default": "auto", "options": ["auto", "manuell"]},
+  {"key": "notify", "label": "Benachrichtigen", "type": "switch", "default": true},
+  {"key": "name", "label": "Name", "type": "text", "default": ""}
+]
+```
+
+| Feld      | Bedeutung                                                        |
+| --------- | ---------------------------------------------------------------- |
+| `key`     | Schluessel in `settings.json` und `pc.settings()`; `[a-z0-9_]+`, eindeutig, hoechstens 20 Felder. |
+| `label`   | Beschriftung in der Oberflaeche, darf nicht leer sein.           |
+| `type`    | `text`, `number`, `switch` oder `select`.                        |
+| `default` | Standardwert; fehlt er, gilt `""`, `min`/`0`, `false` bzw. die erste Option. |
+| `min`/`max`| Nur bei `number` erlaubt.                                       |
+| `options` | Nur bei `select`, mindestens eine Option.                        |
+
+Ungueltige Felder (unbekannter Typ, doppelter Key, `select` ohne Option,
+`min`/`max` bei `text`, Standardwert ausserhalb der Grenzen) werden
+**verworfen**, nicht das ganze Plugin: der Agent schreibt den Grund beim
+Laden ins Journal. Manifeste ohne `settings` verhalten sich wie bisher.
+
+Der Code liest die Werte so:
+
+```js
+function tick() {
+  var settings = pc.settings();          // {} ohne Freigabe "settings"
+  pc.log("Aktualisierung: " + settings.refresh_s + " s, Modus " + settings.mode);
+}
+```
+
+Endpunkte (Agent): `GET /plugins/<id>/settings` liefert
+`{"schema": [...], "values": {...}}`, `POST /plugins/<id>/settings` mit
+`{"values": {...}}` prueft und speichert (nur `admin`; 400 bei unbekanntem
+Key, 422 bei ungueltigem Wert, 404 bei unbekanntem Plugin).
 
 ## Eintrag in `plugins.json`
 

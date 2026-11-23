@@ -72,6 +72,8 @@ fn main() {
     games::ensure_config(shared.as_ref());
     // JavaScript-Plugins beim ersten Start in den Datenordner schreiben.
     jsplugins::ensure_builtins(shared.as_ref());
+    // Verworfene Einstellungsfelder aus den Manifesten ins Journal (Phase G4).
+    jsplugins::report_all_schema_problems(&shared);
     // Warnregeln (Phase C): Standardregeln einmal anlegen.
     warnings::ensure_config(shared.as_ref());
 
@@ -200,6 +202,12 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/plugins/{id}/stop", axum::routing::post(routes::plugin_stop))
         .route("/plugins/{id}/output", axum::routing::get(routes::plugin_output))
         .route("/plugins/{id}/bundle", axum::routing::get(routes::plugin_bundle))
+        // Einstellungen aus dem Manifest (Phase G4).
+        .route(
+            "/plugins/{id}/settings",
+            axum::routing::get(routes::plugin_settings_get)
+                .post(routes::plugin_settings_set),
+        )
         .route("/games", axum::routing::get(routes::games_ep))
         .route("/games/scan", axum::routing::post(routes::games_scan_ep))
         .route(
