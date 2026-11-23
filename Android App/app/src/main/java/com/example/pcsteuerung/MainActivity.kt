@@ -59,6 +59,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
@@ -69,6 +70,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -107,6 +109,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
@@ -365,30 +369,8 @@ fun parseDownloads(body: String): List<SteamDownload> {
 
 // Routinen-Modell, Parser und Kurztexte liegen in `Routines.kt` (Phase E).
 
-/** Ein Ereignis aus `GET /events` (Ringpuffer, neueste zuerst). */
-data class AgentEvent(
-    val time: String = "",
-    val action: String = "",
-    val detail: String = "",
-    val ok: Boolean = true,
-)
-
-/** `GET /events` auswerten. */
-fun parseEvents(body: String): List<AgentEvent> {
-    if (body.startsWith("HTTP ")) return emptyList()
-    return runCatching {
-        val array = JSONObject(body).optJSONArray("events") ?: JSONArray()
-        (0 until array.length()).mapNotNull { index ->
-            val item = array.optJSONObject(index) ?: return@mapNotNull null
-            AgentEvent(
-                time = item.optString("time"),
-                action = item.optString("action"),
-                detail = item.optString("detail"),
-                ok = item.optBoolean("ok", true),
-            )
-        }
-    }.getOrDefault(emptyList())
-}
+// Ereignis-Modell (`AgentEvent`), Parser (`parseEvents`), Filter, Suche,
+// Zeitgruppen und Export-Text liegen in `History.kt` (Phase F).
 
 /** Prozentwert ohne Nachkommastellen ("43"). */
 private fun fmtPercent(value: Double): String =
@@ -1583,7 +1565,8 @@ fun MainApp(
     /** Log-Text des Agenten laden (`GET /log`, blockierend -> immer im IO-Kontext). */
     suspend fun fetchLogText(): String = withContext(Dispatchers.IO) {
         try {
-            httpCall(active.base, "/log?lines=200", active.authHeader())
+            // Aufbewahrung aus den Einstellungen (200/500/1000 Zeilen, Default 200).
+            httpCall(active.base, "/log?lines=${settings.historyLines}", active.authHeader())
         } catch (e: Exception) {
             "Nicht erreichbar: ${e.message ?: "Fehler"}"
         }
@@ -2220,6 +2203,7 @@ fun MainApp(
                         HistoryPage(
                             events = events,
                             logText = logText,
+                            pcName = active.name,
                             busy = busy,
                             onRefresh = {
                                 // Laedt Ereignisse und Log neu (siehe LaunchedEffect oben).
@@ -3578,6 +3562,7 @@ private enum class SettingsDestination(
 ) {
     PROFILE("PC-Profile", "Verbindung und Geräte verwalten"),
     APPEARANCE("Darstellung", "Farbschema und Aktualisierung"),
+    HISTORY("Verlauf", "Aufbewahrung und Logzeilen"),
     UPDATES("Aktualisierungen", "Neue App-Versionen laden"),
     ABOUT("Über die App", "Version und weitere Informationen"),
 }
@@ -3918,6 +3903,58 @@ private fun SettingsTab(
                     }
                 }
 
+                SettingsDestination.HISTORY -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        SettingsDetailCard {
+                            Text(
+                                stringResource(R.string.settings_history_lines),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(R.string.settings_history_hint),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                HISTORY_LINES_CHOICES.forEach { lines ->
+                                    FilterChip(
+                                        selected = settings.historyLines == lines,
+                                        onClick = {
+                                            onSettingsChange(settings.copy(historyLines = lines))
+                                        },
+                                        label = {
+                                            Text(
+                                                stringResource(R.string.settings_history_value, lines),
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                        }
+
+                        SettingsDetailCard {
+                            Text(
+                                stringResource(R.string.settings_history_rotate_title),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(R.string.settings_history_rotate),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                }
+
                 SettingsDestination.UPDATES -> {
                     Column(
                         modifier = Modifier
@@ -4088,6 +4125,16 @@ private fun SettingsOverview(
                 title = stringResource(R.string.settings_webui),
                 subtitle = active.base,
                 onClick = onOpenWeb,
+            )
+        }
+
+        SettingsSectionLabel(stringResource(R.string.settings_section_history))
+        SettingsGroup {
+            SettingsOverviewRow(
+                icon = Icons.AutoMirrored.Filled.List,
+                title = stringResource(R.string.settings_history),
+                subtitle = stringResource(R.string.settings_history_value, settings.historyLines),
+                onClick = { onOpenPage(SettingsDestination.HISTORY) },
             )
         }
 
@@ -6298,17 +6345,69 @@ private fun routineErrorText(error: RoutineValidationError): Int = when (error) 
 }
 
 /**
- * Aktionsseite Verlauf: Ereignisse aus `GET /events` und das Log des Agenten
- * (`GET /log`). Nur lesend; kopiert wird wie bisher ueber die Zwischenablage.
+ * Aktionsseite Verlauf (Phase F1/F2): Ereignisse aus `GET /events` mit
+ * Filter-Chips, Textsuche und Zeitgruppen ("Heute/Gestern/Aelter") sowie das
+ * Log des Agenten (`GET /log`). Nur lesend.
+ *
+ * - "Kopieren" legt wie bisher das Log in die Zwischenablage.
+ * - "Exportieren" speichert den **gefilterten** Verlauf ueber den
+ *   System-Dateidialog (`ActivityResultContracts.CreateDocument`).
+ * - Filter, Suche, Gruppen und der Export-Text sind reine Funktionen in
+ *   `History.kt` (Unit-Tests in `HistoryTest.kt`), kein Hintergrund-Takt.
  */
 @Composable
 private fun HistoryPage(
     events: List<AgentEvent>,
     logText: String,
+    pcName: String,
     busy: Boolean,
     onRefresh: () -> Unit,
     onCopy: () -> Unit,
 ) {
+    // F1: Filter, Suche und Zeitgruppen - alles reine Funktionen aus History.kt.
+    var category by remember { mutableStateOf(HistoryCategory.ALL) }
+    var query by remember { mutableStateOf("") }
+    // 0 = keine Meldung, sonst die Ressourcen-ID des Hinweises unter den Knoepfen.
+    var exportNotice by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // Inhalt fuer den laufenden Export: der System-Dialog liefert nur die Uri zurueck.
+    var pendingExport by remember { mutableStateOf("") }
+
+    // F2: Speichern ueber den System-Dateidialog (SAF) - kein Speicher-Recht noetig.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri == null) {
+            exportNotice = R.string.history_export_cancelled
+        } else {
+            val text = pendingExport
+            scope.launch {
+                val written = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val out = context.contentResolver.openOutputStream(uri)
+                            ?: return@runCatching false
+                        out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        true
+                    }.getOrDefault(false)
+                }
+                exportNotice = if (written) {
+                    R.string.history_export_done
+                } else {
+                    R.string.history_export_failed
+                }
+            }
+        }
+    }
+
+    val filtered = remember(events, category, query) {
+        filterHistoryEvents(events, category, query)
+    }
+    val sections = remember(filtered) {
+        // Nur die neuesten Eintraege anzeigen; lange Listen rendern sonst traege.
+        groupHistoryEvents(filtered.take(HISTORY_EVENT_LIMIT), LocalDate.now())
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -6332,52 +6431,69 @@ private fun HistoryPage(
             }
         }
 
-        if (events.isEmpty()) {
+        // Filter-Chips nach Kategorie (F1). Die Zuordnung macht historyCategory().
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            historyFilterChips.forEach { chip ->
+                FilterChip(
+                    selected = category == chip,
+                    onClick = { category = chip },
+                    label = { Text(historyCategoryLabel(chip)) },
+                )
+            }
+        }
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text(stringResource(R.string.history_search)) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.history_search_clear),
+                        )
+                    }
+                }
+            },
+        )
+
+        if (events.isNotEmpty()) {
             Text(
-                text = stringResource(R.string.history_empty),
-                fontSize = 14.sp,
+                text = stringResource(R.string.history_count, filtered.size, events.size),
+                fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.outline,
             )
         }
 
-        events.take(30).forEach { event ->
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = event.action,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = if (event.ok) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = event.time,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
-                    if (event.detail.isNotBlank()) {
-                        Text(
-                            text = event.detail,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+        when {
+            events.isEmpty() -> Text(
+                text = stringResource(R.string.history_empty),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            // Leerzustand je Filter (F1): Filter oder Suche ohne Treffer.
+            sections.isEmpty() -> Text(
+                text = stringResource(R.string.history_empty_filter),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            else -> sections.forEach { section ->
+                Text(
+                    text = historyGroupLabel(section.group),
+                    modifier = Modifier.padding(top = 4.dp),
+                    fontSize = 11.sp,
+                    letterSpacing = 1.1.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                section.events.forEach { event -> HistoryEventCard(event) }
             }
         }
 
@@ -6407,13 +6523,138 @@ private fun HistoryPage(
             OutlinedButton(
                 onClick = onCopy,
                 enabled = !busy,
+                modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(14.dp),
             ) { Text(stringResource(R.string.history_copy)) }
+            // F2: gefilterten Verlauf als Textdatei speichern (System-Dateidialog).
             OutlinedButton(
-                onClick = onRefresh,
+                onClick = {
+                    pendingExport = historyExportText(
+                        pcName = pcName,
+                        exportedAt = historyExportTimestamp(LocalDateTime.now()),
+                        events = filtered,
+                    )
+                    exportNotice = 0
+                    exportLauncher.launch(historyExportFileName(LocalDate.now()))
+                },
                 enabled = !busy,
+                modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(14.dp),
-            ) { Text(stringResource(R.string.history_refresh)) }
+            ) { Text(stringResource(R.string.history_export)) }
+        }
+        OutlinedButton(
+            onClick = onRefresh,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+        ) { Text(stringResource(R.string.history_refresh)) }
+        if (exportNotice != 0) {
+            Text(
+                text = stringResource(exportNotice),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+}
+
+/** Filter-Chips der Verlauf-Seite in fester Reihenfolge. */
+private val historyFilterChips = listOf(
+    HistoryCategory.ALL,
+    HistoryCategory.CONTROL,
+    HistoryCategory.ROUTINE,
+    HistoryCategory.PLUGIN,
+    HistoryCategory.ERROR,
+)
+
+/** Beschriftung eines Filter-Chips (Texte in `strings.xml`). */
+@Composable
+private fun historyCategoryLabel(category: HistoryCategory): String = when (category) {
+    HistoryCategory.CONTROL -> stringResource(R.string.history_filter_control)
+    HistoryCategory.ROUTINE -> stringResource(R.string.history_filter_routine)
+    HistoryCategory.PLUGIN -> stringResource(R.string.history_filter_plugin)
+    HistoryCategory.ERROR -> stringResource(R.string.history_filter_error)
+    HistoryCategory.ALL, HistoryCategory.OTHER -> stringResource(R.string.history_filter_all)
+}
+
+/** Ueberschrift einer Zeitgruppe ("Heute", "Gestern", "Aelter"). */
+@Composable
+private fun historyGroupLabel(group: HistoryGroup): String = when (group) {
+    HistoryGroup.TODAY -> stringResource(R.string.history_group_today)
+    HistoryGroup.YESTERDAY -> stringResource(R.string.history_group_yesterday)
+    HistoryGroup.OLDER -> stringResource(R.string.history_group_older)
+}
+
+/**
+ * Eine Ereigniszeile im Verlauf. Fehler (`ok == false`) werden deutlich
+ * hervorgehoben: Fehlerfarbe, Warnsymbol und das Kennzeichen "Fehler".
+ */
+@Composable
+private fun HistoryEventCard(event: AgentEvent) {
+    val failed = !event.ok
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = if (failed) {
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        border = if (failed) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+        } else {
+            null
+        },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (failed) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = event.action.ifBlank { HISTORY_EXPORT_PLACEHOLDER },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                if (failed) {
+                    Text(
+                        text = stringResource(R.string.history_filter_error),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = event.time,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            if (event.detail.isNotBlank()) {
+                Text(
+                    text = event.detail,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

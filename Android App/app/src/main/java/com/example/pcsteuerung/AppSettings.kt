@@ -21,6 +21,11 @@ data class AppSettings(
      * (zurueck zur Uebersicht). Default aus = "Manager offen lassen".
      */
     val pluginAutoClose: Boolean = false,
+    /**
+     * Aufbewahrung im Verlauf: Anzahl der Zeilen, die die App aus dem Log des
+     * Agenten laedt (`GET /log?lines=`). Auswahl 200/500/1000, Default 200.
+     */
+    val historyLines: Int = HISTORY_LINES_DEFAULT,
 )
 
 object AppSettingsStore {
@@ -31,6 +36,7 @@ object AppSettingsStore {
     private const val KEY_UPDATE_INSTALL_METHOD = "update_install_method"
     private const val KEY_ONLINE_CARD = "online_card"
     private const val KEY_PLUGIN_AUTO_CLOSE = "plugin_auto_close"
+    private const val KEY_HISTORY_LINES = "history_lines"
 
     /** Erlaubte Abstaende fuer die Status-Abfrage (Sekunden). */
     val REFRESH_CHOICES = listOf(2, 5, 10, 30)
@@ -51,6 +57,9 @@ object AppSettingsStore {
             updateInstallMethod = installMethod,
             onlineCard = prefs.getBoolean(KEY_ONLINE_CARD, true),
             pluginAutoClose = prefs.getBoolean(KEY_PLUGIN_AUTO_CLOSE, false),
+            // Als Text gespeichert und tolerant gelesen: ein alter oder
+            // kaputter Wert faellt auf 200 Zeilen zurueck.
+            historyLines = decodeHistoryLines(prefs.getString(KEY_HISTORY_LINES, null)),
         )
     }
 
@@ -62,6 +71,7 @@ object AppSettingsStore {
             .putString(KEY_UPDATE_INSTALL_METHOD, settings.updateInstallMethod.name)
             .putBoolean(KEY_ONLINE_CARD, settings.onlineCard)
             .putBoolean(KEY_PLUGIN_AUTO_CLOSE, settings.pluginAutoClose)
+            .putString(KEY_HISTORY_LINES, encodeHistoryLines(settings.historyLines))
             .apply()
     }
 }

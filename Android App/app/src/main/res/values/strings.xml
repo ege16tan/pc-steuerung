@@ -47,6 +47,14 @@
     <string name="settings_online_card_on">Aktiv – zeigt „An“ mit Herunterfahren und Ruhezustand, solange der PC läuft</string>
     <string name="settings_online_card_off">Aus – nur Downloads, Countdown und Startphase werden angezeigt</string>
     <string name="settings_webui">PC-Weboberfläche</string>
+    <!-- Verlauf: Aufbewahrung / geladene Logzeilen (SharedPreferences history_lines) -->
+    <string name="settings_section_history">VERLAUF</string>
+    <string name="settings_history">Aufbewahrung im Verlauf</string>
+    <string name="settings_history_lines">Geladene Logzeilen</string>
+    <string name="settings_history_rotate_title">Logdatei des Agenten</string>
+    <string name="settings_history_value">%1$d Zeilen</string>
+    <string name="settings_history_hint">So viele Zeilen lädt die App aus dem Log des Agenten (GET /log). Mehr Zeilen brauchen mehr Daten und etwas länger beim Laden.</string>
+    <string name="settings_history_rotate">Der Agent rotiert die Logdatei selbst: Ist agent.log voll, wird sie zu agent.log.1 und eine neue agent.log beginnt. Gelöscht wird dabei nichts – ältere Zeilen stehen weiter in agent.log.1.</string>
 
     <!-- Plugins des PC-Agenten (Markt+) -->
     <string name="plugins_section_title">PLUGINS AUF DEM PC</string>
@@ -174,8 +182,24 @@
     <string name="history_events_title">EREIGNISSE</string>
     <string name="history_log_title">LOG</string>
     <string name="history_empty">Noch keine Einträge.</string>
+    <string name="history_empty_filter">Keine Einträge für diesen Filter.</string>
     <string name="history_copy">Kopieren</string>
     <string name="history_refresh">Aktualisieren</string>
+    <string name="history_export">Exportieren</string>
+    <string name="history_export_done">Verlauf exportiert.</string>
+    <string name="history_export_cancelled">Export abgebrochen.</string>
+    <string name="history_export_failed">Export fehlgeschlagen.</string>
+    <string name="history_filter_all">Alle</string>
+    <string name="history_filter_control">Steuerung</string>
+    <string name="history_filter_routine">Routine</string>
+    <string name="history_filter_plugin">Plugin</string>
+    <string name="history_filter_error">Fehler</string>
+    <string name="history_search">Suchen</string>
+    <string name="history_search_clear">Suche löschen</string>
+    <string name="history_group_today">Heute</string>
+    <string name="history_group_yesterday">Gestern</string>
+    <string name="history_group_older">Älter</string>
+    <string name="history_count">%1$d von %2$d Einträgen</string>
 
     <!-- Aktionsseite Systemwerte (GET /sensors) -->
     <string name="sensors_hint">Werte werden nur solange geladen, wie diese Seite offen ist.</string>

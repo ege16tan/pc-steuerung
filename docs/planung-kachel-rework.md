@@ -165,10 +165,10 @@ Messwerte: `cpu_percent`, `ram_percent`, `gpu_percent`, `disk_free_percent`
 
 ## F) Verlauf
 
-- [ ] **F1** Filter nach Kategorie (Steuerung, Routine, Plugin, Fehler), Suche, Fehler
+- [x] **F1** Filter nach Kategorie (Steuerung, Routine, Plugin, Fehler), Suche, Fehler
       hervorgehoben, Zeitgruppen (heute, gestern).
-- [ ] **F2** Kopieren und Export als Textdatei.
-- [ ] **F3** Aufbewahrung in den Einstellungen (Rotation bleibt).
+- [x] **F2** Kopieren und Export als Textdatei.
+- [x] **F3** Aufbewahrung in den Einstellungen (Rotation bleibt).
 
 ## G) Einstellungen
 
