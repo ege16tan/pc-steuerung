@@ -190,6 +190,8 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         )
         .route("/routines/{id}", axum::routing::delete(routes::routine_delete))
         .route("/routines/{id}/run", axum::routing::post(routes::routine_run))
+        // Vorlagen fuer neue Routinen (Phase E5, nur Lesen).
+        .route("/routine-templates", axum::routing::get(routes::routine_templates))
         .route("/plugins", axum::routing::get(routes::plugins_ep))
         .route("/plugin-catalog", axum::routing::get(routes::plugin_catalog_ep))
         .route("/plugins/{id}/install", axum::routing::post(routes::plugin_install))

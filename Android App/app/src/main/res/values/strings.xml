@@ -231,4 +231,57 @@
     <string name="games_kill_empty">Keine Prozesse eingetragen.</string>
     <string name="games_config_unavailable">Konfiguration nicht verfügbar – der Agent kennt /game-config nicht.</string>
     <string name="games_count">%1$d Spiele</string>
+
+    <!-- Routinen Phase E: Formular, Vorlagen und Verlauf (GET/POST /routines) -->
+    <string name="routines_new">Neue Routine</string>
+    <string name="routines_title_new">Neue Routine</string>
+    <string name="routines_title_edit">Routine bearbeiten</string>
+    <string name="routines_name">Name</string>
+    <string name="routines_edit">Bearbeiten</string>
+    <string name="routines_save">Speichern</string>
+    <string name="routines_cancel">Abbrechen</string>
+    <string name="routines_trigger">AUSLÖSER</string>
+    <string name="routines_trigger_time">Uhrzeit</string>
+    <string name="routines_trigger_manual">Manuell</string>
+    <string name="routines_trigger_event">Ereignis</string>
+    <string name="routines_time">Uhrzeit (HH:MM)</string>
+    <string name="routines_days">Wochentage (leer = täglich)</string>
+    <string name="routines_event_game">Spiel beendet</string>
+    <string name="routines_event_download">Download fertig</string>
+    <string name="routines_event_idle">PC inaktiv</string>
+    <string name="routines_idle_minutes">Minuten inaktiv</string>
+    <string name="routines_conditions">BEDINGUNGEN (OPTIONAL)</string>
+    <string name="routines_conditions_hint">Leer lassen heißt: Bedingung egal.</string>
+    <string name="routines_conditions_plugin">Plugin muss laufen</string>
+    <string name="routines_conditions_plan">Energieplan</string>
+    <string name="routines_conditions_label">Bedingungen: %1$s</string>
+    <string name="routines_any">Egal</string>
+    <string name="routines_steps">SCHRITTE</string>
+    <string name="routines_step">Schritt %1$d</string>
+    <string name="routines_step_remove">Entfernen</string>
+    <string name="routines_step_type">Aktion</string>
+    <string name="routines_step_plan">Energieplan</string>
+    <string name="routines_step_add">Schritt hinzufügen</string>
+    <string name="routines_step_delay">Countdown in Sekunden (0–3600)</string>
+    <string name="routines_step_wait">Wartezeit vorher in Sekunden (0–300)</string>
+    <string name="routines_action_shutdown">Herunterfahren</string>
+    <string name="routines_action_hibernate">Ruhezustand</string>
+    <string name="routines_action_power_plan">Energieplan</string>
+    <string name="routines_templates">VORLAGEN</string>
+    <string name="routines_templates_hint">Vorlagen kommen vom Agenten und werden als eigene Routine angelegt.</string>
+    <string name="routines_template_apply">Anlegen</string>
+    <string name="routines_template_confirm_title">Vorlage anlegen?</string>
+    <string name="routines_template_confirm">Die Vorlage „%1$s“ wird im Agenten als eigene Routine angelegt.</string>
+    <string name="routines_history_show">Verlauf anzeigen (%1$d)</string>
+    <string name="routines_history_hide">Verlauf ausblenden (%1$d)</string>
+    <string name="routines_error_name">Bitte einen Namen angeben.</string>
+    <string name="routines_error_time">Bitte die Uhrzeit als HH:MM angeben, z. B. 18:00.</string>
+    <string name="routines_error_event">Bitte ein Ereignis auswählen.</string>
+    <string name="routines_error_idle">Bitte Minuten zwischen 1 und 600 angeben.</string>
+    <string name="routines_error_step_missing">Mindestens ein Schritt ist nötig.</string>
+    <string name="routines_error_step_count">Höchstens drei Schritte sind erlaubt.</string>
+    <string name="routines_error_shutdown_last">Herunterfahren darf nur der letzte Schritt sein.</string>
+    <string name="routines_error_plan">Bitte einen Energieplan auswählen.</string>
+    <string name="routines_error_wait">Wartezeit: bitte 0 bis 300 Sekunden angeben.</string>
+    <string name="routines_error_delay">Countdown: bitte 0 bis 3600 Sekunden angeben.</string>
 </resources>

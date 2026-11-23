@@ -156,6 +156,15 @@ Status).
   (gleiche Simulation/Journal/pending-Werte). Web-UI-Kachel „Routinen“ mit
   An/Aus, „Jetzt“, Löschen und Formular (nur `admin`); eigener
   `<dialog>`-Bestätigungsdialog statt `window.confirm()`.
+- **Routinen (Phase E, 23.11.2026):** Auslöser zusätzlich `event` mit
+  `game_stopped`/`download_done`/`idle` (Idle über `GetLastInputInfo`, eine Meldung
+  je Phase), Bedingungen `conditions` (Wochentage, laufendes Plugin, aktiver
+  Energieplan), Aktionskette mit `wait` (0–300 s vor dem Schritt, `shutdown` bleibt
+  letzter Schritt), `history` (letzte 5 Läufe) und berechnetes `next_run`
+  (`"YYYY-MM-DD HH:MM"`, leer bei `manual`/`event`). Neue Vorlagen unter
+  `GET /routine-templates` (`feierabend`, `nachts-sparen`); `routines.json` schreibt
+  `version: 2`, Version 1 bleibt lesbar. `POST /routines/{id}/run` antwortet sofort
+  (Kette läuft im eigenen Task) und schreibt in den Verlauf.
 - **Warnungen (Phase C, 23.11.2026):** `src/warnings.rs` prueft Schwellen **mit
   Dauer** (`warnings.json`, Takt 30 s, auch bei geschlossener App). Standardregeln:
   CPU > 90 % fuer 30 s, RAM > 90 % fuer 60 s, frei < 10 % auf der knappsten Platte

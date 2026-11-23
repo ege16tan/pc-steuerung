@@ -155,13 +155,13 @@ Messwerte: `cpu_percent`, `ram_percent`, `gpu_percent`, `disk_free_percent`
 
 ## E) Routinen verbessern
 
-- [ ] **E1** Ausloeser: Uhrzeit (bestehend) + Ereignisse (Spiel beendet, Download
+- [x] **E1** Ausloeser: Uhrzeit (bestehend) + Ereignisse (Spiel beendet, Download
       fertig, PC inaktiv seit X Minuten).
-- [ ] **E2** Bedingungen: Wochentag, Plugin aktiv, Energieplan.
-- [ ] **E3** Aktionskette mit Verzoegerung zwischen Schritten.
-- [ ] **E4** Vorschau „naechster Lauf“, Test-Knopf (Simulation), Verlauf je Routine.
-- [ ] **E5** Vorlagen „Feierabend“ und „Nachts sparen“.
-- [ ] **E6** Keine Einschalt-Routinen (der Agent laeuft nur bei eingeschaltetem PC).
+- [x] **E2** Bedingungen: Wochentag, Plugin aktiv, Energieplan.
+- [x] **E3** Aktionskette mit Verzoegerung zwischen Schritten.
+- [x] **E4** Vorschau „naechster Lauf“, Test-Knopf (Simulation), Verlauf je Routine.
+- [x] **E5** Vorlagen „Feierabend“ und „Nachts sparen“.
+- [x] **E6** Keine Einschalt-Routinen (der Agent laeuft nur bei eingeschaltetem PC).
 
 ## F) Verlauf
 

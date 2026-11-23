@@ -363,122 +363,7 @@ fun parseDownloads(body: String): List<SteamDownload> {
     }.getOrDefault(emptyList())
 }
 
-/** Eine Aktion innerhalb einer Routine (`shutdown`, `hibernate`, `power_plan`). */
-data class RoutineActionInfo(
-    val type: String = "",
-    val delay: Int = 0,
-    val plan: String = "",
-) {
-    val label: String get() = when (type) {
-        "shutdown" -> "Herunterfahren in ${delay}s"
-        "hibernate" -> "Ruhezustand"
-        "power_plan" -> "Energieplan ${planLabel(plan)}"
-        else -> type
-    }
-}
-
-/** Wochentage 1 = Mo ... 7 = So (wie im Agenten). */
-private val ROUTINE_DAYS = listOf("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
-
-/** Eine Routine des Agenten (Feldnamen aus `routines.rs`). */
-data class RoutineInfo(
-    val id: String = "",
-    val name: String = "",
-    val enabled: Boolean = true,
-    val triggerType: String = "manual",
-    val triggerAt: String = "",
-    val triggerDays: List<Int> = emptyList(),
-    val actions: List<RoutineActionInfo> = emptyList(),
-    val lastRun: String = "",
-    val nextRun: String = "",
-) {
-    /** Kurztext des Ausloesers fuer Liste und Kachel. */
-    val triggerText: String
-        get() = when {
-            triggerType != "time" -> "Nur manuell"
-            triggerDays.isEmpty() -> "Täglich $triggerAt"
-            else -> "$triggerAt · " + triggerDays
-                .mapNotNull { ROUTINE_DAYS.getOrNull(it - 1) }
-                .joinToString(", ")
-        }
-
-    val actionTexts: List<String> get() = actions.map { it.label }
-}
-
-/** `GET /routines` auswerten. */
-fun parseRoutines(body: String): List<RoutineInfo> {
-    if (body.startsWith("HTTP ")) return emptyList()
-    return runCatching {
-        val array = JSONObject(body).optJSONArray("routines") ?: JSONArray()
-        val out = ArrayList<RoutineInfo>(array.length())
-        for (index in 0 until array.length()) {
-            val item = array.optJSONObject(index) ?: continue
-            val id = item.optString("id").trim()
-            if (id.isEmpty()) continue
-            val trigger = item.optJSONObject("trigger")
-            val days = ArrayList<Int>()
-            val daysJson = trigger?.optJSONArray("days")
-            if (daysJson != null) {
-                for (day in 0 until daysJson.length()) days.add(daysJson.optInt(day))
-            }
-            val actions = ArrayList<RoutineActionInfo>()
-            val actionsJson = item.optJSONArray("actions")
-            if (actionsJson != null) {
-                for (a in 0 until actionsJson.length()) {
-                    val action = actionsJson.optJSONObject(a) ?: continue
-                    actions.add(
-                        RoutineActionInfo(
-                            type = action.optString("type"),
-                            delay = action.optInt("delay", 0),
-                            plan = action.optString("plan"),
-                        )
-                    )
-                }
-            }
-            out.add(
-                RoutineInfo(
-                    id = id,
-                    name = item.optText("name", id),
-                    enabled = item.optBoolean("enabled", true),
-                    triggerType = trigger?.optString("type", "manual") ?: "manual",
-                    triggerAt = trigger?.optString("at").orEmpty(),
-                    triggerDays = days,
-                    actions = actions,
-                    lastRun = item.optString("last_run"),
-                    nextRun = item.optString("next_run"),
-                )
-            )
-        }
-        out
-    }.getOrDefault(emptyList())
-}
-
-/** Routine als JSON fuer `POST /routines` (An/Aus umschalten, `id` bleibt gleich). */
-private fun routineJson(routine: RoutineInfo, enabled: Boolean): String {
-    val rawDays = JSONArray()
-    routine.triggerDays.forEach { rawDays.put(it) }
-    val rawActions = JSONArray()
-    routine.actions.forEach { action ->
-        rawActions.put(
-            JSONObject()
-                .put("type", action.type)
-                .put("delay", action.delay)
-                .put("plan", action.plan)
-        )
-    }
-    val trigger = JSONObject()
-        .put("type", routine.triggerType)
-        .put("at", routine.triggerAt)
-        .put("days", rawDays)
-    return JSONObject()
-        .put("id", routine.id)
-        .put("name", routine.name)
-        .put("enabled", enabled)
-        .put("trigger", trigger)
-        .put("actions", rawActions)
-        .put("last_run", routine.lastRun)
-        .toString()
-}
+// Routinen-Modell, Parser und Kurztexte liegen in `Routines.kt` (Phase E).
 
 /** Ein Ereignis aus `GET /events` (Ringpuffer, neueste zuerst). */
 data class AgentEvent(
@@ -1387,6 +1272,9 @@ fun MainApp(
     var steamLoading by remember { mutableStateOf(true) }
     var routines by remember { mutableStateOf<List<RoutineInfo>>(emptyList()) }
     var routinesLoading by remember { mutableStateOf(true) }
+    // Vorlagen (`GET /routine-templates`): bleibt leer, wenn der Agent die
+    // Route nicht kennt - die Seite blendet den Abschnitt dann aus.
+    var routineTemplates by remember { mutableStateOf<List<RoutineTemplate>>(emptyList()) }
     var events by remember { mutableStateOf<List<AgentEvent>>(emptyList()) }
 
     // Systemwerte (`GET /sensors`): null = noch nie geladen. Die Seite fragt nur
@@ -1645,6 +1533,23 @@ fun MainApp(
     }
 
     /**
+     * Vorlagen des Agenten (`GET /routine-templates`, Phase E). Ein alter
+     * Agent antwortet mit 404 - dann bleibt die Liste leer und die Seite zeigt
+     * den Abschnitt "Vorlagen" nicht.
+     */
+    suspend fun loadRoutineTemplates() {
+        val list = withContext(Dispatchers.IO) {
+            try {
+                parseRoutineTemplates(httpCall(active.base, "/routine-templates", active.authHeader()))
+            } catch (e: Exception) {
+                Log.e(TAG, "Routinen-Vorlagen nicht erreichbar", e)
+                emptyList()
+            }
+        }
+        routineTemplates = list
+    }
+
+    /**
      * Systemwerte des Agenten (`GET /sensors`). Fehlt die Route (404, alter
      * Agent), liefert [parseSensors] einen leeren Status - Kachel und Seite
      * zeigen dann "Nicht verfügbar" statt Fantasiewerten.
@@ -1711,6 +1616,39 @@ fun MainApp(
         }
     }
 
+    /**
+     * Routine aus dem Formular speichern (`POST /routines`). Geprueft wird
+     * schon im Dialog; hier wird nur noch umgewandelt und geschickt. Eine neue
+     * Routine bekommt eine freie Kennung, damit nichts ueberschrieben wird.
+     */
+    fun saveRoutine(draft: RoutineDraft) {
+        val routine = routineFromDraft(draft)
+        val target = if (draft.id.isBlank()) {
+            routine.copy(id = uniqueRoutineId(routine.id, routines.map { it.id }))
+        } else {
+            routine
+        }
+        routineAction(
+            path = "/routines",
+            method = "POST",
+            success = if (draft.id.isBlank()) "Routine angelegt" else "Routine gespeichert",
+            body = routineJson(target),
+        )
+    }
+
+    /** Vorlage aus `GET /routine-templates` als eigene Routine anlegen. */
+    fun createRoutineFromTemplate(template: RoutineTemplate) {
+        val routine = routineFromTemplate(template)
+        routineAction(
+            path = "/routines",
+            method = "POST",
+            success = "${template.name} angelegt",
+            body = routineJson(
+                routine.copy(id = uniqueRoutineId(routine.id, routines.map { it.id }))
+            ),
+        )
+    }
+
     // Nachladen abhaengig von der sichtbaren Seite. Die Startseite braucht die
     // Kurzstatus, die Aktionsseiten ihre vollen Listen.
     LaunchedEffect(active, route, pluginRefresh, refresh, gamesRefresh) {
@@ -1737,7 +1675,12 @@ fun MainApp(
 
             Route.GameOptimization -> loadGames()
             Route.Steam -> loadSteam()
-            Route.Routines -> loadRoutines()
+            Route.Routines -> {
+                loadRoutines()
+                loadRoutineTemplates()
+                // Plugins fuellen die Bedingung "Plugin muss laufen".
+                loadPlugins()
+            }
             Route.History -> {
                 loadEvents()
                 logText = fetchLogText().trim().ifBlank { "Noch keine Einträge." }
@@ -2233,6 +2176,8 @@ fun MainApp(
                     ) {
                         RoutinesPage(
                             routines = routines,
+                            templates = routineTemplates,
+                            plugins = plugins,
                             loading = routinesLoading,
                             busy = busy,
                             onRefresh = { refresh++ },
@@ -2252,7 +2197,7 @@ fun MainApp(
                                     } else {
                                         "${routine.name} eingeschaltet"
                                     },
-                                    routineJson(routine, enabled = !routine.enabled),
+                                    routineJson(withRoutineEnabled(routine, !routine.enabled)),
                                 )
                             },
                             onDelete = { routine ->
@@ -2262,6 +2207,8 @@ fun MainApp(
                                     "${routine.name} gelöscht",
                                 )
                             },
+                            onSave = ::saveRoutine,
+                            onCreateFromTemplate = ::createRoutineFromTemplate,
                         )
                     }
 
@@ -5617,20 +5564,35 @@ private fun GameRow(
 }
 
 /**
- * Aktionsseite Routinen: Liste aus `GET /routines`. "Jetzt" loest
+ * Aktionsseite Routinen (Phase E).
+ *
+ * Liste aus `GET /routines`: Name, Kurztext des Ausloesers, `next_run`, die
+ * Schritte und der Verlauf (aufklappbar). "Jetzt" loest
  * `POST /routines/{id}/run` aus, An/Aus ersetzt die Routine per `POST /routines`
  * (die Kennung bleibt gleich), "Loeschen" nutzt `DELETE /routines/{id}`.
+ *
+ * Neu/Bearbeiten laeuft ueber [RoutineEditorDialog] (1-3 Schritte, Bedingungen,
+ * Pruefung vor dem Speichern). Vorlagen kommen aus `GET /routine-templates` und
+ * werden nach einer Rueckfrage per `POST /routines` angelegt; kennt der Agent
+ * die Route nicht (leere Liste), fehlt der Abschnitt ganz.
  */
 @Composable
 private fun RoutinesPage(
     routines: List<RoutineInfo>,
+    templates: List<RoutineTemplate>,
+    plugins: List<PluginInfo>,
     loading: Boolean,
     busy: Boolean,
     onRefresh: () -> Unit,
     onRun: (RoutineInfo) -> Unit,
     onToggle: (RoutineInfo) -> Unit,
     onDelete: (RoutineInfo) -> Unit,
+    onSave: (RoutineDraft) -> Unit,
+    onCreateFromTemplate: (RoutineTemplate) -> Unit,
 ) {
+    // null = Dialog zu. Ein Entwurf ohne id legt neu an, mit id aendert er.
+    var editorDraft by remember { mutableStateOf<RoutineDraft?>(null) }
+    var templateToAdd by remember { mutableStateOf<RoutineTemplate?>(null) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -5653,6 +5615,17 @@ private fun RoutinesPage(
             }
         }
 
+        Button(
+            enabled = !busy,
+            onClick = { editorDraft = RoutineDraft() },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.routines_new))
+        }
+
         if (routines.isEmpty()) {
             Text(
                 text = if (loading) {
@@ -5672,12 +5645,116 @@ private fun RoutinesPage(
                 onRun = { onRun(routine) },
                 onToggle = { onToggle(routine) },
                 onDelete = { onDelete(routine) },
+                onEdit = { editorDraft = routineToDraft(routine) },
             )
+        }
+
+        // Vorlagen: nur wenn der Agent `GET /routine-templates` kennt.
+        if (templates.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.routines_templates),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Text(
+                text = stringResource(R.string.routines_templates_hint),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            templates.forEach { template ->
+                RoutineTemplateRow(
+                    template = template,
+                    busy = busy,
+                    onAdd = { templateToAdd = template },
+                )
+            }
+        }
+    }
+
+    editorDraft?.let { draft ->
+        RoutineEditorDialog(
+            initial = draft,
+            plugins = plugins,
+            busy = busy,
+            onDismiss = { editorDraft = null },
+            onSave = { saved ->
+                editorDraft = null
+                onSave(saved)
+            },
+        )
+    }
+
+    templateToAdd?.let { template ->
+        AlertDialog(
+            onDismissRequest = { templateToAdd = null },
+            title = { Text(stringResource(R.string.routines_template_confirm_title)) },
+            text = { Text(stringResource(R.string.routines_template_confirm, template.name)) },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        templateToAdd = null
+                        onCreateFromTemplate(template)
+                    },
+                ) { Text(stringResource(R.string.routines_template_apply)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { templateToAdd = null }) {
+                    Text(stringResource(R.string.routines_cancel))
+                }
+            },
+        )
+    }
+}
+
+/** Eine Vorlage als Zeile: Name, Ausloeser, Schritte und "Anlegen". */
+@Composable
+private fun RoutineTemplateRow(
+    template: RoutineTemplate,
+    busy: Boolean,
+    onAdd: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = template.name,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = routineTriggerText(template.trigger),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (template.actions.isNotEmpty()) {
+                    Text(
+                        text = template.actions.joinToString(" · ") { it.label },
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+            TextButton(enabled = !busy, onClick = onAdd) {
+                Text(stringResource(R.string.routines_template_apply), fontSize = 13.sp)
+            }
         }
     }
 }
 
-/** Eine Routine mit Ausloeser, Aktionen und den drei Bedienknoepfen. */
+/** Eine Routine mit Ausloeser, Schritten, Verlauf und den Bedienknoepfen. */
 @Composable
 private fun RoutineCard(
     routine: RoutineInfo,
@@ -5685,7 +5762,12 @@ private fun RoutineCard(
     onRun: () -> Unit,
     onToggle: () -> Unit,
     onDelete: () -> Unit,
+    onEdit: () -> Unit,
 ) {
+    var showHistory by remember { mutableStateOf(false) }
+    val history = routine.recentHistory
+    val conditions = routineConditionsText(routine.trigger.conditions)
+    val nextRun = routineNextRunText(routine.nextRun)
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -5724,6 +5806,15 @@ private fun RoutineCard(
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (conditions.isNotEmpty()) {
+                Text(
+                    text = stringResource(R.string.routines_conditions_label, conditions),
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
             if (routine.actionTexts.isNotEmpty()) {
                 Text(
                     text = stringResource(
@@ -5743,12 +5834,40 @@ private fun RoutineCard(
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.outline,
             )
-            if (routine.nextRun.isNotBlank()) {
+            if (nextRun.isNotEmpty()) {
                 Text(
-                    text = stringResource(R.string.routines_next, routine.nextRun),
+                    text = stringResource(R.string.routines_next, nextRun),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.outline,
                 )
+            }
+            // Verlauf: die letzten Laeufe, auf Wunsch aufgeklappt (max. 5).
+            if (history.isNotEmpty()) {
+                TextButton(
+                    onClick = { showHistory = !showHistory },
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (showHistory) R.string.routines_history_hide else R.string.routines_history_show,
+                            history.size,
+                        ),
+                        fontSize = 11.sp,
+                    )
+                }
+                AnimatedVisibility(visible = showHistory) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        history.forEach { entry ->
+                            Text(
+                                text = listOf(entry.at, entry.text)
+                                    .filter(String::isNotBlank)
+                                    .joinToString(" · "),
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -5773,6 +5892,9 @@ private fun RoutineCard(
                         fontSize = 13.sp,
                     )
                 }
+                TextButton(onClick = onEdit, enabled = !busy) {
+                    Text(stringResource(R.string.routines_edit), fontSize = 13.sp)
+                }
                 TextButton(onClick = onDelete, enabled = !busy) {
                     Text(
                         text = stringResource(R.string.routines_delete),
@@ -5783,6 +5905,396 @@ private fun RoutineCard(
             }
         }
     }
+}
+
+/**
+ * Formular fuer eine Routine: Ausloeser (Zeit/Manuell/Ereignis), optionale
+ * Bedingungen, 1-3 Schritte mit Wartezeit und Pruefung vor dem Speichern.
+ * Herunterfahren ist nur als letzter Schritt erlaubt (Agent-Vertrag).
+ */
+@Composable
+private fun RoutineEditorDialog(
+    initial: RoutineDraft,
+    plugins: List<PluginInfo>,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (RoutineDraft) -> Unit,
+) {
+    var draft by remember { mutableStateOf(initial) }
+    var error by remember { mutableStateOf<RoutineValidationError?>(null) }
+    val heading = stringResource(
+        if (initial.id.isBlank()) R.string.routines_title_new else R.string.routines_title_edit
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(heading) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = draft.name,
+                    onValueChange = { value ->
+                        draft = draft.copy(name = value)
+                        error = null
+                    },
+                    label = { Text(stringResource(R.string.routines_name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                RoutineEditorLabel(stringResource(R.string.routines_trigger))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    listOf(
+                        ROUTINE_TRIGGER_TIME to R.string.routines_trigger_time,
+                        ROUTINE_TRIGGER_MANUAL to R.string.routines_trigger_manual,
+                        ROUTINE_TRIGGER_EVENT to R.string.routines_trigger_event,
+                    ).forEach { (type, label) ->
+                        FilterChip(
+                            selected = draft.triggerType == type,
+                            onClick = {
+                                draft = draft.copy(triggerType = type)
+                                error = null
+                            },
+                            label = { Text(stringResource(label), fontSize = 11.sp) },
+                        )
+                    }
+                }
+
+                when (draft.triggerType) {
+                    ROUTINE_TRIGGER_TIME -> {
+                        OutlinedTextField(
+                            value = draft.at,
+                            onValueChange = { value ->
+                                draft = draft.copy(at = value.take(5))
+                                error = null
+                            },
+                            label = { Text(stringResource(R.string.routines_time)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        RoutineEditorLabel(stringResource(R.string.routines_days))
+                        RoutineWeekdayPicker(selected = draft.days, enabled = !busy) { days ->
+                            draft = draft.copy(days = days)
+                        }
+                    }
+
+                    ROUTINE_TRIGGER_EVENT -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            listOf(
+                                ROUTINE_EVENT_GAME_STOPPED to R.string.routines_event_game,
+                                ROUTINE_EVENT_DOWNLOAD_DONE to R.string.routines_event_download,
+                                ROUTINE_EVENT_IDLE to R.string.routines_event_idle,
+                            ).forEach { (event, label) ->
+                                FilterChip(
+                                    selected = draft.event == event,
+                                    onClick = {
+                                        draft = draft.copy(event = event)
+                                        error = null
+                                    },
+                                    label = { Text(stringResource(label), fontSize = 11.sp) },
+                                )
+                            }
+                        }
+                        if (draft.event == ROUTINE_EVENT_IDLE) {
+                            OutlinedTextField(
+                                value = draft.idleMinutes,
+                                onValueChange = { value ->
+                                    draft = draft.copy(
+                                        idleMinutes = value.filter(Char::isDigit).take(3)
+                                    )
+                                    error = null
+                                },
+                                label = { Text(stringResource(R.string.routines_idle_minutes)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+
+                RoutineEditorLabel(stringResource(R.string.routines_conditions))
+                Text(
+                    text = stringResource(R.string.routines_conditions_hint),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                RoutineWeekdayPicker(
+                    selected = draft.conditionDays,
+                    enabled = !busy,
+                ) { days -> draft = draft.copy(conditionDays = days) }
+                RoutineSelectField(
+                    label = stringResource(R.string.routines_conditions_plugin),
+                    value = draft.conditionPlugin,
+                    enabled = !busy,
+                    options = listOf("" to stringResource(R.string.routines_any)) +
+                        plugins.map { it.id to it.name.ifBlank { it.id } },
+                ) { plugin -> draft = draft.copy(conditionPlugin = plugin) }
+                RoutineSelectField(
+                    label = stringResource(R.string.routines_conditions_plan),
+                    value = draft.conditionPowerPlan,
+                    enabled = !busy,
+                    options = listOf("" to stringResource(R.string.routines_any)) +
+                        ROUTINE_PLAN_KEYS.map { it to planLabel(it) },
+                ) { plan -> draft = draft.copy(conditionPowerPlan = plan) }
+
+                RoutineEditorLabel(stringResource(R.string.routines_steps))
+                draft.actions.forEachIndexed { index, step ->
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(R.string.routines_step, index + 1),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (draft.actions.size > 1) {
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = {
+                                        draft = draft.copy(
+                                            actions = draft.actions
+                                                .filterIndexed { i, _ -> i != index }
+                                        )
+                                        error = null
+                                    },
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.routines_step_remove),
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                        RoutineSelectField(
+                            label = stringResource(R.string.routines_step_type),
+                            value = step.type,
+                            enabled = !busy,
+                            options = ROUTINE_ACTION_TYPES.map { type ->
+                                type to stringResource(routineActionTypeText(type))
+                            },
+                        ) { type ->
+                            draft = updateRoutineStep(draft, index) { it.copy(type = type) }
+                            error = null
+                        }
+                        when (step.type) {
+                            ROUTINE_ACTION_POWER_PLAN -> RoutineSelectField(
+                                label = stringResource(R.string.routines_step_plan),
+                                value = step.plan,
+                                enabled = !busy,
+                                options = ROUTINE_PLAN_KEYS.map { it to planLabel(it) },
+                            ) { plan ->
+                                draft = updateRoutineStep(draft, index) { it.copy(plan = plan) }
+                                error = null
+                            }
+
+                            ROUTINE_ACTION_SHUTDOWN -> OutlinedTextField(
+                                value = step.delay,
+                                onValueChange = { value ->
+                                    draft = updateRoutineStep(draft, index) {
+                                        it.copy(delay = value.filter(Char::isDigit).take(4))
+                                    }
+                                    error = null
+                                },
+                                label = { Text(stringResource(R.string.routines_step_delay)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        OutlinedTextField(
+                            value = step.wait,
+                            onValueChange = { value ->
+                                draft = updateRoutineStep(draft, index) {
+                                    it.copy(wait = value.filter(Char::isDigit).take(3))
+                                }
+                                error = null
+                            },
+                            label = { Text(stringResource(R.string.routines_step_wait)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                if (draft.actions.size < MAX_ROUTINE_STEPS) {
+                    OutlinedButton(
+                        enabled = !busy,
+                        onClick = {
+                            draft = draft.copy(actions = withNewRoutineStep(draft.actions))
+                            error = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.routines_step_add), fontSize = 13.sp)
+                    }
+                }
+
+                if (error != null) {
+                    Text(
+                        text = stringResource(routineErrorText(error!!)),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy,
+                onClick = {
+                    val problem = routineValidationError(draft)
+                    if (problem == null) onSave(draft) else error = problem
+                },
+            ) { Text(stringResource(R.string.routines_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.routines_cancel)) }
+        },
+    )
+}
+
+/** Kleine Abschnitts-Ueberschrift im Formular. */
+@Composable
+private fun RoutineEditorLabel(text: String) {
+    Text(
+        text = text,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.outline,
+    )
+}
+
+/**
+ * Wochentage 1-7 als schmale Knoepfe (Mo..So). Mehrfachauswahl; ohne Auswahl
+ * gilt "taeglich" bzw. "Bedingung egal".
+ */
+@Composable
+private fun RoutineWeekdayPicker(
+    selected: List<Int>,
+    enabled: Boolean = true,
+    onChange: (List<Int>) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ROUTINE_DAY_SHORT.forEachIndexed { index, label ->
+            val day = index + 1
+            val active = day in selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (active) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHighest
+                        }
+                    )
+                    .clickable(enabled = enabled) { onChange(withRoutineDay(selected, day)) }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    color = if (active) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Auswahlfeld fuer Werte aus einer festen Liste (Plugin, Energieplan,
+ * Schritt-Art). Der Dialog zeigt den Klartext, gespeichert wird der Schluessel.
+ */
+@Composable
+private fun RoutineSelectField(
+    label: String,
+    value: String,
+    options: List<Pair<String, String>>,
+    enabled: Boolean = true,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val current = options.firstOrNull { it.first == value }?.second
+        ?: value.ifBlank { stringResource(R.string.routines_any) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                Text(
+                    text = current,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (key, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        expanded = false
+                        onSelect(key)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** Schluessel einer Schritt-Art -> Text im Formular. */
+private fun routineActionTypeText(type: String): Int = when (type) {
+    ROUTINE_ACTION_SHUTDOWN -> R.string.routines_action_shutdown
+    ROUTINE_ACTION_HIBERNATE -> R.string.routines_action_hibernate
+    else -> R.string.routines_action_power_plan
+}
+
+/** Beanstandung -> deutsche Meldung im Formular. */
+private fun routineErrorText(error: RoutineValidationError): Int = when (error) {
+    RoutineValidationError.NAME_MISSING -> R.string.routines_error_name
+    RoutineValidationError.TIME_INVALID -> R.string.routines_error_time
+    RoutineValidationError.EVENT_MISSING -> R.string.routines_error_event
+    RoutineValidationError.IDLE_INVALID -> R.string.routines_error_idle
+    RoutineValidationError.STEP_MISSING -> R.string.routines_error_step_missing
+    RoutineValidationError.TOO_MANY_STEPS -> R.string.routines_error_step_count
+    RoutineValidationError.SHUTDOWN_NOT_LAST -> R.string.routines_error_shutdown_last
+    RoutineValidationError.PLAN_MISSING -> R.string.routines_error_plan
+    RoutineValidationError.WAIT_INVALID -> R.string.routines_error_wait
+    RoutineValidationError.DELAY_INVALID -> R.string.routines_error_delay
 }
 
 /**

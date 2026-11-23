@@ -8,7 +8,9 @@
 //! GET /plugins, POST /plugins/{id}/start, POST /plugins/{id}/stop,
 //! GET /plugins/{id}/output,
 //! GET /games, POST /games/scan, GET/POST /game-config,
-//! GET /steam, GET /downloads (Steam, nur Lesen).
+//! GET /steam, GET /downloads (Steam, nur Lesen),
+//! GET/POST /routines, DELETE /routines/{id}, POST /routines/{id}/run,
+//! GET /routine-templates (fertige Vorlagen, Phase E5).
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -1406,7 +1408,20 @@ pub async fn user_delete(
     Json(json!({ "ok": true, "removed": user })).into_response()
 }
 
-// ---------------- Routinen (Phase 4) ----------------
+// ---------------- Routinen (Phase 4, Phase E) ----------------
+
+/// Bekannte JavaScript-Plugin-IDs (fuer die Bedingung `conditions.plugin`).
+fn known_plugins(app: &App) -> Vec<String> {
+    crate::jsplugins::manifests(app)
+        .into_iter()
+        .map(|manifest| manifest.id)
+        .collect()
+}
+
+/// GET /routine-templates — zwei fertige Vorlagen (nur lesen fuer viewer).
+pub async fn routine_templates(_auth: Auth) -> Response {
+    Json(json!({ "templates": crate::routines::templates() })).into_response()
+}
 
 /// GET /routines — alle Routinen inklusive naechstem Lauf (nur lesen fuer viewer).
 pub async fn routines_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
@@ -1417,13 +1432,13 @@ pub async fn routines_ep(State(app): State<SharedApp>, _auth: Auth) -> Response 
         .iter()
         .map(|routine| {
             let mut value = serde_json::to_value(routine).unwrap_or_else(|_| json!({}));
+            // Phase E4: `next_run` als `YYYY-MM-DD HH:MM`, leer ohne festen Lauf.
+            value["next_run"] = json!(crate::routines::next_run_text(routine, &now));
             match crate::routines::next_run(routine, &now) {
                 Some(next) => {
-                    value["next_run"] = json!(next.format("%Y-%m-%dT%H:%M:%S").to_string());
                     value["next_in"] = json!((next - now).num_seconds().max(0));
                 }
                 None => {
-                    value["next_run"] = serde_json::Value::Null;
                     value["next_in"] = serde_json::Value::Null;
                 }
             }
@@ -1447,16 +1462,18 @@ pub async fn routine_save(
         routine.id = crate::routines::new_id();
     }
     crate::routines::normalize(&mut routine);
-    if let Err(message) = crate::routines::validate(&routine) {
+    if let Err(message) = crate::routines::validate(&routine, &known_plugins(&app)) {
         return error_response(StatusCode::UNPROCESSABLE_ENTITY, message);
     }
 
     let mut guard = app.routines.lock().expect("Routinen-Sperre");
     match guard.routines.iter_mut().find(|entry| entry.id == routine.id) {
         Some(existing) => {
-            // `last_run` bleibt erhalten: ein erneutes Speichern soll die
-            // Routine nicht in derselben Minute noch einmal ausloesen.
+            // `last_run` und Verlauf bleiben erhalten: ein erneutes Speichern
+            // soll die Routine nicht in derselben Minute ausloesen und die
+            // Historie nicht verlieren.
             routine.last_run = existing.last_run.clone();
+            routine.history = existing.history.clone();
             *existing = routine.clone();
         }
         None => {
@@ -1467,6 +1484,7 @@ pub async fn routine_save(
                 );
             }
             routine.last_run.clear();
+            routine.history.clear();
             guard.routines.push(routine.clone());
         }
     }
@@ -1523,6 +1541,9 @@ pub async fn routine_delete(
 }
 
 /// POST /routines/{id}/run — Routine sofort ausfuehren (auch wenn sie aus ist).
+///
+/// Schreibt in den Verlauf, setzt aber kein `last_run` – sonst faellt der
+/// geplante Lauf aus. Die Aktionskette laeuft in einem eigenen Task.
 pub async fn routine_run(
     State(app): State<SharedApp>,
     Path(id): Path<String>,
@@ -1535,7 +1556,7 @@ pub async fn routine_run(
     let Some(routine) = routine else {
         return error_response(StatusCode::NOT_FOUND, format!("Routine '{id}' nicht gefunden"));
     };
-    match crate::routines::execute(&app, &routine).await {
+    match crate::routines::run_now(&app, &routine) {
         Ok(detail) => Json(json!({ "ok": true, "detail": detail })).into_response(),
         Err(detail) => error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
     }
