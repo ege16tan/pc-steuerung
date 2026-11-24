@@ -27,6 +27,10 @@ const ROUTINE_MAX_STEPS = 3;
 const ROUTINE_WAIT_MAX = 300;
 const DEVICES_KEY = 'pcDevices';
 const ACTIVE_DEVICE_KEY = 'pcActiveDevice';
+// Log/Verlauf (Phase W2): Aufbewahrung der Logdatei-Zeilen und Filter-Chips.
+const LOG_LINES_KEY = 'pcLogLines';
+const LOG_LINES_CHOICES = [200, 500, 1000];
+const LOG_LINES_DEFAULT = 200;
 
 const $ = (id) => document.getElementById(id);
 const PLANS = { high: 'Höchstleistung', balanced: 'Ausbalanciert', saver: 'Energiesparen' };
@@ -98,6 +102,9 @@ const state = {
   routineTemplates: [],
   routineTemplatesLoaded: false,
   expandedRoutine: '',
+  // Log/Verlauf (Phase W2): Filter-Chip und Suchtext der Ereignisliste.
+  logFilter: 'all',
+  logQuery: '',
 };
 
 /* ---------------- Darstellung: Hell/Dunkel/System ---------------- */
@@ -502,6 +509,24 @@ function mount() {
   // Warnregeln (Phase C): nur `admin` darf speichern.
   $('btnAddWarning').onclick = addWarningRule;
 
+  // Log/Verlauf (Phase W2): Filter-Chips, Suche, Export und Aufbewahrung.
+  $('logFilterChips').onclick = (event) => {
+    const button = event.target.closest('button[data-filter]');
+    if (!button) return;
+    setLogFilter(button.dataset.filter);
+  };
+  $('logSearch').addEventListener('input', () => {
+    state.logQuery = $('logSearch').value;
+    renderEvents();
+  });
+  $('logLines').value = String(currentLogLines());
+  $('logLines').onchange = () => setLogLines($('logLines').value);
+  $('btnLogRefresh').onclick = () => refreshLogTab();
+  $('btnLogExport').onclick = exportLog;
+  $('btnLogCopy').onclick = copyLog;
+  $('btnFileLogCopy').onclick = copyFileLog;
+  syncLogFilterChips();
+
   $('dlgOk').onclick = () => {
     const dlg = $('dialog');
     dlg.returnValue = 'ok';
@@ -632,20 +657,295 @@ function renderStatusActions() {
 
 let eventsSignature = '';
 
-function renderEvents() {
-  const signature = state.events.map((event) => event.time + event.action).join('|');
-  if (signature === eventsSignature) return;
-  eventsSignature = signature;
+/* ---------------- Log/Verlauf (Phase W2) ----------------
+   Quelle: `state.events` aus `GET /events` (Felder `time`, `action`, `detail`,
+   `ok`; ein anderer Agent darf auch `text` liefern) und `GET /log?lines=`.
 
+   Die Liste wird nur im Browser gefiltert und gruppiert: Filter-Chips ueber
+   `action` (Fehler gewinnen immer), Suchfeld ueber Aktion und Text,
+   Zeitgruppen "Heute/Gestern/Aelter". Alles, was von aussen kommt, geht durch
+   `esc()`; die Logdatei bleibt reiner Text via `textContent`. */
+
+/// Filter-Chips in fester Reihenfolge; `error` gewinnt gegen alle anderen.
+const LOG_FILTERS = [
+  { key: 'all', label: 'Alle' },
+  { key: 'control', label: 'Steuerung' },
+  { key: 'routine', label: 'Routine' },
+  { key: 'plugin', label: 'Plugin' },
+  { key: 'warning', label: 'Warnung' },
+  { key: 'error', label: 'Fehler' },
+];
+
+/// Aktionen der Steuerung, Routinen, Plugins und Warnungen (Spiegel des Agenten).
+const LOG_CONTROL_ACTIONS = ['shutdown', 'abort', 'hibernate', 'power-plan', 'wake', 'mode'];
+const LOG_ROUTINE_ACTIONS = ['routine'];
+const LOG_PLUGIN_ACTIONS = ['plugin', 'games-scan', 'game-config'];
+const LOG_WARNING_ACTIONS = ['warnung'];
+
+const LOG_GROUP_ORDER = ['today', 'yesterday', 'older'];
+const LOG_GROUP_LABELS = { today: 'Heute', yesterday: 'Gestern', older: 'Älter' };
+
+/// Text eines Ereignisses: der Agent liefert `detail`, `text` gilt als Ersatz.
+function eventText(event) {
+  if (!event) return '';
+  const detail = (event.detail === undefined || event.detail === null)
+    ? '' : String(event.detail);
+  if (detail) return detail;
+  return (event.text === undefined || event.text === null) ? '' : String(event.text);
+}
+
+/// Kategorie eines Ereignisses; `ok === false` hat Vorrang (Fehler).
+function eventCategory(event) {
+  if (event && event.ok === false) return 'error';
+  const action = String((event && event.action) || '').trim().toLowerCase();
+  if (LOG_CONTROL_ACTIONS.indexOf(action) >= 0) return 'control';
+  if (LOG_ROUTINE_ACTIONS.indexOf(action) >= 0) return 'routine';
+  if (LOG_PLUGIN_ACTIONS.indexOf(action) >= 0) return 'plugin';
+  if (LOG_WARNING_ACTIONS.indexOf(action) >= 0) return 'warning';
+  // Alles andere (z. B. `ping`, `setup`): nur unter „Alle“ sichtbar.
+  return 'other';
+}
+
+/// Suchtext normalisieren: aussen trimmen, Gross-/Kleinschreibung egal.
+function normalizeLogQuery(query) {
+  return String(query || '').trim().toLowerCase();
+}
+
+/// Filtert die Ereignisse nach Chip und Suchtext; die Reihenfolge bleibt.
+function filterLogEvents(events) {
+  const filter = state.logFilter || 'all';
+  const needle = normalizeLogQuery(state.logQuery);
+  return (Array.isArray(events) ? events : []).filter((event) => {
+    if (filter !== 'all' && eventCategory(event) !== filter) return false;
+    if (!needle) return true;
+    const action = String((event && event.action) || '').toLowerCase();
+    const text = eventText(event).toLowerCase();
+    return action.indexOf(needle) >= 0 || text.indexOf(needle) >= 0;
+  });
+}
+
+/// Lokales Datum als `YYYY-MM-DD` (Grundlage der Zeitgruppen).
+function logDateKey(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return date.getFullYear() + '-' + month + '-' + day;
+}
+
+/// Gruppe eines Ereignisses. Fehlender/kaputter Zeitstempel -> „Älter“;
+/// ein Datum in der Zukunft (Uhr laeuft vor) gilt als „Heute“.
+function logGroupOf(event, todayKey, yesterdayKey) {
+  const time = String((event && event.time) || '').trim();
+  const date = time.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'older';
+  if (date >= todayKey) return 'today';
+  if (date === yesterdayKey) return 'yesterday';
+  return 'older';
+}
+
+/// Ereignisse in die drei Gruppen aufteilen; leere Gruppen entfallen.
+function logSections(events, todayKey, yesterdayKey) {
+  const buckets = { today: [], yesterday: [], older: [] };
+  events.forEach((event) => {
+    buckets[logGroupOf(event, todayKey, yesterdayKey)].push(event);
+  });
+  return LOG_GROUP_ORDER
+    .filter((key) => buckets[key].length)
+    .map((key) => ({ key, label: LOG_GROUP_LABELS[key], events: buckets[key] }));
+}
+
+/// Eine Zeile der Ereignisliste (Zeit · Aktion · Text, Fehler rot markiert).
+function logRow(event) {
+  const time = String((event && event.time) || '').trim();
+  const clock = time.length >= 16 ? time.slice(11) : (time || '–');
+  const action = String((event && event.action) || '').trim() || '–';
+  const text = eventText(event);
+  const failed = !!(event && event.ok === false);
+  return '<div class="logrow' + (failed ? ' err' : '') + '">' +
+    '<span class="lt">' + esc(clock) + '</span> · <strong>' + esc(action) + '</strong>' +
+    (text ? ' · ' + esc(text) : '') +
+    (failed ? ' <span class="lbadge">Fehler</span>' : '') +
+    '</div>';
+}
+
+/// Eine Zeitgruppe mit Ueberschrift und ihren Zeilen.
+function logSection(section) {
+  return '<div class="loggroup">' +
+    '<div class="loghead">' + esc(section.label) + ' · ' + section.events.length + '</div>' +
+    section.events.map(logRow).join('') +
+    '</div>';
+}
+
+/// Zusatz hinter dem Zaehler: aktiver Chip und Suchtext.
+function logFilterSuffix() {
+  const parts = [];
+  const filter = LOG_FILTERS.find((entry) => entry.key === state.logFilter);
+  if (filter && filter.key !== 'all') parts.push('Filter: ' + filter.label);
+  const query = String(state.logQuery || '').trim();
+  if (query) parts.push('Suche: „' + query + '“');
+  return parts.length ? ' · ' + parts.join(' · ') : '';
+}
+
+function renderEvents() {
   const box = $('events');
-  if (!state.events.length) {
-    box.textContent = 'Noch keine Ereignisse.';
-    return;
+  if (!box) return;
+  const events = Array.isArray(state.events) ? state.events : [];
+  const filtered = filterLogEvents(events);
+  const signature = filtered.map((event) => [String((event && event.time) || ''),
+    String((event && event.action) || ''), eventText(event),
+    event && event.ok === false ? '1' : '0'].join('|')).join('#') +
+    '#' + (state.logFilter || 'all') + '#' + normalizeLogQuery(state.logQuery);
+
+  if (signature !== eventsSignature) {
+    eventsSignature = signature;
+    if (!filtered.length) {
+      box.innerHTML = '';
+      box.textContent = (state.logFilter === 'all' && !normalizeLogQuery(state.logQuery))
+        ? 'Noch keine Ereignisse.'
+        : 'Keine Einträge für diesen Filter.';
+    } else {
+      const now = new Date();
+      const todayKey = logDateKey(now);
+      const yesterdayKey = logDateKey(
+        new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+      box.innerHTML = logSections(filtered, todayKey, yesterdayKey).map(logSection).join('');
+    }
   }
-  box.innerHTML = state.events.slice(0, 12).map((event) =>
-    '<div>' + esc(event.time.slice(11)) + ' · <strong>' + esc(event.action) + '</strong> · ' +
-    esc(event.detail) + (event.ok ? '' : ' <span style="color:var(--red)">FEHLER</span>') + '</div>'
-  ).join('');
+
+  const count = $('logCount');
+  if (count) {
+    count.textContent = filtered.length + ' von ' + events.length +
+      (events.length === 1 ? ' Eintrag' : ' Einträgen') + logFilterSuffix();
+  }
+}
+
+/// Chip wechseln (nichts nachladen – die Liste liegt schon im Browser).
+function setLogFilter(key) {
+  const known = LOG_FILTERS.some((entry) => entry.key === key);
+  state.logFilter = known ? key : 'all';
+  syncLogFilterChips();
+  renderEvents();
+}
+
+/// Markiert den aktiven Chip (aria-pressed wie die Wochentage der Routinen).
+function syncLogFilterChips() {
+  const box = $('logFilterChips');
+  if (!box) return;
+  box.querySelectorAll('button[data-filter]').forEach((button) => {
+    const on = button.dataset.filter === state.logFilter;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+/* ---- Log: Export als Textdatei (immer nur die gefilterte Liste) ---- */
+
+/// Zeitpunkt fuer die Kopfzeile, z. B. `23.11.2026 14:05`.
+function logExportStamp(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return pad(date.getDate()) + '.' + pad(date.getMonth() + 1) + '.' + date.getFullYear() +
+    ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+}
+
+/// Eine Zeile: `Zeit | Aktion | Text` und – nur bei Fehlern – `FEHLER`.
+function logExportLine(event) {
+  const time = String((event && event.time) || '').trim() || '-';
+  const action = String((event && event.action) || '').trim() || '-';
+  // Zeilenumbrueche im Text wuerden die Datei zerlegen.
+  const text = eventText(event).replace(/\s+/g, ' ').trim() || '-';
+  const fields = [time, action, text];
+  if (event && event.ok === false) fields.push('FEHLER');
+  return fields.join(' | ');
+}
+
+/// Kompletter Dateiinhalt: Kopfzeile mit PC-Name, Zeitpunkt und Anzahl.
+function logExportText(events, now) {
+  const list = Array.isArray(events) ? events : [];
+  const name = (state.status && state.status.device_name) ||
+    (state.pairing && state.pairing.name) || 'PC';
+  const lines = [
+    'PC Steuerung – Verlauf',
+    'PC: ' + name,
+    'Exportiert: ' + logExportStamp(now),
+    'Einträge: ' + list.length,
+    '',
+  ];
+  if (!list.length) lines.push('Keine Einträge für diesen Filter.');
+  else list.forEach((event) => lines.push(logExportLine(event)));
+  return lines.join('\r\n') + '\r\n';
+}
+
+/// Text als Datei speichern (`Blob` + `URL.createObjectURL` + `<a download>`).
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  // Erst spaeter freigeben: manche Browser brauchen die URL noch kurz.
+  window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/// In die Zwischenablage kopieren; Fallback fuer Browser ohne Clipboard-API.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    // Berechtigung verweigert -> Fallback unten
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', 'readonly');
+    area.style.position = 'fixed';
+    area.style.top = '-1000px';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(area);
+    return !!copied;
+  } catch (error) {
+    return false;
+  }
+}
+
+/// „Exportieren“: die gefilterte Liste als `verlauf-YYYY-MM-DD.txt`.
+function exportLog() {
+  const events = filterLogEvents(Array.isArray(state.events) ? state.events : []);
+  const now = new Date();
+  downloadText('verlauf-' + logDateKey(now) + '.txt', logExportText(events, now));
+  showBanner(events.length === 1 ? '1 Eintrag exportiert.'
+    : events.length + ' Einträge exportiert.', 'ok');
+}
+
+/// „Kopieren“: derselbe Text wie der Export, nur in die Zwischenablage.
+async function copyLog() {
+  const events = filterLogEvents(Array.isArray(state.events) ? state.events : []);
+  const copied = await copyText(logExportText(events, new Date()));
+  if (copied) {
+    showBanner('Verlauf kopiert (' + events.length +
+      (events.length === 1 ? ' Eintrag).' : ' Einträge).'), 'ok');
+  } else {
+    showBanner('Kopieren nicht möglich: der Browser erlaubt keinen Zugriff auf die ' +
+      'Zwischenablage.', 'warn');
+  }
+}
+
+/// Eigener Knopf der Logdatei: kopiert genau den angezeigten Text.
+async function copyFileLog() {
+  const host = $('fileLog');
+  const text = (host && host.textContent) || '';
+  const copied = text.trim() ? await copyText(text) : false;
+  if (copied) showBanner('Logdatei kopiert.', 'ok');
+  else showBanner('Logdatei ist leer oder die Zwischenablage ist gesperrt.', 'warn');
 }
 
 function sparkPoints(values) {
@@ -2250,6 +2550,8 @@ function syncTabPolling() {
     loadRoutineTemplates();
     renderRoutinePluginOptions();
   }
+  // Log (Phase W2): Ereignisse und Logdatei nur beim offenen Log-Tab, kein Takt.
+  if (state.activeTab === 'log') refreshLogTab();
 }
 
 function selectTab(tab) {
@@ -2289,6 +2591,8 @@ async function runAction(action) {
   } finally {
     state.busy = false;
     await tick();
+    // Nach einer Aktion den Verlauf nachziehen – nur wenn der Log-Tab offen ist.
+    refreshLogTab();
   }
 }
 
@@ -2435,13 +2739,57 @@ async function refreshGames() {
   }
 }
 
-async function refreshLog() {
-  if (!state.connected) return;
+/* ---- Logdatei: Aufbewahrung und Laden (nur im offenen Log-Tab) ---- */
+
+/// Gespeicherte Zeilenzahl (localStorage `pcLogLines`), Standard 200.
+function currentLogLines() {
+  let stored = null;
+  try { stored = localStorage.getItem(LOG_LINES_KEY); } catch (e) { stored = null; }
+  const value = Number(stored);
+  return LOG_LINES_CHOICES.indexOf(value) >= 0 ? value : LOG_LINES_DEFAULT;
+}
+
+/// Auswahl im Feld „200/500/1000 Zeilen“ übernehmen und sofort nachladen.
+function setLogLines(raw) {
+  const value = Number(raw);
+  const lines = LOG_LINES_CHOICES.indexOf(value) >= 0 ? value : LOG_LINES_DEFAULT;
+  try { localStorage.setItem(LOG_LINES_KEY, String(lines)); } catch (e) { /* privater Modus */ }
+  const select = $('logLines');
+  if (select) select.value = String(lines);
+  refreshLogTab();
+}
+
+/// Ereignisse und Logdatei nachladen – nur im aktiven Log-Tab (Regel D1).
+async function refreshLogTab() {
+  if (document.hidden || state.activeTab !== 'log') return;
+  if (!state.connected) {
+    const fileBox = $('fileLog');
+    if (fileBox) fileBox.textContent = 'Keine Verbindung zum Agenten – kein Verlauf.';
+    return;
+  }
   try {
-    const text = await api('/log?lines=200');
-    $('fileLog').textContent = (text || '').trim() || 'noch keine Einträge';
+    state.events = (await api('/events')).events || [];
   } catch (error) {
-    $('fileLog').textContent = 'Log konnte nicht geladen werden.';
+    // Liste bleibt stehen; die Logdatei wird trotzdem versucht.
+  }
+  renderEvents();
+  await refreshLog();
+}
+
+async function refreshLog() {
+  // Pflichtregel D1: nie im Hintergrund, nie in einem anderen Tab.
+  if (document.hidden || state.activeTab !== 'log') return;
+  const box = $('fileLog');
+  if (!box) return;
+  if (!state.connected) {
+    box.textContent = 'Keine Verbindung zum Agenten – kein Verlauf.';
+    return;
+  }
+  try {
+    const text = await api('/log?lines=' + currentLogLines());
+    box.textContent = (text || '').trim() || 'noch keine Einträge';
+  } catch (error) {
+    box.textContent = 'Log konnte nicht geladen werden: ' + error.message;
   }
 }
 
@@ -2485,11 +2833,7 @@ async function tick() {
     } catch (error) {
       state.steam = null;
     }
-    try {
-      state.events = (await api('/events')).events || [];
-    } catch (error) {
-      // Ereignisse sind nicht kritisch
-    }
+    // Ereignisse (`/events`) werden nur im Log-Tab geladen – refreshLogTab().
   }
 
   render();
@@ -2520,7 +2864,7 @@ async function slowTick() {
     await refreshRoutines();
   }
   if (state.slowTicks % 3 === 0) {
-    await refreshLog();
+    // Die Logdatei haengt am offenen Log-Tab (kein Takt, siehe syncTabPolling).
     await refreshDeviceStatus();
   }
   render();
@@ -2815,6 +3159,12 @@ function resetData() {
   statusSignature = '';
   eventsSignature = '';
   usersSignature = '';
+  // Log/Verlauf (Phase W2): Filter und Suche gehören zum alten Agenten.
+  state.logFilter = 'all';
+  state.logQuery = '';
+  const searchBox = $('logSearch');
+  if (searchBox) searchBox.value = '';
+  syncLogFilterChips();
   $('fileLog').textContent = 'Wird geladen …';
 }
 

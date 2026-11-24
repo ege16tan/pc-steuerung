@@ -471,14 +471,54 @@
       <div class="log" id="warnHistory"></div>
     </div>
 
-    <div class="tile w2" data-tab="log">
+    <!-- Log/Verlauf (Phase W2): Ereignisliste mit Filter-Chips, Suche,
+         Zeitgruppen und Export. Geladen wird nur bei offenem Log-Tab. -->
+    <div class="tile w4" data-tab="log">
       <div class="lab">Ereignisse</div>
-      <div class="log" id="events"></div>
+      <div class="mut">Neueste zuerst. Filter, Suche und Export beziehen sich immer
+        auf die angezeigte Liste.</div>
+
+      <div class="filchips" id="logFilterChips" role="group" aria-label="Ereignisse filtern">
+        <button type="button" data-filter="all" aria-pressed="true" class="on">Alle</button>
+        <button type="button" data-filter="control" aria-pressed="false">Steuerung</button>
+        <button type="button" data-filter="routine" aria-pressed="false">Routine</button>
+        <button type="button" data-filter="plugin" aria-pressed="false">Plugin</button>
+        <button type="button" data-filter="warning" aria-pressed="false">Warnung</button>
+        <button type="button" data-filter="error" aria-pressed="false">Fehler</button>
+      </div>
+
+      <div class="row">
+        <input id="logSearch" type="search" placeholder="Suchen (Aktion oder Text)"
+               aria-label="Ereignisse durchsuchen" autocomplete="off">
+        <button type="button" class="ghost" id="btnLogRefresh"
+                style="flex:0 0 auto">Aktualisieren</button>
+      </div>
+
+      <div class="btns" style="margin-top:10px">
+        <button type="button" class="ghost" id="btnLogExport">Exportieren</button>
+        <button type="button" class="ghost" id="btnLogCopy">Kopieren</button>
+      </div>
+
+      <p class="mut" id="logCount" style="margin:8px 0 0">Ereignisse werden geladen …</p>
+      <div class="log logrev" id="events" aria-live="polite"></div>
     </div>
 
     <div class="tile w4" data-tab="log">
       <div class="lab">Verlauf (Logdatei)</div>
+      <div class="row" style="margin-top:10px">
+        <label class="sr-only" for="logLines">Anzahl der Zeilen</label>
+        <select id="logLines" style="flex:0 0 160px">
+          <option value="200">200 Zeilen</option>
+          <option value="500">500 Zeilen</option>
+          <option value="1000">1000 Zeilen</option>
+        </select>
+      </div>
+      <p class="mut" style="margin:8px 0 0">Der Agent rotiert <code>agent.log</code> selbst
+        (<code>agent.log</code> → <code>agent.log.1</code>).</p>
       <pre class="log" id="fileLog">Wird geladen …</pre>
+      <div class="btns" style="margin-top:10px">
+        <button type="button" class="ghost" id="btnFileLogCopy">Kopieren</button>
+      </div>
     </div>
   </div>
 

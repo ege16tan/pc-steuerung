@@ -264,6 +264,32 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
 .devrow .grow.wrap { white-space: normal; overflow: visible; text-overflow: clip; }
 .mut.err { color: var(--red); }
 
+/* ---------------- Verlauf/Log (Phase W2) ----------------
+   Filter-Chips wie .days (rund, klein), Zeitgruppen als ruhige Ueberschrift,
+   fehlgeschlagene Ereignisse in Fehlerfarbe mit Marker. Alles nutzt die
+   Farbvariablen, damit Hell/Dunkel automatisch passt. */
+.filchips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.filchips button {
+  flex: 0 0 auto; padding: 7px 12px; font-size: 12px; border-radius: 99px;
+  background: transparent; color: var(--mut);
+}
+.filchips button.on {
+  background: var(--teal); border-color: var(--teal); color: #04231f; font-weight: 700;
+}
+:root[data-theme="light"] .filchips button.on { color: #ffffff; }
+
+/* Die Ereignisliste darf hoeher sein als die kurze Log-Vorschau. */
+.logrev { max-height: 340px; }
+.loggroup + .loggroup { margin-top: 10px; }
+.loghead {
+  color: var(--mut); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+}
+.logrow { padding: 2px 0; }
+.logrow .lt { color: var(--mut); }
+.logrow.err { color: var(--red); }
+.logrow.err .lt { color: inherit; opacity: .8; }
+.logrow .lbadge { font-weight: 700; }
+
 /* Barrierefreiheit */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
