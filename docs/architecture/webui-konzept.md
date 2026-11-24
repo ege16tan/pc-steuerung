@@ -3,6 +3,10 @@
 **Stand:** 2026-11-14 · **Status:** geprüft · **Phasen 1–4 umgesetzt** (siehe §8–§11)
 **Vorlage:** `docs/architecture/webui-konzept.html` (das gelieferte Mockup, reines HTML/CSS/JS)
 
+> **Achtung, Historie:** Diese Datei beschreibt die Phasen 1–4. Der aktuelle Stand
+> (Kachel-Rework gespiegelt, Systemwerte/Warnungen/Plugin-Detail) und alle **offenen**
+> Web-UI-Punkte stehen in [`../planung-webui.md`](../planung-webui.md).
+
 ## 1. Was das Konzept zeigt
 
 - **Sidebar:** Geräte-Liste (Wohnzimmer-PC, Büro-PC) mit Online-Punkt, „＋ Gerät hinzufügen",

@@ -7,7 +7,9 @@ widersprüchlichen Doku-Stände gibt.
 | Pfad | Inhalt |
 |---|---|
 | `architecture/steam-plugin-und-kacheln.md` | Steam-/Millennium-Erkennung, Plugin-System, Kachel-UI |
-| `architecture/webui-konzept.md` (+ `.html`) | Abgleich Web-UI-Konzept und gelieferte Vorlage |
+| `architecture/webui-konzept.md` (+ `.html`) | Abgleich Web-UI-Konzept und gelieferte Vorlage (Phasen 1–4, Historie) |
+| `planung-kachel-rework.md` | Checkliste der Kachel-Rework-Phasen A–G (Android/Agent) |
+| `planung-webui.md` | **aktuelle** Web-UI-Checkliste: erledigt + offene Phasen W1–W5 |
 | `decisions/ADR-001-desktop-app.md` | Entscheidung: Desktop-App (Fenster + Tray), kein Autostart |
 | `planung.md` | große Planung/Spezifikation (Status-Quelle im Repo) |
 | `releases/` | Release-Notizen je Version |

@@ -37,7 +37,9 @@ Status).
   Desktop-App bzw. `scripts\build-icon.ps1` (rendert `assets\PC Steuerung.ico`).
 - **Ablage:** Start-/Notfallskripte in `scripts/` (Agent-Manager greift auf
   `..\PC Agent Rust` zu), Icons in `assets/`, Technik-Doku in `docs/architecture/`
-  und `docs/decisions/`, Planung in `docs/planung.md`, Release-Notizen in `docs/releases/`.
+  und `docs/decisions/`, Planung in `docs/planung.md`, offene Web-UI-Punkte in
+  `docs/planung-webui.md`, Kachel-Rework-Phasen in `docs/planung-kachel-rework.md`,
+  Release-Notizen in `docs/releases/`.
 - Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
 - `PC_AGENT_SIMULATE` (Default `0` im Manager) = echte Aktion; `1` = Simulation (nur Loggen).
   Simulation nur bewusst einschalten; destruktive Aufrufe (Shutdown) immer mit Countdown testen.
