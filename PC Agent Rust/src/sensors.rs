@@ -280,7 +280,56 @@ pub fn parse_nvidia_smi(text: &str) -> Option<Gpu> {
 
 /// Aktuelle Messwerte lesen und den Zustand fortschreiben.
 pub fn read(state: &Mutex<SensorsState>, app: &App) -> Sensors {
-    read_impl(state, app)
+    let metrics = crate::metrics::read(&app.metrics);
+
+    let cpu = if metrics.cpu_cores > 0 {
+        Cpu {
+            available: true,
+            percent: metrics.cpu_percent,
+            cores: metrics.cpu_cores,
+            reason: None,
+        }
+    } else {
+        Cpu {
+            available: false,
+            percent: None,
+            cores: 0,
+            reason: Some("Prozessor nicht lesbar".to_string()),
+        }
+    };
+
+    let ram = if metrics.ram_total_mb > 0 {
+        Ram {
+            available: true,
+            used_mb: Some(metrics.ram_used_mb),
+            total_mb: Some(metrics.ram_total_mb),
+            percent: Some(metrics.ram_percent),
+            reason: None,
+        }
+    } else {
+        Ram {
+            available: false,
+            used_mb: None,
+            total_mb: None,
+            percent: None,
+            reason: Some("Arbeitsspeicher nicht lesbar".to_string()),
+        }
+    };
+
+    // Blocking I/O - route handler calls this directly without extra spawn_blocking
+    let gpu = gpu_cached(state);
+    let network = network_now(state);
+    let disks = read_disks();
+
+    Sensors {
+        cpu,
+        ram,
+        gpu,
+        network,
+        disks,
+        fans: Unavailable::new(FAN_REASON),
+        temperatures: Unavailable::new(FAN_REASON),
+    }
 }
 
 /// Alle Datentraeger mit Groesse und Belegung (auch fuer Warnregeln, Phase C).
@@ -322,83 +371,8 @@ pub fn lowest_free_percent(disks: &[Disk]) -> Option<f64> {
         .reduce(f64::min)
 }
 
-#[cfg(windows)]
-fn read_impl(state: &Mutex<SensorsState>, app: &App) -> Sensors {
-    let metrics = crate::metrics::read(&app.metrics);
-
-    let cpu = if metrics.cpu_cores > 0 {
-        Cpu {
-            available: true,
-            percent: metrics.cpu_percent,
-            cores: metrics.cpu_cores,
-            reason: None,
-        }
-    } else {
-        Cpu {
-            available: false,
-            percent: None,
-            cores: 0,
-            reason: Some("Prozessor nicht lesbar".to_string()),
-        }
-    };
-
-    let ram = if metrics.ram_total_mb > 0 {
-        Ram {
-            available: true,
-            used_mb: Some(metrics.ram_used_mb),
-            total_mb: Some(metrics.ram_total_mb),
-            percent: Some(metrics.ram_percent),
-            reason: None,
-        }
-    } else {
-        Ram {
-            available: false,
-            used_mb: None,
-            total_mb: None,
-            percent: None,
-            reason: Some("Arbeitsspeicher nicht lesbar".to_string()),
-        }
-    };
-
-    Sensors {
-        cpu,
-        ram,
-        gpu: gpu_cached(state),
-        network: network_now(state),
-        disks: read_disks(),
-        fans: Unavailable::new(FAN_REASON),
-        temperatures: Unavailable::new(FAN_REASON),
-    }
-}
-
 /// Begruendung fuer Teile, die eine Zusatzbibliothek brauchen wuerden.
 const FAN_REASON: &str = "ohne Zusatzbibliothek nicht lesbar";
-
-#[cfg(not(windows))]
-fn read_impl(_state: &Mutex<SensorsState>, _app: &App) -> Sensors {
-    // Ohne Windows keine Win32-Zaehler: alles ehrlich als nicht verfuegbar.
-    let reason = "nur unter Windows lesbar";
-    Sensors {
-        cpu: Cpu {
-            available: false,
-            percent: None,
-            cores: 0,
-            reason: Some(reason.to_string()),
-        },
-        ram: Ram {
-            available: false,
-            used_mb: None,
-            total_mb: None,
-            percent: None,
-            reason: Some(reason.to_string()),
-        },
-        gpu: Gpu::unavailable(reason),
-        network: Network::unavailable(reason),
-        disks: Vec::new(),
-        fans: Unavailable::new(FAN_REASON),
-        temperatures: Unavailable::new(FAN_REASON),
-    }
-}
 
 // ---------------- Netzwerk ----------------
 

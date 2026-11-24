@@ -633,6 +633,39 @@ pub async fn sensors_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
     }
 }
 
+/// POST /clean-memory — fuehrt alle Memory-Clean-Operationen aus (wie Mem Reduct).
+///
+/// Operationen: Working Sets trimmen, System-File-Cache leeren, Modified Page List
+/// flushen, Standby List leeren (Admin), Standby Priority-0 List leeren (Admin),
+/// Registry Cache leeren (Win 8.1+), Memory Combine (Win 10+), Volume Cache flushen.
+/// Braucht Admin-Rechte fuer Standby-bezogene Operationen.
+pub async fn clean_memory_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Response {
+    // Metrik VOR dem Bereinigen lesen
+    let before = crate::metrics::read(&app.metrics);
+    let result = tokio::task::spawn_blocking(move || {
+        crate::optimize::clean_memory_full()
+    })
+    .await
+    .unwrap_or((0, false, false, false, false, false, false, false, false));
+    let (trimmed, system_cache, modified, standby, standby_prio0, registry, combined, volume, admin) = result;
+    // Metrik NACH dem Bereinigen lesen
+    let after = crate::metrics::read(&app.metrics);
+    Json(json!({
+        "admin": admin,
+        "trimmed": trimmed,
+        "system_cache": system_cache,
+        "modified": modified,
+        "standby": standby,
+        "standby_prio0": standby_prio0,
+        "registry": registry,
+        "combined": combined,
+        "volume": volume,
+        "used_mb": after.ram_used_mb,
+        "free_mb": after.ram_total_mb.saturating_sub(after.ram_used_mb),
+        "before_used_mb": before.ram_used_mb,
+    })).into_response()
+}
+
 /// GET /warnings — Warnregeln, aktive Warnungen und ausgeloeste Ereignisse
 /// (Phase C). Geprueft wird im Agenten (alle 30 s), auch bei geschlossener App;
 /// die Android-App zeigt nur an und schickt je Ereignis eine Benachrichtigung.

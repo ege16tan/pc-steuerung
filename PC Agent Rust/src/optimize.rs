@@ -6,6 +6,16 @@
 //!
 //! Bewusst ohne zusaetzliche Crate: ein paar Aufrufe aus kernel32, psapi,
 //! ntdll und shell32 reichen fuer Working-Set-Trimming und Standby-Bereinigung.
+//!
+//! Memory-Clean-Operationen basieren auf Mem Reduct (Henry++, GPL-3.0):
+//! - Working Set trimmen (EmptyWorkingSet)
+//! - System-File-Cache leeren (SystemFileCacheInformationEx)
+//! - Modified Page List flushen (MemoryFlushModifiedList)
+//! - Standby List leeren (MemoryPurgeStandbyList) - braucht Admin
+//! - Standby Priority-0 List leeren (MemoryPurgeLowPriorityStandbyList) - braucht Admin
+//! - Registry Cache leeren (SystemRegistryReconciliationInformation) - Win 8.1+
+//! - Memory Combine (SystemCombinePhysicalMemoryInformation) - Win 10+
+//! - Volume Cache flushen
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -125,7 +135,6 @@ pub fn kill_list(entries: &[String], keep_exe: Option<&str>) -> Vec<String> {
     killed
 }
 
-/// Beendet Prozesse; das Spiel selbst bleibt verschont.
 #[cfg(windows)]
 mod win {
     use std::ffi::c_void;
@@ -160,8 +169,31 @@ mod win {
     pub const HIGH_PRIORITY_CLASS: u32 = 0x0080;
     /// `SYSTEM_INFORMATION_CLASS::SystemMemoryListInformation`.
     pub const SYSTEM_MEMORY_LIST_INFORMATION: u32 = 0x50;
+    /// `SYSTEM_MEMORY_LIST_COMMAND::MemoryFlushModifiedList`.
+    pub const MEMORY_FLUSH_MODIFIED_LIST: u32 = 3;
     /// `SYSTEM_MEMORY_LIST_COMMAND::MemoryPurgeStandbyList`.
     pub const MEMORY_PURGE_STANDBY_LIST: u32 = 4;
+    /// `SYSTEM_MEMORY_LIST_COMMAND::MemoryPurgeLowPriorityStandbyList`.
+    pub const MEMORY_PURGE_LOW_PRIORITY_STANDBY_LIST: u32 = 5;
+    /// `SYSTEM_INFORMATION_CLASS::SystemFileCacheInformationEx`.
+    pub const SYSTEM_FILE_CACHE_INFORMATION_EX: u32 = 0x51;
+    /// `SYSTEM_INFORMATION_CLASS::SystemRegistryReconciliationInformation`.
+    pub const SYSTEM_REGISTRY_RECONCILIATION_INFORMATION: u32 = 0x5C;
+    /// `SYSTEM_INFORMATION_CLASS::SystemCombinePhysicalMemoryInformation`.
+    pub const SYSTEM_COMBINE_PHYSICAL_MEMORY_INFORMATION: u32 = 0x5F;
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct SystemFileCacheInformationEx {
+    minimum_working_set: usize,
+    maximum_working_set: usize,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct MemoryCombineInformationEx {
+    unused: [u64; 4],
 }
 
 #[cfg(windows)]
@@ -209,6 +241,47 @@ pub fn trim_all_processes() -> usize {
     0
 }
 
+/// System-File-Cache leeren (Minimum/Maximum Working Set auf MAXSIZE_T setzen).
+#[cfg(windows)]
+pub fn purge_system_file_cache() -> bool {
+    let mut info = SystemFileCacheInformationEx {
+        minimum_working_set: usize::MAX,
+        maximum_working_set: usize::MAX,
+    };
+    let status = unsafe {
+        win::NtSetSystemInformation(
+            win::SYSTEM_FILE_CACHE_INFORMATION_EX,
+            &mut info as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<SystemFileCacheInformationEx>() as u32,
+        )
+    };
+    status >= 0
+}
+
+#[cfg(not(windows))]
+pub fn purge_system_file_cache() -> bool {
+    false
+}
+
+/// Modified Page List flushen.
+#[cfg(windows)]
+pub fn flush_modified_list() -> bool {
+    let mut command: u32 = win::MEMORY_FLUSH_MODIFIED_LIST;
+    let status = unsafe {
+        win::NtSetSystemInformation(
+            win::SYSTEM_MEMORY_LIST_INFORMATION,
+            &mut command as *mut u32 as *mut std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    status >= 0
+}
+
+#[cfg(not(windows))]
+pub fn flush_modified_list() -> bool {
+    false
+}
+
 /// Standby-Liste leeren (benoetigt Administratorrechte).
 #[cfg(windows)]
 pub fn purge_standby() -> bool {
@@ -225,6 +298,84 @@ pub fn purge_standby() -> bool {
 
 #[cfg(not(windows))]
 pub fn purge_standby() -> bool {
+    false
+}
+
+/// Standby Priority-0 Liste leeren (benoetigt Administratorrechte).
+#[cfg(windows)]
+pub fn purge_standby_priority0() -> bool {
+    let mut command: u32 = win::MEMORY_PURGE_LOW_PRIORITY_STANDBY_LIST;
+    let status = unsafe {
+        win::NtSetSystemInformation(
+            win::SYSTEM_MEMORY_LIST_INFORMATION,
+            &mut command as *mut u32 as *mut std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    status >= 0
+}
+
+#[cfg(not(windows))]
+pub fn purge_standby_priority0() -> bool {
+    false
+}
+
+/// Registry Cache leeren (Windows 8.1+).
+#[cfg(windows)]
+pub fn purge_registry_cache() -> bool {
+    let status = unsafe {
+        win::NtSetSystemInformation(
+            win::SYSTEM_REGISTRY_RECONCILIATION_INFORMATION,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    status >= 0
+}
+
+#[cfg(not(windows))]
+pub fn purge_registry_cache() -> bool {
+    false
+}
+
+/// Memory Combine (Windows 10+).
+#[cfg(windows)]
+pub fn combine_memory() -> bool {
+    let mut info = MemoryCombineInformationEx { unused: [0; 4] };
+    let status = unsafe {
+        win::NtSetSystemInformation(
+            win::SYSTEM_COMBINE_PHYSICAL_MEMORY_INFORMATION,
+            &mut info as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<MemoryCombineInformationEx>() as u32,
+        )
+    };
+    status >= 0
+}
+
+#[cfg(not(windows))]
+pub fn combine_memory() -> bool {
+    false
+}
+
+/// Volumen-Cache flushen (Dateisystem-Caches auf alle Volumes).
+#[cfg(windows)]
+pub fn flush_volume_cache() -> bool {
+    use std::fs::File;
+
+    let mut any_ok = false;
+    for letter in b'C'..=b'Z' {
+        let path = format!("{}:\\", letter as char);
+        if let Ok(file) = File::open(&path) {
+            if file.sync_all().is_ok() {
+                any_ok = true;
+            }
+        }
+    }
+    any_ok
+}
+
+#[cfg(not(windows))]
+pub fn flush_volume_cache() -> bool {
     false
 }
 
@@ -247,6 +398,34 @@ pub fn boost_priority(_pid: u32) -> bool {
     false
 }
 
+/// Fuehrt alle Memory-Clean-Operationen aus (wie Mem Reduct).
+/// Liefert zurueck: (trimmed, system_cache_purged, modified_flushed, standby_purged,
+/// standby_prio0_purged, registry_purged, combined, volume_flushed, admin)
+#[cfg(windows)]
+pub fn clean_memory_full() -> (usize, bool, bool, bool, bool, bool, bool, bool, bool) {
+    let admin = is_admin();
+    let trimmed = trim_all_processes();
+    let system_cache = purge_system_file_cache();
+    let modified = flush_modified_list();
+    let (standby, standby_prio0, registry, combined) = if admin {
+        (
+            purge_standby(),
+            purge_standby_priority0(),
+            purge_registry_cache(),
+            combine_memory(),
+        )
+    } else {
+        (false, false, false, false)
+    };
+    let volume = flush_volume_cache();
+    (trimmed, system_cache, modified, standby, standby_prio0, registry, combined, volume, admin)
+}
+
+#[cfg(not(windows))]
+pub fn clean_memory_full() -> (usize, bool, bool, bool, bool, bool, bool, bool, bool) {
+    (0, false, false, false, false, false, false, false, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,8 +437,6 @@ mod tests {
 
     #[test]
     fn kill_liste_laesst_das_spiel_leben() {
-        // Namen werden nur verglichen, wenn taskkill sie wirklich trifft;
-        // hier zaehlt die Filterlogik ohne echte Prozesse.
         let entries = vec!["".to_string(), "  ".to_string()];
         assert!(kill_list(&entries, Some("game.exe")).is_empty());
     }

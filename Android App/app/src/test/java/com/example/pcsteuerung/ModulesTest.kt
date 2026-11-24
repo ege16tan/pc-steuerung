@@ -146,4 +146,84 @@ class ModulesTest {
         assertFalse(SUPPORTED_MODULES.contains("hibernate"))
         assertFalse(SUPPORTED_MODULES.contains("power_plan"))
     }
+
+    // -----------------------------------------------------------------------
+    // Versionsspeicher und Update-Hinweis (Phase F5)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `installedVersions liefert leeres Mapping ohne Speicher`() {
+        assertTrue(installedVersions(null).isEmpty())
+        assertTrue(installedVersions("").isEmpty())
+        assertTrue(installedVersions("   ").isEmpty())
+    }
+
+    @Test
+    fun `installedVersions ignoriert kaputten Speicher`() {
+        // Kein JSON und ein Array statt Objekt duerfen nicht werfen.
+        assertTrue(installedVersions("kein json").isEmpty())
+        assertTrue(installedVersions("[1,2,3]").isEmpty())
+    }
+
+    @Test
+    fun `versionsJson und installedVersions sind ein Round-Trip`() {
+        val raw = versionsJson(mapOf(MODULE_TIMER to 3, MODULE_LOG to 1))
+
+        assertEquals(mapOf(MODULE_LOG to 1, MODULE_TIMER to 3), installedVersions(raw))
+        // Kanonisch sortiert: gleicher Inhalt ergibt wieder dieselbe Zeichenkette.
+        assertEquals(raw, versionsJson(installedVersions(raw)))
+    }
+
+    @Test
+    fun `withInstalledVersion schreibt die Katalogversion`() {
+        val raw = withInstalledVersion(null, MODULE_TIMER, 4)
+
+        assertEquals(4, installedVersionOf(installedVersions(raw), MODULE_TIMER))
+
+        // Ein zweites Modul kommt dazu, das erste bleibt unberuehrt.
+        val both = withInstalledVersion(raw, MODULE_LOG, 2)
+        assertEquals(mapOf(MODULE_LOG to 2, MODULE_TIMER to 4), installedVersions(both))
+    }
+
+    @Test
+    fun `withInstalledVersion hebt eine alte Version an`() {
+        val raw = withInstalledVersion(null, MODULE_TIMER, 1)
+
+        val updated = withInstalledVersion(raw, MODULE_TIMER, 2)
+
+        assertEquals(2, installedVersionOf(installedVersions(updated), MODULE_TIMER))
+    }
+
+    @Test
+    fun `withoutInstalledVersion loescht nur den eigenen Eintrag`() {
+        val raw = withInstalledVersion(
+            withInstalledVersion(null, MODULE_TIMER, 2),
+            MODULE_LOG,
+            1,
+        )
+
+        val removed = withoutInstalledVersion(raw, MODULE_TIMER)
+
+        assertEquals(mapOf(MODULE_LOG to 1), installedVersions(removed))
+        // Entfernen eines unbekannten Moduls aendert nichts.
+        assertEquals(removed, withoutInstalledVersion(removed, "unbekannt"))
+        // Leerer Speicher bleibt ein leeres Objekt.
+        assertEquals("{}", withoutInstalledVersion(null, MODULE_TIMER))
+    }
+
+    @Test
+    fun `Abwaertskompatibilitaet - ohne Eintrag gilt Version 1`() {
+        // Altdaten kannten nur `installed_modules`, also gar keinen Eintrag.
+        val versions = installedVersions(null)
+
+        assertEquals(MODULE_VERSION_FALLBACK, installedVersionOf(versions, MODULE_TIMER))
+        assertEquals(1, installedVersionOf(versions, MODULE_LOG))
+    }
+
+    @Test
+    fun `Version 0 im Speicher wird auf 1 gehoben`() {
+        val versions = installedVersions("""{"timer": 0}""")
+
+        assertEquals(1, installedVersionOf(versions, MODULE_TIMER))
+    }
 }

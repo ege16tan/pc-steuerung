@@ -1631,19 +1631,40 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
                     "simulated": true,
                     "admin": crate::optimize::is_admin(),
                     "trimmed": 0,
+                    "system_cache": false,
+                    "modified": false,
+                    "standby": false,
+                    "standby_prio0": false,
+                    "registry": false,
+                    "combined": false,
+                    "volume": false,
                     "used_mb": metrics.ram_used_mb,
                     "free_mb": metrics.ram_total_mb.saturating_sub(metrics.ram_used_mb),
                 }));
             }
             let before = crate::metrics::read(&app.metrics);
-            let trimmed = crate::optimize::trim_all_processes();
-            let admin = crate::optimize::is_admin();
-            let purged = admin && crate::optimize::purge_standby();
+            let (
+                trimmed,
+                system_cache,
+                modified,
+                standby,
+                standby_prio0,
+                registry,
+                combined,
+                volume,
+                admin,
+            ) = crate::optimize::clean_memory_full();
             let after = crate::metrics::read(&app.metrics);
             Ok(json!({
                 "admin": admin,
-                "purged": purged,
                 "trimmed": trimmed,
+                "system_cache": system_cache,
+                "modified": modified,
+                "standby": standby,
+                "standby_prio0": standby_prio0,
+                "registry": registry,
+                "combined": combined,
+                "volume": volume,
                 "used_mb": after.ram_used_mb,
                 "free_mb": after.ram_total_mb.saturating_sub(after.ram_used_mb),
                 "before_used_mb": before.ram_used_mb,

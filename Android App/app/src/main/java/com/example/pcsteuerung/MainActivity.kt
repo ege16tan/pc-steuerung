@@ -1,3 +1,5 @@
+@file:OptIn(androidx.camera.core.ExperimentalGetImage::class)
+
 package com.example.pcsteuerung
 
 import android.Manifest
@@ -15,7 +17,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
@@ -660,10 +664,10 @@ private fun QrScannerScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                    Text("Kamera erlauben")
+                    Text(stringResource(R.string.camera_permission))
                 }
                 TextButton(onClick = onClose) {
-                    Text("Abbrechen", color = Color.White)
+                    Text(stringResource(android.R.string.cancel), color = Color.White)
                 }
             }
 
@@ -714,6 +718,7 @@ private fun CameraQrPreview(onResult: (String) -> Unit) {
             .build()
 
         analysis.setAnalyzer(executor) { imageProxy: ImageProxy ->
+            @Suppress("UnsafeOptInUsageError")
             val mediaImage = imageProxy.image
             if (mediaImage == null || resultDelivered.get()) {
                 imageProxy.close()
@@ -768,6 +773,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
     var testResult by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     val connectionReady = host.isNotBlank() && isValidPort(port)
 
     if (showScanner) {
@@ -846,7 +852,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
 
     fun save() {
         when {
-            pass.isNotEmpty() && pass != pass2 -> formError = "Passwörter stimmen nicht überein"
+            pass.isNotEmpty() && pass != pass2 -> formError = ctx.getString(R.string.passwords_mismatch)
             wolEnabled && (mac.isBlank() || !isValidMac(mac)) -> formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
             else -> {
                 formError = null
@@ -876,6 +882,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                .imePadding()
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -988,7 +995,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                             color = MaterialTheme.colorScheme.onPrimary
                                         )
                                     } else {
-                                        Text("Verbindung testen")
+                                        Text(stringResource(R.string.test_connection))
                                     }
                                 }
                                 testResult?.let {
@@ -1079,14 +1086,14 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                 OutlinedTextField(
                                     value = user,
                                     onValueChange = { user = it },
-                                    label = { Text("Benutzername") },
+                                    label = { Text(stringResource(R.string.username_label)) },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 OutlinedTextField(
                                     value = pass,
                                     onValueChange = { pass = it; formError = null },
-                                    label = { Text("Passwort") },
+                                    label = { Text(stringResource(R.string.password_label)) },
                                     singleLine = true,
                                     visualTransformation = if (showPass) {
                                         VisualTransformation.None
@@ -1096,7 +1103,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                                     trailingIcon = {
                                         TextButton(onClick = { showPass = !showPass }) {
-                                            Text(if (showPass) "Verbergen" else "Anzeigen", fontSize = 12.sp)
+                                            Text(if (showPass) stringResource(R.string.password_hide) else stringResource(R.string.password_show), fontSize = 12.sp)
                                         }
                                     },
                                     modifier = Modifier.fillMaxWidth()
@@ -1104,7 +1111,7 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                 OutlinedTextField(
                                     value = pass2,
                                     onValueChange = { pass2 = it; formError = null },
-                                    label = { Text("Passwort wiederholen") },
+                                    label = { Text(stringResource(R.string.repeat_password_label)) },
                                     singleLine = true,
                                     isError = pass2.isNotEmpty() && pass != pass2,
                                     visualTransformation = if (showPass) {
@@ -1166,8 +1173,8 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                 step == 2 && wolEnabled && (mac.isBlank() || !isValidMac(mac)) -> {
                                     formError = "MAC-Format: AA:BB:CC:DD:EE:FF"
                                 }
-                                step == 3 && pass.isNotEmpty() && pass != pass2 -> {
-                                    formError = "Passwörter stimmen nicht überein"
+step == 3 && pass.isNotEmpty() && pass != pass2 -> {
+                                    formError = ctx.getString(R.string.passwords_mismatch)
                                 }
                                 step < 4 -> { formError = null; step++ }
                                 else -> save()
@@ -1238,6 +1245,10 @@ fun MainApp(
     // Marktplatz-Zustand: installierte Module sind persistent, der Katalog
     // startet lokal und wird beim ersten Start vom GitHub-Repo aufgefrischt.
     var installedModules by remember { mutableStateOf(ModuleStore.load(context)) }
+    // Installationsversionen (Phase F5): JSON `{"<id>": <version>}`. Ohne
+    // Eintrag (Altdaten) gilt Version 1, damit ein Katalog-Update auffaellt.
+    var moduleVersionsRaw by remember { mutableStateOf(ModuleStore.loadVersionsRaw(context)) }
+    val moduleVersions = remember(moduleVersionsRaw) { installedVersions(moduleVersionsRaw) }
     var catalogModules by remember { mutableStateOf(defaultCatalog()) }
     var catalogSource by remember { mutableStateOf("Lokal (Fallback)") }
     var catalogRefresh by remember { mutableStateOf(0) }
@@ -1267,6 +1278,12 @@ fun MainApp(
     var sensorsRefreshing by remember { mutableStateOf(false) }
     var sensorsRefresh by remember { mutableIntStateOf(0) }
 
+    // Warnungen (`GET /warnings`): Regeln, aktive Warnungen, Verlauf. Wie bei
+    // Systemwerten wird nur geladen, solange die Seite offen ist.
+    var warnings by remember { mutableStateOf<WarningsStatus?>(null) }
+    var warningsRefreshing by remember { mutableStateOf(false) }
+    var warningsRefresh by remember { mutableIntStateOf(0) }
+
     // Plugin-Detailseite: Ausgabe der letzten Zeilen (`GET /plugins/{id}/output`).
     var pluginOutput by remember { mutableStateOf("") }
 
@@ -1286,16 +1303,36 @@ fun MainApp(
 
     fun installModule(module: CatalogModule) {
         val next = installedModules + module.id
+        // Beim Installieren wird die Katalogversion festgeschrieben.
+        val nextVersions = withInstalledVersion(moduleVersionsRaw, module.id, module.version)
         ModuleStore.save(context, next)
+        ModuleStore.saveVersions(context, nextVersions)
         installedModules = next
+        moduleVersionsRaw = nextVersions
         message = "${module.name} installiert"
     }
 
     fun uninstallModule(module: CatalogModule) {
         val next = installedModules - module.id
+        // Mit der Installation verschwindet auch der Versions-Eintrag.
+        val nextVersions = withoutInstalledVersion(moduleVersionsRaw, module.id)
         ModuleStore.save(context, next)
+        ModuleStore.saveVersions(context, nextVersions)
         installedModules = next
+        moduleVersionsRaw = nextVersions
         message = "${module.name} deinstalliert"
+    }
+
+    /**
+     * Update eines installierten Moduls: die Version wandert auf den
+     * Katalogstand, das Modul bleibt installiert. Kein Downgrade - der Aufruf
+     * kommt nur, wenn [moduleUpdateAvailable] wahr ist.
+     */
+    fun updateModule(module: CatalogModule) {
+        val nextVersions = withInstalledVersion(moduleVersionsRaw, module.id, module.version)
+        ModuleStore.saveVersions(context, nextVersions)
+        moduleVersionsRaw = nextVersions
+        message = "${module.name} aktualisiert"
     }
 
     // ---------------- Plugins des Agenten ----------------
@@ -1332,10 +1369,12 @@ fun MainApp(
      * Start eines Plugins: je nach Einstellung bleibt die Detailseite offen
      * ("Manager offen lassen", Default) oder es geht zurueck zur Uebersicht.
      */
-    fun startPlugin(plugin: PluginInfo) =
+    fun startPlugin(plugin: PluginInfo) = {
+        val pluginAutoClose = settings.pluginAutoClose[plugin.id] ?: false
         pluginAction("/plugins/${plugin.id}/start", "POST", "${plugin.name} gestartet") {
-            if (settings.pluginAutoClose) route = Route.Plugins
+            if (pluginAutoClose) route = Route.Plugins
         }
+    }()
 
     fun stopPlugin(plugin: PluginInfo) =
         pluginAction("/plugins/${plugin.id}/stop", "POST", "${plugin.name} beendet")
@@ -1543,6 +1582,7 @@ fun MainApp(
             }
         }
     }
+    
 
     /**
      * Aenderung an der Spiel-Konfiguration speichern. Der Vertrag ist immer der
@@ -1644,6 +1684,20 @@ fun MainApp(
         sensorsRefreshing = false
     }
 
+    /** Warnungen des Agenten (`GET /warnings`). */
+    suspend fun loadWarnings() {
+        val result = withContext(Dispatchers.IO) {
+            try {
+                parseWarnings(httpCall(active.base, "/warnings", active.authHeader()))
+            } catch (e: Exception) {
+                Log.e(TAG, "Warnungen nicht erreichbar", e)
+                WarningsStatus()
+            }
+        }
+        warnings = result
+        warningsRefreshing = false
+    }
+
     /** Ereignisse des Agenten (`GET /events`, neueste zuerst). */
     suspend fun loadEvents() {
         val list = withContext(Dispatchers.IO) {
@@ -1727,6 +1781,23 @@ fun MainApp(
         )
     }
 
+    /** Warnregeln speichern (kompletter Regelsatz, `POST /warnings`). */
+    fun saveWarningsRules(rules: List<WarningRule>) {
+        val body = JSONObject().put("rules", JSONArray(rules.map { rule ->
+            JSONObject()
+                .put("id", rule.id)
+                .put("label", rule.label)
+                .put("metric", rule.metric)
+                .put("op", rule.op)
+                .put("threshold", rule.threshold)
+                .put("duration_s", rule.durationS)
+                .put("enabled", rule.enabled)
+        })).toString()
+        pluginAction("/warnings", "POST", "Warnregeln gespeichert") {
+            httpCall(active.base, "/warnings", active.authHeader(), "POST", body)
+        }
+    }
+
     // Nachladen abhaengig von der sichtbaren Seite. Die Startseite braucht die
     // Kurzstatus, die Aktionsseiten ihre vollen Listen.
     LaunchedEffect(active, route, pluginRefresh, refresh, gamesRefresh) {
@@ -1738,6 +1809,7 @@ fun MainApp(
                 loadRoutines()
                 loadSteam()
                 loadSensors()
+                loadWarnings()
             }
 
             Route.Plugins -> {
@@ -1754,6 +1826,7 @@ fun MainApp(
 
             Route.GameOptimization -> loadGames()
             Route.Steam -> loadSteam()
+            Route.Warnings -> loadWarnings()
             Route.Routines -> {
                 loadRoutines()
                 loadRoutineTemplates()
@@ -1798,6 +1871,17 @@ fun MainApp(
         }
     }
 
+    // Warnungen-Seite: alle 30 s nachfragen, nur solange die Seite offen ist.
+    LaunchedEffect(active, route, warningsRefresh) {
+        if (route != Route.Warnings) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                loadWarnings()
+                delay(30_000L)
+            }
+        }
+    }
+
     LaunchedEffect(startWithShutdownConfirm) {
         if (startWithShutdownConfirm) {
             route = Route.Control
@@ -1827,8 +1911,8 @@ fun MainApp(
                 busy = false
             }
         }
-    }
-
+}
+    
     fun doWake() {
         if (busy) return
         if (active.mac.isBlank()) {
@@ -1875,7 +1959,7 @@ fun MainApp(
     fun copyLog() {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         clipboard?.setPrimaryClip(ClipData.newPlainText("PC-Agent-Verlauf", logText))
-        message = "Verlauf kopiert"
+        message = context.getString(R.string.history_copied)
     }
 
     fun testConnection() {
@@ -2000,6 +2084,7 @@ fun MainApp(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
         // Die Aktionsseiten bringen ihr eigenes Scaffold mit; die Insets sind hier
         // bereits verbraucht, damit Status-/Navigationsleiste nicht doppelt polstern.
@@ -2036,6 +2121,7 @@ fun MainApp(
                         steam = steam,
                         steamLoading = steamLoading,
                         sensors = sensors,
+                        games = games,
                         onRefresh = {
                             refreshing = true
                             refresh++
@@ -2086,8 +2172,8 @@ fun MainApp(
                                 showTimer = true
                             },
                             onWake = ::doWake,
-                            onHibernate = { runAction("/hibernate", "Ruhezustand ausgelöst") },
-                            onAbort = { runAction("/abort", "Herunterfahren abgebrochen") },
+                            onHibernate = { runAction("/hibernate", context.getString(R.string.hibernate_triggered)) },
+                            onAbort = { runAction("/abort", context.getString(R.string.abort_triggered)) },
                             onShowLog = ::loadLog,
                             onOpenMarket = { route = Route.Market },
                             onOpenSettings = { route = Route.Settings },
@@ -2115,17 +2201,9 @@ fun MainApp(
                         PluginsPage(
                             plugins = plugins,
                             pluginCatalog = pluginCatalog,
-                            steam = steam,
-                            gamesCount = games.size,
                             busy = busy,
-                            autoClose = settings.pluginAutoClose,
-                            onAutoCloseChange = {
-                                onSettingsChange(settings.copy(pluginAutoClose = it))
-                            },
                             onRefresh = { pluginRefresh++ },
                             onOpenPlugin = { plugin -> route = Route.PluginDetail(plugin.id) },
-                            onOpenSteam = { route = Route.Steam },
-                            onOpenGames = { route = Route.GameOptimization },
                             onInstall = ::installPlugin,
                         )
                     }
@@ -2137,13 +2215,16 @@ fun MainApp(
                             subtitle = stringResource(R.string.plugins_detail_subtitle),
                             onBack = { route = backTarget(screen) },
                         ) {
+                            val pluginAutoClose = settings.pluginAutoClose[plugin?.id ?: ""] ?: false
                             PluginDetailPage(
                                 plugin = plugin,
                                 output = pluginOutput,
                                 busy = busy,
-                                autoClose = settings.pluginAutoClose,
-                                onAutoCloseChange = {
-                                    onSettingsChange(settings.copy(pluginAutoClose = it))
+                                autoClose = pluginAutoClose,
+                                onAutoCloseChange = { value ->
+                                    val newMap = settings.pluginAutoClose.toMutableMap()
+                                    newMap[plugin?.id ?: ""] = value
+                                    onSettingsChange(settings.copy(pluginAutoClose = newMap))
                                 },
                                 settingsSchema = pluginSettings,
                                 settingsValues = pluginSettingsValues,
@@ -2174,7 +2255,8 @@ fun MainApp(
                             loading = gamesLoading,
                             busy = busy,
                             onRefresh = { gamesRefresh++ },
-                            onScan = { gameAction("/games/scan", "POST", null, "Spiele gesucht") },
+                            onScan = { gameAction("/games/scan", "POST", null, context.getString(R.string.games_scanned)) },
+                            onCleanMemory = { gameAction("/clean-memory", "POST", null, context.getString(R.string.memory_cleaned)) },
                             onToggleHidden = { game ->
                                 val config = gameConfig
                                 if (config != null) {
@@ -2234,14 +2316,41 @@ fun MainApp(
                         MarketPage(
                             modules = catalogModules,
                             installed = installedModules,
+                            versions = moduleVersions,
                             source = catalogSource,
                             busy = busy,
                             onRefresh = { catalogRefresh++ },
+                            onOpenModule = { module -> route = Route.ModuleDetail(module.id) },
                             onInstall = ::installModule,
                             onUninstall = ::uninstallModule,
+                            onUpdate = ::updateModule,
                             pluginCount = plugins.size,
                             onOpenPlugins = { route = Route.Plugins },
                         )
+                    }
+
+                    is Route.ModuleDetail -> {
+                        // Katalog kann sich geaendert haben: Modul fehlt dann,
+                        // die Seite zeigt einen Hinweis statt zu crashen.
+                        val module = catalogModules.firstOrNull { it.id == screen.id }
+                        ActionPage(
+                            title = module?.name ?: stringResource(R.string.page_market_title),
+                            subtitle = stringResource(R.string.module_detail_subtitle),
+                            onBack = { route = backTarget(screen) },
+                        ) {
+                            ModuleDetailPage(
+                                module = module,
+                                installed = module != null && module.id in installedModules,
+                                installedVersion = module?.let {
+                                    installedVersionOf(moduleVersions, it.id)
+                                },
+                                supported = module != null && module.id in SUPPORTED_MODULES,
+                                busy = busy,
+                                onInstall = { module?.let(::installModule) },
+                                onUninstall = { module?.let(::uninstallModule) },
+                                onUpdate = { module?.let(::updateModule) },
+                            )
+                        }
                     }
                     Route.Energy -> ActionPage(
                         title = stringResource(R.string.page_energy_title),
@@ -2254,6 +2363,23 @@ fun MainApp(
                             onSelect = { key, label ->
                                 state = state.copy(plan = key)
                                 runAction("/power-plan?name=$key", "Energieplan: $label")
+                            },
+                        )
+                    }
+
+                    Route.Warnings -> ActionPage(
+                        title = stringResource(R.string.page_warnings_title),
+                        subtitle = stringResource(R.string.page_warnings_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        WarningsPage(
+                            status = warnings,
+                            refreshing = warningsRefreshing,
+                            busy = busy,
+                            onRefresh = { warningsRefreshing = true; warningsRefresh++ },
+                            onSaveRules = { newRules ->
+                                val currentRules = warnings?.rules ?: emptyList()
+                                saveWarningsRules(currentRules + newRules)
                             },
                         )
                     }
@@ -2347,7 +2473,7 @@ fun MainApp(
                             onModeChange = { simulation ->
                                 if (simulation) {
                                     state = state.copy(simulate = true)
-                                    runAction("/mode?simulate=true", "Simulationsmodus aktiviert")
+                                    runAction("/mode?simulate=true", context.getString(R.string.simulation_activated))
                                 } else {
                                     showRealModeConfirm = true
                                 }
@@ -2389,18 +2515,16 @@ fun MainApp(
                 )
             },
             confirmButton = {
+                val shutdownMsg = if (delay == 0) {
+                    stringResource(R.string.shutdown_triggered)
+                } else {
+                    stringResource(R.string.shutdown_planned, delay)
+                }
                 TextButton(
                     enabled = !busy,
                     onClick = {
                         showShutdownConfirm = false
-                        runAction(
-                            "/shutdown?delay=$delay",
-                            if (delay == 0) {
-                                "Herunterfahren ausgelöst"
-                            } else {
-                                "Herunterfahren in $delay s geplant"
-                            }
-                        )
+                        runAction("/shutdown?delay=$delay", shutdownMsg)
                     }
                 ) { Text("Ja") }
             },
@@ -2421,7 +2545,7 @@ fun MainApp(
                             enabled = !busy,
                             onClick = {
                                 showTimer = false
-                                runAction("/shutdown?delay=${hours * 3600}", "Herunterfahren in $hours h geplant")
+                                runAction("/shutdown?delay=${hours * 3600}", context.getString(R.string.shutdown_planned_hours, hours))
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("In $hours Stunden") }
@@ -2461,7 +2585,7 @@ fun MainApp(
                         message = "Maximal 24 Stunden erlaubt"
                     } else {
                         showTimer = false
-                        runAction("/shutdown?delay=$total", "Herunterfahren in ${total / 60} min geplant")
+                        runAction("/shutdown?delay=$total", context.getString(R.string.shutdown_planned_minutes, total / 60))
                     }
                 }) { Text("Starten") }
             },
@@ -2472,6 +2596,7 @@ fun MainApp(
     }
 
     if (showRealModeConfirm) {
+        val realModeActivated = stringResource(R.string.real_mode_activated)
         AlertDialog(
             onDismissRequest = { showRealModeConfirm = false },
             title = { Text("Echtzeitmodus aktivieren?") },
@@ -2485,7 +2610,7 @@ fun MainApp(
                 TextButton(enabled = !busy, onClick = {
                     showRealModeConfirm = false
                     state = state.copy(simulate = false)
-                    runAction("/mode?simulate=false", "Echtzeitmodus aktiviert")
+                    runAction("/mode?simulate=false", realModeActivated)
                 }) { Text("Ja, aktivieren") }
             },
             dismissButton = {
@@ -2517,6 +2642,7 @@ fun MainApp(
                 TextButton(onClick = { showLog = false }) { Text("Schließen") }
             },
             dismissButton = {
+                val historyCopied = stringResource(R.string.history_copied)
                 Row {
                     TextButton(
                         onClick = {
@@ -2525,11 +2651,11 @@ fun MainApp(
                             clipboard?.setPrimaryClip(
                                 ClipData.newPlainText("PC-Agent-Verlauf", logText)
                             )
-                            message = "Verlauf kopiert"
+                            message = historyCopied
                             showLog = false
                         }
-                    ) { Text("Kopieren") }
-                    TextButton(enabled = !busy, onClick = { loadLog() }) { Text("Aktualisieren") }
+                    ) { Text(stringResource(R.string.copy)) }
+                    TextButton(enabled = !busy, onClick = { loadLog() }) { Text(stringResource(R.string.refresh_action)) }
                 }
             }
         )
@@ -2590,7 +2716,7 @@ private fun ControlTab(
                 IconButton(onClick = onRefresh, enabled = !busy) {
                     Icon(
                         Icons.Default.Refresh,
-                        contentDescription = "Status aktualisieren",
+                        contentDescription = stringResource(R.string.refresh_status),
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -2790,13 +2916,13 @@ private fun ControlTab(
                                         enabled = !busy,
                                         modifier = Modifier.weight(1f).height(52.dp),
                                         shape = RoundedCornerShape(14.dp)
-                                    ) { Text("Ruhezustand", fontSize = 14.sp) }
+                                    ) { Text(stringResource(R.string.hibernate_label), fontSize = 14.sp) }
                                     OutlinedButton(
                                         onClick = onShowLog,
                                         enabled = !busy,
                                         modifier = Modifier.weight(1f).height(52.dp),
                                         shape = RoundedCornerShape(14.dp)
-                                    ) { Text("Verlauf", fontSize = 14.sp) }
+                                    ) { Text(stringResource(R.string.history_title), fontSize = 14.sp) }
                                 }
                             } else {
                                 // Ohne Verlauf-Modul hat Ruhezustand die volle Breite.
@@ -2808,7 +2934,7 @@ private fun ControlTab(
                                     enabled = !busy,
                                     modifier = Modifier.fillMaxWidth().height(52.dp),
                                     shape = RoundedCornerShape(14.dp)
-                                ) { Text("Ruhezustand", fontSize = 14.sp) }
+                                ) { Text(stringResource(R.string.hibernate_label), fontSize = 14.sp) }
                             }
 
                             // Entdecker-Hinweis: Basis ist da, Zusaetze gibt es im Markt.
@@ -2860,7 +2986,7 @@ private fun ControlTab(
                                     onClick = onRefresh,
                                     enabled = !busy,
                                     modifier = Modifier.fillMaxWidth()
-                                ) { Text("Jetzt prüfen") }
+                                ) { Text(stringResource(R.string.check_now)) }
                             }
                         }
                     }
@@ -2878,16 +3004,22 @@ private fun ControlTab(
  * gratis dabei. Zusaetze (Module) werden hier installiert; der Katalog stammt
  * aus dem GitHub-Repo, offline greift ein lokaler Fallback. Die Plugins des
  * Agenten haben eine eigene Aktionsseite (Kachel "Plugins").
+ *
+ * Ein Tipp auf eine Modul-Karte oeffnet die Detailseite (`Route.ModuleDetail`);
+ * Installieren/Entfernen/Aktualisieren geht weiter direkt auf der Karte.
  */
 @Composable
 private fun MarketPage(
     modules: List<CatalogModule>,
     installed: Set<String>,
+    versions: Map<String, Int>,
     source: String,
     busy: Boolean,
     onRefresh: () -> Unit,
+    onOpenModule: (CatalogModule) -> Unit,
     onInstall: (CatalogModule) -> Unit,
     onUninstall: (CatalogModule) -> Unit,
+    onUpdate: (CatalogModule) -> Unit,
     pluginCount: Int,
     onOpenPlugins: () -> Unit,
 ) {
@@ -2909,7 +3041,7 @@ private fun MarketPage(
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onRefresh, enabled = !busy) {
-                Icon(Icons.Default.Refresh, contentDescription = "Katalog aktualisieren")
+                Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.refresh_catalog))
             }
         }
 
@@ -2975,13 +3107,18 @@ private fun MarketPage(
         }
 
         modules.forEachIndexed { index, module ->
+            val isInstalled = module.id in installed
             ModuleCard(
                 module = module,
-                isInstalled = module.id in installed,
+                isInstalled = isInstalled,
+                // Ohne Installation gibt es keine gemerkte Version.
+                installedVersion = if (isInstalled) installedVersionOf(versions, module.id) else null,
                 index = index,
                 busy = busy,
+                onOpen = { onOpenModule(module) },
                 onInstall = { onInstall(module) },
-                onUninstall = { onUninstall(module) }
+                onUninstall = { onUninstall(module) },
+                onUpdate = { onUpdate(module) },
             )
         }
 
@@ -3026,15 +3163,9 @@ private fun MarketPage(
 private fun PluginsPage(
     plugins: List<PluginInfo>,
     pluginCatalog: List<PluginCatalogEntry>,
-    steam: SteamStatus?,
-    gamesCount: Int,
     busy: Boolean,
-    autoClose: Boolean,
-    onAutoCloseChange: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOpenPlugin: (PluginInfo) -> Unit,
-    onOpenSteam: () -> Unit,
-    onOpenGames: () -> Unit,
     onInstall: (PluginCatalogEntry) -> Unit,
 ) {
     val running = plugins.count { it.running }
@@ -3043,47 +3174,8 @@ private fun PluginsPage(
         running > 0 -> stringResource(R.string.tile_plugins_active, plugins.size, running)
         else -> stringResource(R.string.tile_plugins_count, plugins.size)
     }
-    val steamStatus = when {
-        steam == null -> stringResource(R.string.tile_steam_unavailable)
-        steam.downloading && steam.appName.isNotBlank() -> stringResource(
-            R.string.steam_progress,
-            "${fmtPercent(steam.progressPercent)} %",
-            steam.appName,
-        )
-        steam.downloading -> stringResource(R.string.tile_steam_download_count, steam.downloads.size)
-        !steam.detected -> stringResource(R.string.tile_steam_not_detected)
-        else -> stringResource(R.string.tile_steam_no_downloads)
-    }
-    val gamesStatus = if (gamesCount > 0) {
-        stringResource(R.string.plugins_tile_games_status, gamesCount)
-    } else {
-        stringResource(R.string.plugins_tile_games_empty)
-    }
-    val autoCloseHint = if (autoClose) {
-        stringResource(R.string.plugins_auto_close_off)
-    } else {
-        stringResource(R.string.plugins_auto_close_on)
-    }
     // Kacheln wie auf der Startseite (HomeTile), je Kachel ein eigenes Ziel.
-    val tiles = ArrayList<Pair<HomeTileSpec, () -> Unit>>(plugins.size + 2)
-    tiles.add(
-        HomeTileSpec(
-            route = Route.Steam,
-            title = stringResource(R.string.page_steam_title),
-            status = steamStatus,
-            icon = Icons.Default.PlayArrow,
-            dotColor = if (steam?.downloading == true) statusColor(PcStatus.ONLINE) else null,
-            pulsing = steam?.downloading == true,
-        ) to onOpenSteam
-    )
-    tiles.add(
-        HomeTileSpec(
-            route = Route.GameOptimization,
-            title = stringResource(R.string.plugins_tile_games),
-            status = gamesStatus,
-            icon = Icons.Default.Star,
-        ) to onOpenGames
-    )
+    val tiles = ArrayList<Pair<HomeTileSpec, () -> Unit>>(plugins.size)
     plugins.forEach { plugin ->
         tiles.add(
             HomeTileSpec(
@@ -3156,19 +3248,6 @@ private fun PluginsPage(
                         onInstall = { onInstall(entry) },
                     )
                 }
-            }
-        }
-
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            SettingsGroup {
-                SettingsSwitchRow(
-                    icon = Icons.Default.Build,
-                    title = stringResource(R.string.plugins_auto_close),
-                    subtitle = autoCloseHint,
-                    checked = !autoClose,
-                    enabled = true,
-                    onCheckedChange = { keepOpen -> onAutoCloseChange(!keepOpen) },
-                )
             }
         }
     }
@@ -3577,20 +3656,26 @@ private fun PluginCatalogRow(
 }
 
 /**
- * Karte fuer ein Markt-Modul: erscheint gestaffelt (Kascade) und animiert
- * die Auswahl-Farbe wie die Profil-Karten. Module, deren Feature-Code die
- * App noch nicht kennt (SUPPORTED_MODULES), zeigen einen Update-Hinweis
- * statt Buttons.
+ * Karte fuer ein Markt-Modul: erscheint gestaffelt (Kaskade) und animiert
+ * die Auswahl-Farbe wie die Profil-Karten. Ein Tipp oeffnet die Detailseite.
+ * Module, deren Feature-Code die App noch nicht kennt (SUPPORTED_MODULES),
+ * zeigen einen Hinweis statt Buttons. Ist der Katalog neuer als die gemerkte
+ * Version, erscheint "Update verfuegbar" plus Knopf (Phase F5).
  */
 @Composable
 private fun ModuleCard(
     module: CatalogModule,
     isInstalled: Boolean,
+    installedVersion: Int?,
     index: Int,
     busy: Boolean,
+    onOpen: () -> Unit,
     onInstall: () -> Unit,
     onUninstall: () -> Unit,
+    onUpdate: () -> Unit,
 ) {
+    val updateAvailable = moduleUpdateAvailable(module, installedVersion)
+    val newerThanCatalog = catalogOlderThanInstalled(module, installedVersion)
     Appearing(index = index) {
         val containerColor by animateColorAsState(
             targetValue = if (isInstalled) {
@@ -3602,6 +3687,7 @@ private fun ModuleCard(
             label = "moduleCardColor"
         )
         Card(
+            onClick = onOpen,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = containerColor)
@@ -3638,9 +3724,17 @@ private fun ModuleCard(
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.outline
                     )
+                    if (updateAvailable) ModuleUpdateBadge()
+                    if (newerThanCatalog) {
+                        Text(
+                            text = stringResource(R.string.module_newer_than_catalog),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
                     if (module.id !in SUPPORTED_MODULES) {
                         Text(
-                            text = "Kommt mit dem naechsten App-Update",
+                            text = stringResource(R.string.module_unsupported_hint),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.tertiary
@@ -3649,15 +3743,181 @@ private fun ModuleCard(
                 }
                 when {
                     module.id !in SUPPORTED_MODULES -> Unit // Hinweis genuegt
+                    // Update zuerst: das Modul bleibt installiert, die Version wandert.
+                    updateAvailable -> TextButton(enabled = !busy, onClick = onUpdate) {
+                        Text(stringResource(R.string.module_action_update))
+                    }
                     isInstalled -> TextButton(enabled = !busy, onClick = onUninstall) {
-                        Text("Deinstallieren")
+                        Text(stringResource(R.string.module_action_uninstall))
                     }
                     else -> TextButton(enabled = !busy, onClick = onInstall) {
-                        Text("Installieren")
+                        Text(stringResource(R.string.module_action_install))
                     }
                 }
             }
         }
+    }
+}
+
+/** Kleiner Hinweis "Update verfuegbar" - auf der Karte und in der Detailseite. */
+@Composable
+private fun ModuleUpdateBadge() {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.tertiaryContainer
+    ) {
+        Text(
+            text = stringResource(R.string.module_update_available),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+        )
+    }
+}
+
+/**
+ * Detailseite eines Markt-Moduls: Name, Beschreibung, Katalogversion, Status
+ * ("Installiert (vN)" / "Nicht installiert"), was das Modul freischaltet und
+ * genau eine Aktion (Installieren, Entfernen, Aktualisieren). Ist der Katalog
+ * aelter als die Installation, gibt es bewusst keinen Knopf zum Zurueck.
+ */
+@Composable
+private fun ModuleDetailPage(
+    module: CatalogModule?,
+    installed: Boolean,
+    installedVersion: Int?,
+    supported: Boolean,
+    busy: Boolean,
+    onInstall: () -> Unit,
+    onUninstall: () -> Unit,
+    onUpdate: () -> Unit,
+) {
+    if (module == null) {
+        // Modul ist aus dem Katalog verschwunden - kein Absturz, nur Hinweis.
+        Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+            Text(
+                text = stringResource(R.string.module_detail_missing),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        return
+    }
+    val updateAvailable = moduleUpdateAvailable(module, installedVersion)
+    val newerThanCatalog = catalogOlderThanInstalled(module, installedVersion)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text(
+            text = module.name,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = module.description.ifBlank { "Zusaetzliches PC-Modul." },
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        // Status und Versionen: was ist installiert, was bietet der Katalog?
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = if (installed) {
+                        stringResource(
+                            R.string.module_status_installed,
+                            installedVersion ?: MODULE_VERSION_FALLBACK
+                        )
+                    } else {
+                        stringResource(R.string.module_status_not_installed)
+                    },
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = stringResource(R.string.module_catalog_version, module.version),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
+
+        Text(
+            text = stringResource(R.string.module_features_title),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.outline
+        )
+        Text(text = moduleFeatureText(module.id), fontSize = 14.sp)
+
+        if (updateAvailable) {
+            ModuleUpdateBadge()
+            Text(
+                text = stringResource(
+                    R.string.module_update_hint,
+                    module.version,
+                    installedVersion ?: MODULE_VERSION_FALLBACK
+                ),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+        if (newerThanCatalog) {
+            Text(
+                text = stringResource(R.string.module_newer_than_catalog),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+        if (!supported) {
+            Text(
+                text = stringResource(R.string.module_unsupported_hint),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+        }
+
+        when {
+            !supported -> Unit // Feature-Code fehlt noch, deshalb kein Knopf
+            updateAvailable -> Button(
+                onClick = onUpdate,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) { Text(stringResource(R.string.module_action_update)) }
+            installed -> OutlinedButton(
+                onClick = onUninstall,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) { Text(stringResource(R.string.module_action_remove)) }
+            else -> Button(
+                onClick = onInstall,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) { Text(stringResource(R.string.module_action_install)) }
+        }
+
+        Text(
+            text = stringResource(R.string.module_detail_hint),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
     }
 }
 
@@ -3703,15 +3963,15 @@ private fun PlanTab(
                     modifier = Modifier.weight(1f)
                 )
                 AnimatedContent(
-                    targetState = planLabel(activePlan),
+                    targetState = planLabelRes(activePlan),
                     transitionSpec = {
                         (fadeIn(tween(220)) + slideInVertically(tween(260)) { -it / 2 }) togetherWith
                             (fadeOut(tween(160)) + slideOutVertically(tween(220)) { it / 2 })
                     },
                     label = "activePlan"
-                ) { label ->
+                ) { resId ->
                     Text(
-                        text = label,
+                        text = stringResource(resId),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -3831,7 +4091,7 @@ private fun ProfileCard(
                     IconButton(onClick = onDelete) {
                         Icon(
                             Icons.Default.Delete,
-                            contentDescription = "Profil löschen",
+                            contentDescription = stringResource(R.string.delete_profile),
                             tint = MaterialTheme.colorScheme.error
                         )
                     }
@@ -4104,7 +4364,7 @@ private fun SettingsTab(
                             modifier = Modifier.fillMaxWidth().height(54.dp),
                             shape = RoundedCornerShape(16.dp),
                         ) {
-                            Text("Änderungen speichern", fontSize = 16.sp)
+                            Text(stringResource(R.string.save_changes), fontSize = 16.sp)
                         }
                         if (saved) {
                             Text(
@@ -4127,7 +4387,7 @@ private fun SettingsTab(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
-                            Text("Verbindung testen", fontSize = 15.sp)
+                            Text(stringResource(R.string.test_connection), fontSize = 15.sp)
                         }
                         Text(
                             text = "Zugangsdaten einmalig in der Web-Oberfläche am PC anlegen: http://localhost:8000/",
@@ -4483,16 +4743,6 @@ private fun SettingsOverview(
         SettingsArea.PLUGINS to SettingsSearchSection(
             title = pluginsSection,
             entries = listOf(
-                searchEntry(
-                    "plugin_auto_close",
-                    stringResource(R.string.plugins_auto_close),
-                    if (settings.pluginAutoClose) {
-                        stringResource(R.string.plugins_auto_close_on)
-                    } else {
-                        stringResource(R.string.plugins_auto_close_off)
-                    },
-                    pluginsSection,
-                ),
             ),
         ),
         SettingsArea.HISTORY to SettingsSearchSection(
@@ -4668,18 +4918,6 @@ private fun SettingsOverview(
                             title = item.title,
                             subtitle = item.subtitle,
                             onClick = onOpenWeb,
-                        )
-
-                        "plugin_auto_close" -> SettingsSwitchRow(
-                            icon = Icons.Default.Build,
-                            title = item.title,
-                            subtitle = item.subtitle,
-                            // Der Schalter heisst "Manager offen lassen".
-                            checked = !settings.pluginAutoClose,
-                            enabled = true,
-                            onCheckedChange = { keepOpen ->
-                                onSettingsChange(settings.copy(pluginAutoClose = !keepOpen))
-                            },
                         )
 
                         "history" -> SettingsOverviewRow(
@@ -5085,9 +5323,13 @@ sealed interface Route {
     /** Spiel-Optimierung: Spiele-Liste und Konfiguration (`GET /games`). */
     data object GameOptimization : Route
     data object Market : Route
+
+    /** Detailseite eines Markt-Moduls (Status, freigeschaltete Funktion, Aktion). */
+    data class ModuleDetail(val id: String) : Route
     data object Routines : Route
     data object History : Route
     data object Energy : Route
+    data object Warnings : Route
     data object Settings : Route
 }
 
@@ -5098,6 +5340,7 @@ sealed interface Route {
 private fun backTarget(route: Route): Route = when (route) {
     is Route.PluginDetail -> Route.Plugins
     Route.GameOptimization -> Route.Plugins
+    is Route.ModuleDetail -> Route.Market
     else -> Route.Home
 }
 
@@ -5249,6 +5492,7 @@ private fun HomeScreen(
     steam: SteamStatus?,
     steamLoading: Boolean,
     sensors: SensorsStatus?,
+    games: List<GameEntry>,
     onRefresh: () -> Unit,
     onOpen: (Route) -> Unit,
 ) {
@@ -5323,6 +5567,14 @@ private fun HomeScreen(
             dotColor = statusColor(state.status),
             pulsing = state.status == PcStatus.ONLINE,
         ),
+        HomeTileSpec(
+            route = Route.Steam,
+            title = stringResource(R.string.tile_steam),
+            status = steamStatus,
+            icon = Icons.Default.PlayArrow,
+            dotColor = if (steam?.downloading == true) statusColor(PcStatus.ONLINE) else null,
+            pulsing = steam?.downloading == true,
+        ),
         // Systemwerte: Icons.Default.Memory liegt nur in material-icons-extended,
         // das die App bewusst nicht einbindet - daher das vorhandene Info-Symbol.
         HomeTileSpec(
@@ -5332,9 +5584,15 @@ private fun HomeScreen(
             icon = Icons.Default.Info,
         ),
         HomeTileSpec(
+            route = Route.GameOptimization,
+            title = stringResource(R.string.tile_games),
+            status = stringResource(R.string.tile_games_status, games.size),
+            icon = Icons.Default.Star,
+        ),
+        HomeTileSpec(
             route = Route.Energy,
             title = stringResource(R.string.tile_energy),
-            status = planLabel(state.plan),
+            status = stringResource(planLabelRes(state.plan)),
             icon = Icons.Default.Star,
         ),
         HomeTileSpec(
@@ -5776,6 +6034,353 @@ private fun SensorGroupTile(
     }
 }
 
+/**
+ * Aktionsseite Warnungen (`GET /warnings`). Zeigt Regeln, aktive Warnungen
+ * und Verlauf. Der Agent prueft die Schwellen (auch bei geschlossener App),
+ * die App meldet jedes Ereignis genau einmal ueber den Foreground-Service.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WarningsPage(
+    status: WarningsStatus?,
+    refreshing: Boolean,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onSaveRules: (List<WarningRule>) -> Unit,
+) {
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.warnings_hint),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onRefresh) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = stringResource(R.string.warnings_refresh),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+
+            when {
+                status == null -> Text(
+                    text = stringResource(R.string.warnings_loading),
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+
+                status.isEmpty -> {
+                    Text(
+                        text = stringResource(R.string.warnings_unavailable),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Text(
+                        text = stringResource(R.string.warnings_unavailable_hint),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+
+                else -> WarningsContent(status = status, busy = busy, onSaveRules = onSaveRules)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WarningsContent(
+    status: WarningsStatus,
+    busy: Boolean,
+    onSaveRules: (List<WarningRule>) -> Unit,
+) {
+    // Warnregeln
+    Text(
+        text = stringResource(R.string.warnings_rules_title),
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    if (status.rules.isEmpty()) {
+        Text(
+            text = stringResource(R.string.warnings_no_rules),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    } else {
+        status.rules.forEach { rule ->
+            WarningRuleRow(rule = rule)
+        }
+    }
+
+    // Aktuell ausgeloest
+    Text(
+        text = stringResource(R.string.warnings_active_title),
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    if (status.active.isEmpty()) {
+        Text(
+            text = stringResource(R.string.warnings_no_active),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    } else {
+        status.active.forEach { alert ->
+            WarningAlertRow(alert = alert, isActive = true)
+        }
+    }
+
+    // Verlauf
+    Text(
+        text = stringResource(R.string.warnings_history_title),
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    if (status.triggered.isEmpty()) {
+        Text(
+            text = stringResource(R.string.warnings_no_history),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    } else {
+        status.triggered.forEach { alert ->
+            WarningAlertRow(alert = alert, isActive = false)
+        }
+    }
+
+    // Neue Regel anlegen
+    WarningEditor(onSaveRules = onSaveRules, busy = busy)
+}
+
+@Composable
+private fun WarningRuleRow(rule: WarningRule) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = rule.label,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (rule.enabled) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.warnings_rule_active),
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.warnings_rule_inactive),
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+            val metricLabel = when (rule.metric) {
+                "cpu_percent" -> stringResource(R.string.warnings_metric_cpu)
+                "ram_percent" -> stringResource(R.string.warnings_metric_ram)
+                "gpu_percent" -> stringResource(R.string.warnings_metric_gpu)
+                "disk_free_percent" -> stringResource(R.string.warnings_metric_disk)
+                else -> rule.metric
+            }
+            val opLabel = if (rule.op == ">") stringResource(R.string.warnings_op_gt)
+            else if (rule.op == "<") stringResource(R.string.warnings_op_lt)
+            else rule.op
+            Text(
+                text = stringResource(
+                    R.string.warnings_rule_detail,
+                    metricLabel,
+                    opLabel,
+                    rule.threshold,
+                    rule.durationS,
+                ),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WarningAlertRow(alert: WarningAlert, isActive: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (isActive) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = alert.message,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (alert.since.isNotBlank()) {
+                    Text(
+                        text = stringResource(R.string.warnings_since, alert.since),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (alert.value != null && alert.threshold != null) {
+                Text(
+                    text = stringResource(
+                        R.string.warnings_alert_detail,
+                        alert.value,
+                        alert.threshold,
+                        alert.op,
+                    ),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WarningEditor(
+    onSaveRules: (List<WarningRule>) -> Unit,
+    busy: Boolean,
+) {
+    var metric by remember { mutableStateOf("cpu_percent") }
+    var op by remember { mutableStateOf(">") }
+    var threshold by remember { mutableStateOf("90") }
+    var duration by remember { mutableStateOf("30") }
+    var enabled by remember { mutableStateOf(true) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.warnings_new_rule),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = metric,
+                onValueChange = { metric = it },
+                label = { Text(stringResource(R.string.warnings_metric)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = op,
+                onValueChange = { op = it },
+                label = { Text(stringResource(R.string.warnings_op)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = threshold,
+                onValueChange = { threshold = it },
+                label = { Text(stringResource(R.string.warnings_threshold)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = duration,
+                onValueChange = { duration = it },
+                label = { Text(stringResource(R.string.warnings_duration)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { enabled = it },
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = stringResource(R.string.warnings_enabled),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+        Button(
+            onClick = {
+                val newRule = WarningRule(
+                    id = "rule_${System.currentTimeMillis()}",
+                    label = "Regel ${System.currentTimeMillis()}",
+                    metric = metric,
+                    op = op,
+                    threshold = threshold.toDoubleOrNull() ?: 90.0,
+                    durationS = duration.toIntOrNull() ?: 30,
+                    enabled = enabled,
+                )
+                onSaveRules(listOf(newRule))
+            },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Text(stringResource(R.string.warnings_add_rule))
+        }
+    }
+}
 
 /**
  * Aktionsseite Steam. `GET /steam` ist neu im Agenten: Fehlt die Route (404)
@@ -6011,6 +6616,7 @@ private fun GameOptimizationPage(
     busy: Boolean,
     onRefresh: () -> Unit,
     onScan: () -> Unit,
+    onCleanMemory: () -> Unit,
     onToggleHidden: (GameEntry) -> Unit,
     onAddManual: (String, String) -> Unit,
     onDeleteManual: (GameEntry) -> Unit,
@@ -6063,6 +6669,21 @@ private fun GameOptimizationPage(
             Icon(Icons.Default.Search, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(stringResource(R.string.games_scan))
+        }
+
+        Button(
+            enabled = !busy,
+            onClick = onCleanMemory,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            ),
+        ) {
+            Icon(Icons.Default.Delete, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("RAM bereinigen")
         }
 
         if (loading && games.isEmpty()) {
@@ -6795,7 +7416,7 @@ private fun RoutineEditorDialog(
                     value = draft.conditionPowerPlan,
                     enabled = !busy,
                     options = listOf("" to stringResource(R.string.routines_any)) +
-                        ROUTINE_PLAN_KEYS.map { it to planLabel(it) },
+                        ROUTINE_PLAN_KEYS.map { it to stringResource(planLabelRes(it)) },
                 ) { plan -> draft = draft.copy(conditionPowerPlan = plan) }
 
                 RoutineEditorLabel(stringResource(R.string.routines_steps))
@@ -6846,7 +7467,7 @@ private fun RoutineEditorDialog(
                                 label = stringResource(R.string.routines_step_plan),
                                 value = step.plan,
                                 enabled = !busy,
-                                options = ROUTINE_PLAN_KEYS.map { it to planLabel(it) },
+                                options = ROUTINE_PLAN_KEYS.map { it to stringResource(planLabelRes(it)) },
                             ) { plan ->
                                 draft = updateRoutineStep(draft, index) { it.copy(plan = plan) }
                                 error = null

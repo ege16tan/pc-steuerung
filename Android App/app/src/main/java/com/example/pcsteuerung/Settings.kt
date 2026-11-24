@@ -1,8 +1,12 @@
 package com.example.pcsteuerung
 
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import org.json.JSONArray
 import org.json.JSONObject
+import java.lang.reflect.Type
 import java.time.LocalDate
+import java.util.LinkedHashSet
 import java.util.Locale
 
 /**
@@ -121,13 +125,17 @@ const val SETTINGS_EXPORT_VERSION = 1
  * (`theme_mode`, `refresh_seconds`, ...), damit ein Export lesbar bleibt.
  * Geheimnisse enthaelt AppSettings bewusst keine.
  */
-fun settingsToJson(settings: AppSettings): JSONObject = JSONObject()
-    .put("theme_mode", settings.themeMode.name.lowercase(Locale.ROOT))
-    .put("refresh_seconds", settings.refreshSeconds)
-    .put("update_install_method", settings.updateInstallMethod.name.lowercase(Locale.ROOT))
-    .put("online_card", settings.onlineCard)
-    .put("plugin_auto_close", settings.pluginAutoClose)
-    .put("history_lines", settings.historyLines)
+fun settingsToJson(settings: AppSettings): JSONObject {
+    val gson = Gson()
+    val mapType: Type = object : TypeToken<Map<String, Boolean>>() {}.type
+    return JSONObject()
+        .put("theme_mode", settings.themeMode.name.lowercase(Locale.ROOT))
+        .put("refresh_seconds", settings.refreshSeconds)
+        .put("update_install_method", settings.updateInstallMethod.name.lowercase(Locale.ROOT))
+        .put("online_card", settings.onlineCard)
+        .put("plugin_auto_close", JSONObject(gson.toJson(settings.pluginAutoClose, mapType)))
+        .put("history_lines", settings.historyLines)
+}
 
 /**
  * Ein Profil im Export: nur Name, Host, Port und MAC - rein informativ.
@@ -258,7 +266,21 @@ fun parseSettingsImport(body: String): SettingsImportResult {
             ?.let { name -> UpdateInstallMethod.entries.firstOrNull { it.name.equals(name, true) } }
             ?: defaults.updateInstallMethod,
         onlineCard = jsonBoolean(raw.opt("online_card")) ?: defaults.onlineCard,
-        pluginAutoClose = jsonBoolean(raw.opt("plugin_auto_close")) ?: defaults.pluginAutoClose,
+        pluginAutoClose = {
+            val rawValue = raw.opt("plugin_auto_close")
+            if (rawValue == null || rawValue === JSONObject.NULL) {
+                defaults.pluginAutoClose
+            } else if (rawValue is Boolean) {
+                // Migration from old boolean format
+                if (rawValue) mapOf("*" to true) else emptyMap()
+            } else if (rawValue is JSONObject) {
+                val gson = Gson()
+                val mapType: Type = object : TypeToken<Map<String, Boolean>>() {}.type
+                runCatching<Map<String, Boolean>> { gson.fromJson(rawValue.toString(), mapType) }.getOrDefault(emptyMap())
+            } else {
+                defaults.pluginAutoClose
+            }
+        }(),
         historyLines = jsonNumber(raw.opt("history_lines"))?.toInt()
             ?.let(::normalizeHistoryLines)
             ?: defaults.historyLines,

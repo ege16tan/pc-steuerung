@@ -22,8 +22,8 @@ android {
         applicationId = "com.example.pcsteuerung"
         minSdk = 26
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.14.0"
+        versionCode = 23
+        versionName = "0.15.0"
     }
 
     signingConfigs {
@@ -74,6 +74,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.core:core-ktx:1.16.0")
+    implementation("com.google.code.gson:gson:2.11.0")
     // QR-Scanner: CameraX + ML Kit. Die alte zxing-CaptureActivity nutzt die
     // Camera1-API, die auf Android 17 (Samsung) nicht mehr zuverlaessig laeuft.
     implementation("androidx.camera:camera-core:1.4.2")

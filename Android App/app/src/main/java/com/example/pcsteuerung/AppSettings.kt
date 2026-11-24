@@ -1,6 +1,9 @@
 package com.example.pcsteuerung
 
 import android.content.Context
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import java.lang.reflect.Type
 
 /** Darstellung: der Systemeinstellung folgen oder fest hell/dunkel. */
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
@@ -19,8 +22,9 @@ data class AppSettings(
     /**
      * Plugin-Detailseite nach einem erfolgreichen Start automatisch schliessen
      * (zurueck zur Uebersicht). Default aus = "Manager offen lassen".
+     * Pro Plugin-ID speicherbar.
      */
-    val pluginAutoClose: Boolean = false,
+    val pluginAutoClose: Map<String, Boolean> = emptyMap(),
     /**
      * Aufbewahrung im Verlauf: Anzahl der Zeilen, die die App aus dem Log des
      * Agenten laedt (`GET /log?lines=`). Auswahl 200/500/1000, Default 200.
@@ -35,11 +39,14 @@ object AppSettingsStore {
     private const val KEY_REFRESH = "refresh_seconds"
     private const val KEY_UPDATE_INSTALL_METHOD = "update_install_method"
     private const val KEY_ONLINE_CARD = "online_card"
-    private const val KEY_PLUGIN_AUTO_CLOSE = "plugin_auto_close"
+    private const val KEY_PLUGIN_AUTO_CLOSE = "plugin_auto_close_map"
     private const val KEY_HISTORY_LINES = "history_lines"
 
     /** Erlaubte Abstaende fuer die Status-Abfrage (Sekunden). */
     val REFRESH_CHOICES = listOf(2, 5, 10, 30)
+
+    private val gson = Gson()
+    private val mapType: Type = object : TypeToken<Map<String, Boolean>>() {}.type
 
     fun load(context: Context): AppSettings {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -51,14 +58,23 @@ object AppSettingsStore {
         val installMethod = prefs.getString(KEY_UPDATE_INSTALL_METHOD, null)
             ?.let { runCatching { UpdateInstallMethod.valueOf(it) }.getOrNull() }
             ?: UpdateInstallMethod.SYSTEM
+        val autoCloseJson = prefs.getString(KEY_PLUGIN_AUTO_CLOSE, null)
+        val pluginAutoClose: Map<String, Boolean> = if (autoCloseJson != null) {
+            runCatching<Map<String, Boolean>> { gson.fromJson(autoCloseJson, mapType) }.getOrDefault(emptyMap())
+        } else {
+            // Migration from old single boolean
+            if (prefs.getBoolean("plugin_auto_close", false)) {
+                mapOf("*" to true)
+            } else {
+                emptyMap()
+            }
+        }
         return AppSettings(
             themeMode = theme,
             refreshSeconds = refresh,
             updateInstallMethod = installMethod,
             onlineCard = prefs.getBoolean(KEY_ONLINE_CARD, true),
-            pluginAutoClose = prefs.getBoolean(KEY_PLUGIN_AUTO_CLOSE, false),
-            // Als Text gespeichert und tolerant gelesen: ein alter oder
-            // kaputter Wert faellt auf 200 Zeilen zurueck.
+            pluginAutoClose = pluginAutoClose,
             historyLines = decodeHistoryLines(prefs.getString(KEY_HISTORY_LINES, null)),
         )
     }
@@ -70,7 +86,7 @@ object AppSettingsStore {
             .putInt(KEY_REFRESH, settings.refreshSeconds)
             .putString(KEY_UPDATE_INSTALL_METHOD, settings.updateInstallMethod.name)
             .putBoolean(KEY_ONLINE_CARD, settings.onlineCard)
-            .putBoolean(KEY_PLUGIN_AUTO_CLOSE, settings.pluginAutoClose)
+            .putString(KEY_PLUGIN_AUTO_CLOSE, gson.toJson(settings.pluginAutoClose))
             .putString(KEY_HISTORY_LINES, encodeHistoryLines(settings.historyLines))
             .apply()
     }

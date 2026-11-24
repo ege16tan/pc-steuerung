@@ -371,7 +371,7 @@ class LiveStatusService : Service() {
         // Eigene ID je Ereignis, damit eine neue Warnung die alte nicht ersetzt.
         runCatching {
             manager.notify(
-                WARNING_NOTIFICATION_BASE + (alert.epoch % 1000).toInt(),
+                WARNING_NOTIFICATION_BASE + (alert.sinceEpoch.toLong() % 1000).toInt(),
                 notification,
             )
         }

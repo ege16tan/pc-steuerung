@@ -61,6 +61,17 @@ fun fmtDuration(seconds: Int): String {
     }
 }
 
+/** Liefert den String-Resource-Namen fuer einen Energieplan. */
+fun planLabelRes(plan: String): Int = when (plan) {
+    "high" -> R.string.plan_high
+    "balanced" -> R.string.plan_balanced
+    "saver" -> R.string.plan_saver
+    "anderer" -> R.string.plan_other
+    "unbekannt", "?" -> R.string.plan_unknown
+    else -> -1
+}
+
+/** Liefert den deutschen Namen fuer einen Energieplan (für Logging/Tests). */
 fun planLabel(plan: String): String = when (plan) {
     "high" -> "Höchstleistung"
     "balanced" -> "Ausbalanciert"

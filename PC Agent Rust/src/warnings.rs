@@ -31,8 +31,8 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 pub const HISTORY_MAX: usize = 30;
 /// Mehr Regeln sind nicht sinnvoll und werden abgelehnt.
 pub const RULES_MAX: usize = 20;
-/// Laengste erlaubte Dauer einer Schwelle (eine Stunde).
-pub const DURATION_MAX_S: u64 = 3600;
+/// Laengste erlaubte Dauer einer Schwelle (24 Stunden).
+pub const DURATION_MAX_S: u64 = 86400;
 
 /// Erlaubte Messwerte (`metric` in `warnings.json`).
 pub const METRICS: [&str; 4] = ["cpu_percent", "ram_percent", "disk_free_percent", "gpu_percent"];

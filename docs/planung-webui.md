@@ -43,11 +43,11 @@ Heute zeigt die Web-UI nur **installierte** Plugins. Es fehlt der Marktplatz.
 
 Heute: einfache Ereignisliste + Logdatei-Text, keine Filter.
 
-- [ ] Filter-Chips: Steuerung, Routine, Plugin, Warnung, Fehler (`ok === false`)
-- [ ] Suchfeld über Aktion + Text
-- [ ] Zeitgruppen „Heute / Gestern / Älter"
-- [ ] Fehler hervorheben (Farbe + Text „Fehler"), Leerzustand je Filter
-- [ ] „Exportieren" als Textdatei (`Blob` + `URL.createObjectURL`, Dateiname
+- [x] Filter-Chips: Steuerung, Routine, Plugin, Warnung, Fehler (`ok === false`)
+- [x] Suchfeld über Aktion + Text
+- [x] Zeitgruppen „Heute / Gestern / Älter"
+- [x] Fehler hervorheben (Farbe + Text „Fehler"), Leerzustand je Filter
+- [x] „Exportieren" als Textdatei (`Blob` + `URL.createObjectURL`, Dateiname
       `verlauf-YYYY-MM-DD.txt`, gefilterter Inhalt)
 - [ ] Aufbewahrung: Auswahl der geladenen Logzeilen (200/500/1000,
       `GET /log?lines=`), gespeichert in `localStorage`

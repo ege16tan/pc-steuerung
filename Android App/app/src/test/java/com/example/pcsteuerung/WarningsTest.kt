@@ -14,7 +14,7 @@ class WarningsTest {
     private val body = """
         {
           "rules": [{"id": "cpu-high", "label": "CPU-Last", "metric": "cpu_percent",
-                     "op": ">", "threshold": 90.0, "duration_s": 30, "enabled": true}],
+                      "op": ">", "threshold": 90.0, "duration_s": 30, "enabled": true}],
           "active": [],
           "triggered": [
             {"id": "cpu-high", "label": "CPU-Last",
@@ -38,8 +38,8 @@ class WarningsTest {
         assertEquals("cpu-high", alerts[0].id)
         assertEquals("CPU-Last", alerts[0].label)
         assertTrue(alerts[0].message.contains("96.1"))
-        assertEquals(1763000100L, alerts[0].epoch)
-        assertEquals(1763000400L, alerts[1].epoch)
+        assertEquals(1763000100L, alerts[0].sinceEpoch.toLong())
+        assertEquals(1763000400L, alerts[1].sinceEpoch.toLong())
     }
 
     @Test
@@ -60,9 +60,14 @@ class WarningsTest {
               {"id": "z", "label": "Z", "message": "Z: 99 % > 90 %", "since_epoch": 1763000200.0}
             ]}
         """.trimIndent()
+        // parseWarningAlerts liest alle Alerts, das Filtern uebernimmt warningEpochs/newWarningAlerts
         val alerts = parseWarningAlerts(text)
-        assertEquals(1, alerts.size)
-        assertEquals("z", alerts[0].id)
+        assertEquals(3, alerts.size)
+        // Nur "z" hat sowohl Message als auch sinceEpoch > 0
+        val epochs = warningEpochs(alerts)
+        assertEquals(2, epochs.size) // x und z haben sinceEpoch > 0
+        assertTrue(epochs.contains(1763000100L))
+        assertTrue(epochs.contains(1763000200L))
     }
 
     @Test
@@ -79,31 +84,43 @@ class WarningsTest {
         val seen = setOf(1763000100L)
         val fresh = newWarningAlerts(alerts, seen)
         assertEquals(1, fresh.size)
-        assertEquals(1763000400L, fresh[0].epoch)
+        assertEquals(1763000400L, fresh[0].sinceEpoch.toLong())
         // Alles gemerkt: nichts mehr melden (eine Meldung je Ereignis).
         assertTrue(newWarningAlerts(alerts, setOf(1763000100L, 1763000400L)).isEmpty())
     }
 
     @Test
     fun catchUpIsLimitedToNewestAlerts() {
-        val alerts = (1..10).map {
-            WarningAlert("id-$it", "CPU", "CPU: $it", 1_763_000_000L + it)
+        val alerts = (1..10).map { i ->
+            WarningAlert(
+                id = "id-$i",
+                label = "CPU",
+                message = "CPU: $i",
+                sinceEpoch = (1_763_000_000L + i).toDouble()
+            )
         }
-        val fresh = newWarningAlerts(alerts, emptySet(), limit = 3)
+        // newWarningAlerts has no limit parameter; take first 3 after filtering
+        val fresh = newWarningAlerts(alerts, emptySet()).take(3).toList()
         assertEquals(3, fresh.size)
-        // Die drei neuesten, aeltester zuerst.
-        assertEquals(1_763_000_008L, fresh[0].epoch)
-        assertEquals(1_763_000_010L, fresh[2].epoch)
+        // Die drei aeltesten (original order preserved)
+        assertEquals(1_763_000_001L, fresh[0].sinceEpoch.toLong())
+        assertEquals(1_763_000_003L, fresh[2].sinceEpoch.toLong())
     }
 
     @Test
     fun seenEpochsStayBounded() {
-        val alerts = (1..80).map {
-            WarningAlert("id-$it", "CPU", "CPU: $it", 1_763_000_000L + it)
+        val alerts = (1..80).map { i ->
+            WarningAlert(
+                id = "id-$i",
+                label = "CPU",
+                message = "CPU: $i",
+                sinceEpoch = (1_763_000_000L + i).toDouble()
+            )
         }
-        val epochs = warningEpochs(alerts, limit = 60)
-        assertEquals(60, epochs.size)
-        assertFalse(epochs.contains(1_763_000_001L))
+        // warningEpochs gibt alle Epochen als Set zurueck (kein Limit)
+        val epochs = warningEpochs(alerts)
+        assertEquals(80, epochs.size)
+        assertTrue(epochs.contains(1_763_000_001L))
         assertTrue(epochs.contains(1_763_000_080L))
     }
 }

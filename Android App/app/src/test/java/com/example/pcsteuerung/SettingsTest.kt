@@ -115,7 +115,7 @@ class SettingsTest {
         refreshSeconds = 30,
         updateInstallMethod = UpdateInstallMethod.SHIZUKU,
         onlineCard = false,
-        pluginAutoClose = true,
+        pluginAutoClose = mapOf("game-optimizer" to true, "system-monitor" to false),
         historyLines = 1000,
     )
 
@@ -127,7 +127,7 @@ class SettingsTest {
         // Alles andere bleibt, wie es war.
         assertEquals(UpdateInstallMethod.SHIZUKU, reset.updateInstallMethod)
         assertFalse(reset.onlineCard)
-        assertTrue(reset.pluginAutoClose)
+        assertEquals(mapOf("game-optimizer" to true, "system-monitor" to false), reset.pluginAutoClose)
         assertEquals(1000, reset.historyLines)
     }
 
@@ -138,7 +138,7 @@ class SettingsTest {
         assertEquals(ThemeMode.DARK, reset.themeMode)
         assertEquals(30, reset.refreshSeconds)
         assertEquals(UpdateInstallMethod.SHIZUKU, reset.updateInstallMethod)
-        assertTrue(reset.pluginAutoClose)
+        assertEquals(mapOf("game-optimizer" to true, "system-monitor" to false), reset.pluginAutoClose)
         assertEquals(1000, reset.historyLines)
     }
 
@@ -150,13 +150,13 @@ class SettingsTest {
         assertEquals(30, reset.refreshSeconds)
         assertEquals(UpdateInstallMethod.SHIZUKU, reset.updateInstallMethod)
         assertFalse(reset.onlineCard)
-        assertTrue(reset.pluginAutoClose)
+        assertEquals(mapOf("game-optimizer" to true, "system-monitor" to false), reset.pluginAutoClose)
     }
 
-    @Test
+@Test
     fun `Reset Plugins setzt nur die Plugin-Einstellung zurueck`() {
         val reset = resetSettingsArea(changedSettings, SettingsArea.PLUGINS)
-        assertFalse(reset.pluginAutoClose)
+        assertEquals(emptyMap<String, Boolean>(), reset.pluginAutoClose)
         assertEquals(ThemeMode.DARK, reset.themeMode)
         assertEquals(30, reset.refreshSeconds)
         assertEquals(UpdateInstallMethod.SHIZUKU, reset.updateInstallMethod)
@@ -217,7 +217,9 @@ class SettingsTest {
         assertEquals(30, settings.getInt("refresh_seconds"))
         assertEquals("shizuku", settings.getString("update_install_method"))
         assertFalse(settings.getBoolean("online_card"))
-        assertTrue(settings.getBoolean("plugin_auto_close"))
+        val pluginAutoCloseObj = settings.getJSONObject("plugin_auto_close")
+        assertTrue(pluginAutoCloseObj.getBoolean("game-optimizer"))
+        assertFalse(pluginAutoCloseObj.getBoolean("system-monitor"))
         assertEquals(1000, settings.getInt("history_lines"))
 
         val modules = json.getJSONArray("modules")

@@ -24,6 +24,25 @@ val SUPPORTED_MODULES = setOf("timer", "log")
 const val MODULE_TIMER = "timer"
 const val MODULE_LOG = "log"
 
+/**
+ * Version, die fuer installierte Module ohne eigenen Eintrag gilt. Altdaten
+ * kannten nur `installed_modules`, dort ist die Version unbekannt (= 1).
+ */
+const val MODULE_VERSION_FALLBACK = 1
+
+/**
+ * Was ein Modul in der App freischaltet - lokale Tabelle, unabhaengig vom
+ * (aenderbaren) Katalogtext. Muss jeden Eintrag aus [SUPPORTED_MODULES] decken.
+ */
+val MODULE_FEATURES: Map<String, String> = mapOf(
+    MODULE_TIMER to "Timer-Knopf und eigene Verzoegerung",
+    MODULE_LOG to "Verlauf mit Kopieren/Teilen",
+)
+
+/** Kurztext "das schaltet das Modul frei"; unbekannte IDs bekommen einen Ersatz. */
+fun moduleFeatureText(id: String): String =
+    MODULE_FEATURES[id] ?: "Zusaetzliche PC-Funktion."
+
 /** Lokaler Fallback, wenn der Remote-Katalog nicht erreichbar ist. */
 fun defaultCatalog(): List<CatalogModule> = listOf(
     CatalogModule(
@@ -103,6 +122,69 @@ fun fetchRemoteCatalog(url: String = CATALOG_URL): List<CatalogModule> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Versionsspeicher der installierten Module (Phase F5)
+//
+// Bis v0.14.0 merkte sich die App nur die IDs (`installed_modules`). Damit ein
+// Katalog-Update erkennbar ist, liegt daneben ein JSON-Objekt
+// `{"<id>": <version>}`. Fehlt ein Eintrag (Altdaten), gilt Version 1.
+// Alle Funktionen hier sind rein und ohne Android-Context testbar.
+// ---------------------------------------------------------------------------
+
+/**
+ * Liest den Versionsspeicher. Leere/kaputte Werte ergeben ein leeres Mapping,
+ * Werte unter 1 werden auf die Fallback-Version gehoben.
+ */
+fun installedVersions(raw: String?): Map<String, Int> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    val out = LinkedHashMap<String, Int>()
+    try {
+        val obj = JSONObject(raw)
+        for (key in obj.keys()) {
+            val id = key.trim()
+            if (id.isEmpty()) continue
+            val version = obj.optInt(key, MODULE_VERSION_FALLBACK)
+            out[id] = version.coerceAtLeast(MODULE_VERSION_FALLBACK)
+        }
+    } catch (e: Exception) {
+        // Kaputter Altspeicher darf die App nicht am Start hindern.
+        return emptyMap()
+    }
+    return out
+}
+
+/** Schreibt den Versionsspeicher kanonisch (sortiert), damit er stabil bleibt. */
+fun versionsJson(versions: Map<String, Int>): String {
+    val obj = JSONObject()
+    versions.entries
+        .filter { it.key.isNotBlank() }
+        .sortedBy { it.key }
+        .forEach { (id, version) ->
+            obj.put(id.trim(), version.coerceAtLeast(MODULE_VERSION_FALLBACK))
+        }
+    return obj.toString()
+}
+
+/** Installationsversion eines Moduls; ohne Eintrag gilt die Fallback-Version. */
+fun installedVersionOf(versions: Map<String, Int>, id: String): Int =
+    versions[id] ?: MODULE_VERSION_FALLBACK
+
+/** Installieren/Aktualisieren: Version festschreiben, andere Module bleiben. */
+fun withInstalledVersion(raw: String?, id: String, version: Int): String =
+    versionsJson(installedVersions(raw) + (id.trim() to version))
+
+/** Entfernen: nur den Eintrag dieses Moduls loeschen. */
+fun withoutInstalledVersion(raw: String?, id: String): String =
+    versionsJson(installedVersions(raw) - id.trim())
+
+/** Katalog neuer als installiert -> "Update verfuegbar" anbieten. */
+fun moduleUpdateAvailable(catalog: CatalogModule, installedVersion: Int?): Boolean =
+    installedVersion != null && catalog.version > installedVersion
+
+/** Katalog aelter als installiert -> kein Downgrade anbieten. */
+fun catalogOlderThanInstalled(catalog: CatalogModule, installedVersion: Int?): Boolean =
+    installedVersion != null && catalog.version < installedVersion
+
 /**
  * Persistiert installierte Modul-IDs. Gleich wie die Profile in derselben
  * Datei unter eigenem Key, weil Module fuer die ganze App gelten.
@@ -111,6 +193,7 @@ object ModuleStore {
 
     private const val PREFS = "settings"
     private const val KEY_MODULES = "installed_modules"
+    private const val KEY_VERSIONS = "module_versions"
 
     fun load(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -136,4 +219,27 @@ object ModuleStore {
             .putString(KEY_MODULES, arr.toString())
             .apply()
     }
+
+    /**
+     * Rohwert des Versionsspeichers (`{"<id>": <version>}`). Leer heisst:
+     * noch nie geschrieben, also Altdaten ohne Versionen.
+     */
+    fun loadVersionsRaw(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_VERSIONS, null) ?: ""
+
+    /** Versionen der installierten Module (fehlende Eintraege = Version 1). */
+    fun loadVersions(context: Context): Map<String, Int> =
+        installedVersions(loadVersionsRaw(context))
+
+    /** Schreibt den Versionsspeicher; der Aufrufer uebergibt bereits JSON. */
+    fun saveVersions(context: Context, raw: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_VERSIONS, raw)
+            .apply()
+    }
+
+    /** Schreibt ein Mapping (kanonisch sortiert) in den Versionsspeicher. */
+    fun saveVersions(context: Context, versions: Map<String, Int>) =
+        saveVersions(context, versionsJson(versions))
 }

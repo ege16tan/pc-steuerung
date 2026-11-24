@@ -14,6 +14,7 @@ use serde::Serialize;
 #[derive(Default)]
 pub struct MetricsState {
     previous: Option<Sample>,
+    cpu_cores: u32,
 }
 
 struct Sample {
@@ -54,15 +55,19 @@ pub fn cpu_percent_from(prev: (u64, u64, u64), cur: (u64, u64, u64)) -> Option<f
 
 /// Aktuelle Messwerte lesen und die Stichprobe fortschreiben.
 pub fn read(state: &Mutex<MetricsState>) -> Metrics {
-    read_impl(state)
+    let mut guard = state.lock().expect("Metrik-Sperre");
+    if guard.cpu_cores == 0 {
+        guard.cpu_cores = std::thread::available_parallelism()
+            .map(|value| value.get() as u32)
+            .unwrap_or(0);
+    }
+    read_impl(&mut guard)
 }
 
 #[cfg(windows)]
-fn read_impl(state: &Mutex<MetricsState>) -> Metrics {
+fn read_impl(state: &mut MetricsState) -> Metrics {
     let mut metrics = Metrics {
-        cpu_cores: std::thread::available_parallelism()
-            .map(|value| value.get() as u32)
-            .unwrap_or(0),
+        cpu_cores: state.cpu_cores,
         ..Default::default()
     };
 
@@ -88,15 +93,14 @@ fn read_impl(state: &Mutex<MetricsState>) -> Metrics {
     let sampled = unsafe { win::GetSystemTimes(&mut idle, &mut kernel, &mut user) } != 0;
     if sampled {
         let current = (idle.value(), kernel.value(), user.value());
-        let mut guard = state.lock().expect("Metrik-Sperre");
-        metrics.cpu_percent = match guard.previous.as_ref() {
+        metrics.cpu_percent = match state.previous.as_ref() {
             // Nach Standby/Resume sind alte Stichproben wertlos.
             Some(previous) if previous.at.elapsed() < Duration::from_secs(120) => {
                 cpu_percent_from((previous.idle, previous.kernel, previous.user), current)
             }
             _ => None,
         };
-        guard.previous = Some(Sample {
+        state.previous = Some(Sample {
             at: Instant::now(),
             idle: current.0,
             kernel: current.1,
@@ -108,7 +112,7 @@ fn read_impl(state: &Mutex<MetricsState>) -> Metrics {
 }
 
 #[cfg(not(windows))]
-fn read_impl(_state: &Mutex<MetricsState>) -> Metrics {
+fn read_impl(_state: &mut MetricsState) -> Metrics {
     Metrics::default()
 }
 

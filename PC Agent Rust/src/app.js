@@ -404,6 +404,7 @@ function mount() {
   $('btnAuto').onclick = () => runAction(autoOptimize);
   $('btnStopGame').onclick = () => runAction(stopOptimize);
   $('btnScan').onclick = () => runAction(scanGames);
+  $('btnCleanMem').onclick = () => runAction(cleanMemory);
 
   // Plugins (Phasen B1/B2): Raster-Knoepfe oeffnen die Detailansicht im selben Tab.
   $('pluginTiles').onclick = (event) => {
@@ -2804,6 +2805,20 @@ async function stopOptimize() {
 async function scanGames() {
   await api('/games/scan', { method: 'POST' });
   await refreshGames();
+}
+
+async function cleanMemory() {
+  const ok = await askConfirm({
+    title: 'RAM bereinigen',
+    text: 'Arbeitsspeicher bereinigen?\n\n' +
+      'Dies trimmt Working Sets, leert System-Caches, Modified Page List, ' +
+      'Standby-Liste (Admin), Registry Cache (Win 8.1+) und mehr.',
+    ok: 'Bereinigen',
+    danger: false,
+  });
+  if (!ok) return;
+  await api('/clean-memory', { method: 'POST' });
+  await refreshMetrics();
 }
 
 /* ---------------- Daten holen ---------------- */

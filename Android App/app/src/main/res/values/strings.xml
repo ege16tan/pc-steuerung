@@ -149,6 +149,8 @@
     <string name="tile_sensors">Systemwerte</string>
     <string name="tile_sensors_status">CPU %1$s · RAM %2$s</string>
     <string name="tile_steam">Steam</string>
+    <string name="tile_games">Spiele</string>
+    <string name="tile_games_status">%1$d Spiele gefunden</string>
     <string name="tile_plugins">Plugins</string>
     <string name="tile_market">Markt+</string>
     <string name="tile_routines">Routinen</string>
@@ -177,6 +179,8 @@
     <string name="page_steam_subtitle">Downloads und Millennium auf dem PC</string>
     <string name="page_plugins_title">Plugins</string>
     <string name="page_plugins_subtitle">Lokale Plugins im Agenten</string>
+    <string name="page_warnings_title">Warnungen</string>
+    <string name="page_warnings_subtitle">Schwellenwerte und Ereignisse</string>
     <string name="page_market_title">Markt+</string>
     <string name="page_market_subtitle">Erweiterungen für deine PC-Steuerung</string>
     <string name="page_routines_title">Routinen</string>
@@ -187,6 +191,23 @@
     <string name="page_energy_subtitle">Leistung des PCs</string>
     <string name="page_settings_subtitle">PC Steuerung anpassen</string>
     <string name="market_open_plugins">Plugins auf dem PC (%1$d)</string>
+
+    <!-- Aktionsseite Markt+ / Modul-Details (Phase F5) -->
+    <string name="module_detail_subtitle">Details zum Modul</string>
+    <string name="module_detail_missing">Dieses Modul steht nicht mehr im Katalog. Bereits installierte Module laufen weiter.</string>
+    <string name="module_detail_hint">Module sind bereits in der App enthalten – installiert wird nur der passende Knopf im Menü.</string>
+    <string name="module_catalog_version">Katalogversion v%1$d</string>
+    <string name="module_status_installed">Installiert (v%1$d)</string>
+    <string name="module_status_not_installed">Nicht installiert</string>
+    <string name="module_features_title">FREISCHALTET</string>
+    <string name="module_update_available">Update verfügbar</string>
+    <string name="module_update_hint">Der Katalog bietet v%1$d, installiert ist v%2$d.</string>
+    <string name="module_newer_than_catalog">Installiert ist neuer als der Katalog – kein Zurücksetzen.</string>
+    <string name="module_unsupported_hint">Kommt mit dem nächsten App-Update</string>
+    <string name="module_action_install">Installieren</string>
+    <string name="module_action_uninstall">Deinstallieren</string>
+    <string name="module_action_remove">Entfernen</string>
+    <string name="module_action_update">Aktualisieren</string>
 
     <!-- Aktionsseite Steam -->
     <string name="steam_loading">Lade Steam-Status …</string>
@@ -275,6 +296,38 @@
     <string name="sensors_down_up">↓ %1$s · ↑ %2$s</string>
     <string name="sensors_no_disks">Keine Datenträger gemeldet</string>
 
+    <!-- Warnungen (GET /warnings, Phase C) -->
+    <string name="warnings_hint">Regeln werden vom Agenten geprüft (alle 30 s). Jedes Ereignis wird einmal gemeldet.</string>
+    <string name="warnings_refresh">Warnungen aktualisieren</string>
+    <string name="warnings_loading">Lade Warnungen …</string>
+    <string name="warnings_unavailable">Nicht verfügbar</string>
+    <string name="warnings_unavailable_hint">Der Agent liefert keine Warnungen. Prüfe, ob der Agent aktuell ist (Route /warnings).</string>
+    <string name="warnings_rules_title">Warnregeln</string>
+    <string name="warnings_active_title">Aktuell ausgelöst</string>
+    <string name="warnings_history_title">Verlauf</string>
+    <string name="warnings_new_rule">Neue Regel</string>
+    <string name="warnings_no_rules">Keine Regeln. Lege eine an, um Schwellen zu überwachen.</string>
+    <string name="warnings_no_active">Keine aktiven Warnungen.</string>
+    <string name="warnings_no_history">Keine Ereignisse im Verlauf.</string>
+    <string name="warnings_add_rule">Regel anlegen</string>
+    <string name="warnings_rule_active">Aktiv</string>
+    <string name="warnings_rule_inactive">Inaktiv</string>
+    <string name="warnings_metric">Messwert</string>
+    <string name="warnings_op">Vergleich</string>
+    <string name="warnings_threshold">Schwelle</string>
+    <string name="warnings_duration">Dauer (s)</string>
+    <string name="warnings_enabled">Regel sofort aktiv</string>
+    <string name="warnings_metric_cpu">CPU-Auslastung</string>
+    <string name="warnings_metric_ram">Arbeitsspeicher</string>
+    <string name="warnings_metric_gpu">GPU-Auslastung</string>
+    <string name="warnings_metric_disk">Freier Speicher</string>
+    <string name="warnings_op_gt">groößer (&gt;)</string>
+    <string name="warnings_op_lt">kleiner (&lt;)</string>
+    <string name="warnings_rule_detail">%1$s %2$s %3$.1f %% für %4$d s</string>
+    <string name="warnings_since">seit %1$s</string>
+    <string name="warnings_alert_detail">Wert: %1$.1f %% %2$s %3$.1f %%</string>
+    <string name="warnings_since_epoch">%1$.0f</string>
+
     <!-- Aktionsseite Spiele-Optimierung (GET /games, GET/POST /game-config) -->
     <string name="page_games_title">Spiele</string>
     <string name="page_games_subtitle">Spiele-Optimierung auf dem PC</string>
@@ -357,4 +410,52 @@
     <string name="routines_error_plan">Bitte einen Energieplan auswählen.</string>
     <string name="routines_error_wait">Wartezeit: bitte 0 bis 300 Sekunden angeben.</string>
     <string name="routines_error_delay">Countdown: bitte 0 bis 3600 Sekunden angeben.</string>
+    <!-- MainActivity - user-facing strings -->
+    <string name="camera_permission">Kamera erlauben</string>
+    <string name="passwords_mismatch">Passwörter stimmen nicht überein</string>
+    <string name="test_connection">Verbindung testen</string>
+    <string name="username_label">Benutzername</string>
+    <string name="repeat_password_label">Passwort wiederholen</string>
+    <string name="hibernate_triggered">Ruhezustand ausgelöst</string>
+    <string name="abort_triggered">Herunterfahren abgebrochen</string>
+    <string name="games_scanned">Spiele gesucht</string>
+    <string name="memory_cleaned">RAM bereinigt</string>
+    <string name="simulation_activated">Simulationsmodus aktiviert</string>
+    <string name="shutdown_triggered">Herunterfahren ausgelöst</string>
+    <string name="real_mode_activated">Echtzeitmodus aktiviert</string>
+    <string name="shutdown_planned">Herunterfahren in %1$d s geplant</string>
+    <string name="shutdown_planned_hours">Herunterfahren in %1$d h geplant</string>
+    <string name="shutdown_planned_minutes">Herunterfahren in %1$d min geplant</string>
+    <string name="history_copied">Verlauf kopiert</string>
+    <string name="refresh_action">Aktualisieren</string>
+    <string name="refresh_status">Status aktualisieren</string>
+    <string name="copy">Kopieren</string>
+    <string name="history_title">Verlauf</string>
+    <string name="hibernate_label">Ruhezustand</string>
+    <string name="check_now">Jetzt prüfen</string>
+    <string name="refresh_catalog">Katalog aktualisieren</string>
+    <string name="delete_profile">Profil löschen</string>
+    <string name="module_timer_name">Zeitschaltuhr</string>
+    <string name="module_log_name">Verlauf</string>
+    <string name="save_changes">Änderungen speichern</string>
+    <string name="password_show">Anzeigen</string>
+    <string name="password_hide">Verbergen</string>
+    <string name="password_label">Passwort</string>
+    <string name="power_plan_basic">An/Aus</string>
+    <string name="power_plan_status">Status</string>
+    <string name="power_plan_hibernate">Ruhezustand</string>
+    <string name="power_plan_energy">Energieplan</string>
+    <string name="plan_high">Höchstleistung</string>
+    <string name="plan_balanced">Ausbalanciert</string>
+    <string name="plan_saver">Energiesparen</string>
+    <string name="plan_other">Anderer Plan</string>
+    <string name="plan_unknown">Unbekannt</string>
+    <string name="section_connection">VERBINDUNG</string>
+    <string name="section_appearance">DARSTELLUNG</string>
+    <string name="section_control">STEUERUNG</string>
+    <string name="section_plugins">PLUGINS</string>
+    <string name="section_history">VERLAUF</string>
+    <string name="section_updates">UPDATES</string>
+    <string name="section_data">SICHERN UND WIEDERHERSTELLEN</string>
+    <string name="section_about">WEITERE INFORMATIONEN</string>
 </resources>

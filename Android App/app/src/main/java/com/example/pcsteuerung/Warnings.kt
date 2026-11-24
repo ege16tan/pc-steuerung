@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Ausgeloeste Warnung aus `GET /warnings` (Phase C).
+ * Warnungen vom Agenten (`GET /warnings`).
  *
  * Vertrag (Kurzform):
  * {"rules":[{"id":"cpu-high","label":"CPU-Last","metric":"cpu_percent",
@@ -16,63 +16,138 @@ import org.json.JSONObject
  *  "triggered":[ ... gleiche Felder, neueste zuerst ... ],
  *  "checked_at":"2026-11-23 12:00:10","interval_s":30}
  *
- * Geprueft wird im Agenten (auch bei geschlossener App). Die App meldet jedes
- * Ereignis genau einmal; der Schluessel ist `since_epoch` (Unix-Sekunden).
+ * Alle Felder sind optional; fehlende Werte bleiben null.
  */
-data class WarningAlert(
-    val id: String,
-    val label: String,
-    val message: String,
-    val epoch: Long,
+data class WarningRule(
+    val id: String = "",
+    val label: String = "",
+    val metric: String = "",
+    val op: String = "",
+    val threshold: Double = 0.0,
+    val durationS: Int = 0,
+    val enabled: Boolean = false,
 )
 
-/**
- * Wertet `GET /warnings` aus. Fehlt die Route (HTTP 404, alter Agent), ist die
- * Antwort leer oder unlesbar, kommt eine leere Liste zurueck - nie eine
- * Ausnahme, damit der Live-Dienst weiterlaeuft.
- */
+data class WarningAlert(
+    val id: String = "",
+    val label: String = "",
+    val message: String = "",
+    val value: Double? = null,
+    val threshold: Double? = null,
+    val op: String = "",
+    val durationS: Int? = null,
+    val sinceS: Int? = null,
+    val since: String = "",
+    val sinceEpoch: Double = 0.0,
+)
+
+data class WarningsStatus(
+    val rules: List<WarningRule> = emptyList(),
+    val active: List<WarningAlert> = emptyList(),
+    val triggered: List<WarningAlert> = emptyList(),
+    val checkedAt: String = "",
+    val intervalS: Int = 30,
+) {
+    val isEmpty: Boolean
+        get() = rules.isEmpty() && active.isEmpty() && triggered.isEmpty()
+}
+
+private fun JSONObject.optDoubleOrNull(name: String): Double? {
+    if (!has(name) || isNull(name)) return null
+    val value = optDouble(name, Double.NaN)
+    return value.takeUnless { it.isNaN() || it.isInfinite() }
+}
+
+private fun JSONObject.optIntOrNull(name: String): Int? {
+    if (!has(name) || isNull(name)) return null
+    return optInt(name).takeIf { it != 0 }
+}
+
+private fun JSONObject.optBooleanOrNull(name: String): Boolean? {
+    if (!has(name) || isNull(name)) return null
+    return optBoolean(name)
+}
+
+private fun JSONObject.optBlock(name: String): JSONObject? = opt(name) as? JSONObject
+
+fun parseWarnings(body: String): WarningsStatus {
+    val text = body.trim()
+    if (text.isEmpty() || text.startsWith("HTTP ")) return WarningsStatus()
+    val json = runCatching { JSONObject(text) }.getOrNull() ?: return WarningsStatus()
+    return runCatching { readWarnings(json) }.getOrDefault(WarningsStatus())
+}
+
+/** Liest nur die Warn-Alerts (active + triggered) aus dem JSON. */
 fun parseWarningAlerts(body: String): List<WarningAlert> {
     val text = body.trim()
     if (text.isEmpty() || text.startsWith("HTTP ")) return emptyList()
     val json = runCatching { JSONObject(text) }.getOrNull() ?: return emptyList()
-    val array = json.opt("triggered") as? JSONArray ?: return emptyList()
-    val out = ArrayList<WarningAlert>(array.length())
+    val active = readAlerts(json.opt("active") as? JSONArray)
+    val triggered = readAlerts(json.opt("triggered") as? JSONArray)
+    return active + triggered
+}
+
+/** Extrahiert die `sinceEpoch`-Werte aus einer Alert-Liste. */
+fun warningEpochs(alerts: List<WarningAlert>): Set<Long> {
+    return alerts.mapNotNull { alert ->
+        alert.sinceEpoch.takeIf { it > 0 }?.toLong()
+    }.toSet()
+}
+
+/** Findet neue Alerts, deren Epoch nicht in `seen` enthalten ist. */
+fun newWarningAlerts(alerts: List<WarningAlert>, seen: Set<Long>): List<WarningAlert> {
+    return alerts.filter { alert ->
+        alert.sinceEpoch > 0 && alert.sinceEpoch.toLong() !in seen
+    }
+}
+
+private fun readWarnings(json: JSONObject): WarningsStatus = WarningsStatus(
+    rules = readRules(json.opt("rules") as? JSONArray),
+    active = readAlerts(json.opt("active") as? JSONArray),
+    triggered = readAlerts(json.opt("triggered") as? JSONArray),
+    checkedAt = json.optString("checked_at").trim(),
+    intervalS = json.optIntOrNull("interval_s") ?: 30,
+)
+
+private fun readRules(array: JSONArray?): List<WarningRule> {
+    if (array == null) return emptyList()
+    val out = ArrayList<WarningRule>(array.length())
     for (index in 0 until array.length()) {
         val item = array.optJSONObject(index) ?: continue
-        val message = item.optString("message").trim()
-            .ifBlank { item.optString("label").trim() }
-        if (message.isBlank()) continue
-        val epoch = item.optDouble("since_epoch", 0.0)
-        // Ohne Zeitpunkt laesst sich das Ereignis nicht einmalig zuordnen.
-        if (!epoch.isFinite() || epoch <= 0.0) continue
         out.add(
-            WarningAlert(
+            WarningRule(
                 id = item.optString("id").trim(),
                 label = item.optString("label").trim(),
-                message = message,
-                epoch = epoch.toLong(),
+                metric = item.optString("metric").trim(),
+                op = item.optString("op").trim(),
+                threshold = item.optDoubleOrNull("threshold") ?: 0.0,
+                durationS = item.optIntOrNull("duration_s") ?: 0,
+                enabled = item.optBooleanOrNull("enabled") ?: false,
             )
         )
     }
     return out
 }
 
-/**
- * Ereignisse, die noch nicht gemeldet wurden (aeltester zuerst).
- *
- * [limit] begrenzt einen Nachlauf nach laengerer Pause: statt dreissig alter
- * Meldungen kommen nur die neuesten - der Rest wird still gemerkt.
- */
-fun newWarningAlerts(
-    alerts: List<WarningAlert>,
-    seen: Set<Long>,
-    limit: Int = 5,
-): List<WarningAlert> =
-    alerts
-        .filter { it.epoch > 0 && it.epoch !in seen }
-        .sortedBy { it.epoch }
-        .takeLast(limit.coerceAtLeast(1))
-
-/** Gemerkte Zeitpunkte, hoechstens [limit] (die neuesten). */
-fun warningEpochs(alerts: List<WarningAlert>, limit: Int = 60): Set<Long> =
-    alerts.map { it.epoch }.filter { it > 0 }.sorted().takeLast(limit.coerceAtLeast(1)).toSet()
+private fun readAlerts(array: JSONArray?): List<WarningAlert> {
+    if (array == null) return emptyList()
+    val out = ArrayList<WarningAlert>(array.length())
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
+        out.add(
+            WarningAlert(
+                id = item.optString("id").trim(),
+                label = item.optString("label").trim(),
+                message = item.optString("message").trim().ifBlank { item.optString("label").trim() },
+                value = item.optDoubleOrNull("value"),
+                threshold = item.optDoubleOrNull("threshold"),
+                op = item.optString("op").trim(),
+                durationS = item.optIntOrNull("duration_s"),
+                sinceS = item.optIntOrNull("since_s"),
+                since = item.optString("since").trim(),
+                sinceEpoch = item.optDoubleOrNull("since_epoch") ?: 0.0,
+            )
+        )
+    }
+    return out
+}

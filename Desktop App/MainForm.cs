@@ -48,6 +48,7 @@ internal sealed class MainForm : Form
     private readonly Button _btnStop = NewButton("Service stoppen");
     private readonly Button _btnShutdown = NewButton("PC herunterfahren (60 s)", 38);
     private readonly Button _btnHibernate = NewButton("Ruhezustand", 38);
+    private readonly Button _btnCleanMem = NewButton("RAM bereinigen", 38);
     private readonly Button _btnWeb = NewButton("Web-UI im Browser oeffnen");
     private readonly Button _btnRefresh = NewButton("Status aktualisieren");
     private readonly Button _btnExit = NewButton("Beenden");
@@ -114,6 +115,7 @@ internal sealed class MainForm : Form
         _btnStop.Click += OnStopService;
         _btnShutdown.Click += OnShutdownClick;
         _btnHibernate.Click += OnHibernate;
+        _btnCleanMem.Click += OnCleanMemory;
         _btnWeb.Click += (_, _) => OpenWebUi();
         _btnRefresh.Click += async (_, _) => await PollAsync();
         _btnExit.Click += (_, _) => ExitApp();
@@ -240,6 +242,7 @@ internal sealed class MainForm : Form
         var layout = NewGroupLayout();
         AddRow(layout, _btnShutdown);
         AddRow(layout, _btnHibernate, 0);
+        AddRow(layout, _btnCleanMem, 0);
         box.Controls.Add(layout);
         return box;
     }
@@ -567,6 +570,34 @@ internal sealed class MainForm : Form
         }
 
         _tray.ShowBalloonTip(3000, "PC Steuerung", "Ruhezustand ausgel\u00f6st.", ToolTipIcon.Info);
+        await PollAsync();
+    }
+
+    private async void OnCleanMemory(object? sender, EventArgs e)
+    {
+        DialogResult answer = MessageBox.Show(
+            this,
+            "Arbeitsspeicher bereinigen?\n\n" +
+            "Dies trimmt Working Sets, leert System-Caches, Modified Page List, " +
+            "Standby-Liste (Admin), Registry Cache (Win 8.1+) und mehr.",
+            "RAM bereinigen",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2);
+        if (answer != DialogResult.Yes)
+        {
+            return;
+        }
+
+        string? error = await _agent.PostAsync("/clean-memory");
+        if (error is not null)
+        {
+            Warn($"RAM bereinigen fehlgeschlagen: {error}");
+        }
+        else
+        {
+            _tray.ShowBalloonTip(3000, "PC Steuerung", "RAM bereinigt.", ToolTipIcon.Info);
+        }
         await PollAsync();
     }
 

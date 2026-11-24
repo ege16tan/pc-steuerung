@@ -168,6 +168,7 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/status", axum::routing::get(routes::status_ep))
         .route("/metrics", axum::routing::get(routes::metrics_ep))
         .route("/sensors", axum::routing::get(routes::sensors_ep))
+        .route("/clean-memory", axum::routing::post(routes::clean_memory_ep))
         .route(
             "/warnings",
             axum::routing::get(routes::warnings_ep).post(routes::warnings_save),
@@ -177,7 +178,7 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/hibernate", axum::routing::post(routes::hibernate_ep))
         .route("/power-plan", axum::routing::post(routes::power_plan_ep))
         .route("/wake", axum::routing::post(routes::wake_ep))
-        .route("/ping", axum::routing::post(routes::ping_ep))
+        .route("/ping", axum::routing::get(routes::ping_ep).post(routes::ping_ep))
         .route("/events", axum::routing::get(routes::events_ep))
         .route("/events/stream", axum::routing::get(routes::events_stream))
         .route("/log", axum::routing::get(routes::log_ep))
