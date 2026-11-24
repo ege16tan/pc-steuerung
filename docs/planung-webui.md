@@ -30,11 +30,11 @@ danach `dist\pc-agent.exe` ersetzen und Service neu starten.
 
 Heute zeigt die Web-UI nur **installierte** Plugins. Es fehlt der Marktplatz.
 
-- [ ] Kachel/Abschnitt „Marktplatz" im Plugins-Tab: `GET /plugin-catalog`
+- [x] Kachel/Abschnitt „Marktplatz" im Plugins-Tab: `GET /plugin-catalog`
       (Einträge mit `id`, `name`, `description`, `version`)
-- [ ] „Installieren" → `POST /plugins/{id}/install` (nur `admin`), danach Liste neu
+- [x] „Installieren" → `POST /plugins/{id}/install` (nur `admin`), danach Liste neu
       laden; Fehlertext aus `detail` anzeigen
-- [ ] „Entfernen" gibt es schon in der Detailansicht (`DELETE /plugins/{id}`) –
+- [x] „Entfernen" gibt es schon in der Detailansicht (`DELETE /plugins/{id}`) –
       im Katalog installierte Einträge als „installiert" markieren
 - [ ] Abnahme: Katalog lädt offline aus dem lokalen Fallback, Installation und
       Entfernen wirken ohne Neuladen der Seite

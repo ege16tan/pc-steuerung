@@ -255,6 +255,22 @@
       <p class="mut" id="pluginHint" style="margin:8px 0 0"></p>
     </div>
 
+    <!-- Marktplatz (Phase W1): Katalog aus GET /plugin-catalog. Geladen wird nur
+         bei offenem Plugins-Tab (Tabwechsel, Aktionen, „Aktualisieren“) – kein Takt. -->
+    <div class="tile w4" data-tab="plugins" id="pluginMarket">
+      <div class="row" style="margin-top:0">
+        <div style="flex:1 1 auto;min-width:0">
+          <div class="lab">Marktplatz</div>
+          <div class="mut">Plugins aus dem Katalog des Agenten. „Installieren“ schreibt das
+            Paket in den Datenordner – gestartet wird weiterhin nur auf Knopfdruck.</div>
+        </div>
+        <button type="button" class="ghost" id="btnCatalogRefresh"
+                style="flex:0 0 auto">Aktualisieren</button>
+      </div>
+      <div class="devlist" id="catalogList" style="max-height:320px;overflow:auto"></div>
+      <p class="mut" id="catalogHint" style="margin:8px 0 0">Marktplatz wird geladen …</p>
+    </div>
+
     <!-- Detailansicht: Plugin (Ausgabe + Einstellungen), Steam oder Spiel-Optimierung -->
     <div class="tile w4" data-tab="plugins" id="pluginDetail" hidden>
       <div class="row" style="margin-top:0">

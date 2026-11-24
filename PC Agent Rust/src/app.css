@@ -167,6 +167,8 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
   border: 1px solid #f8717155; background: #2a1520; color: #fecaca;
 }
 .banner.warn { border-color: #fbbf2455; background: #2a2412; color: #fde68a; }
+/* Erfolgsmeldung (z. B. „Plugin installiert“): grün statt rot. */
+.banner.ok { border-color: #34d39955; background: #10241c; color: #bbf7d0; }
 .banner[hidden] { display: none; }
 
 /* Einrichtungs-Assistent */
@@ -255,6 +257,13 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
 .devrow.cols .row { margin-top: 8px; flex-basis: 100%; }
 .devrow.cols .row > * { flex: 1 1 110px; }
 
+/* ---------------- Marktplatz (Phase W1) ----------------
+   Die Katalogzeilen nutzen .devrow; die Beschreibung darf umbrechen, statt wie
+   in .devrow .grow abgeschnitten zu werden. `.mut.err` ist ein ruhiger
+   Fehlertext im Abschnitt (kein Banner). */
+.devrow .grow.wrap { white-space: normal; overflow: visible; text-overflow: clip; }
+.mut.err { color: var(--red); }
+
 /* Barrierefreiheit */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -292,6 +301,7 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
 :root[data-theme="light"] select { background: #ffffff; }
 :root[data-theme="light"] .banner { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
 :root[data-theme="light"] .banner.warn { background: #fffbeb; border-color: #fde68a; color: #78350f; }
+:root[data-theme="light"] .banner.ok { background: #f0fdf4; border-color: #bbf7d0; color: #14532d; }
 :root[data-theme="light"] .chip { background: #dcfce7; color: #14532d; }
 :root[data-theme="light"] .log,
 :root[data-theme="light"] .gamestate { color: #334155; }

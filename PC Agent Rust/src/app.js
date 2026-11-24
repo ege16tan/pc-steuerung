@@ -85,6 +85,13 @@ const state = {
   gameConfig: null,
   gameConfigError: '',
   gameDetailSignature: '',
+  // Marktplatz (Phase W1): Katalog nur bei offenem Plugins-Tab laden, kein Takt.
+  // `catalog` = null (noch nicht geladen) | [] (leer) | Einträge aus dem Katalog.
+  catalog: null,
+  catalogVersion: 0,
+  catalogError: '',
+  catalogSignature: '',
+  catalogInstalling: '',
   // Routinen (Phase E): Schritte des Formulars (Rohtexte, geprueft beim Speichern),
   // aufgeklappter Verlauf und die Vorlagen aus /routine-templates.
   routineSteps: [],
@@ -213,7 +220,7 @@ function guardWrite() {
 function showBanner(message, kind) {
   const banner = $('banner');
   banner.textContent = message;
-  banner.className = 'banner' + (kind === 'warn' ? ' warn' : '');
+  banner.className = 'banner' + (kind === 'warn' ? ' warn' : (kind === 'ok' ? ' ok' : ''));
   banner.hidden = false;
 }
 
@@ -395,6 +402,8 @@ function mount() {
   };
   $('btnPluginBack').onclick = closePluginDetail;
   $('btnSaveSettings').onclick = () => savePluginSettings();
+  // Marktplatz (Phase W1): nur auf Knopfdruck neu laden – kein Takt.
+  $('btnCatalogRefresh').onclick = () => refreshCatalog();
   // Spiel-Optimierung: Verwaltung der Spiele und der Konfiguration.
   $('btnScanDetail').onclick = () => runAction(scanGamesFromDetail);
   $('btnRefreshGames').onclick = () => refreshGameDetail();
@@ -560,6 +569,7 @@ function render() {
   renderMetrics();
   renderTimer();
   renderPlugin();
+  renderCatalog();
   renderDevices();
   renderUsers();
   renderRoutines();
@@ -908,8 +918,12 @@ function applyPluginDetailVisibility() {
   const detail = $('pluginDetail');
   if (!overview || !detail) return;
   const onPluginsTab = state.activeTab === 'plugins';
-  overview.hidden = !onPluginsTab || !!state.pluginDetail;
+  const showOverview = onPluginsTab && !state.pluginDetail;
+  overview.hidden = !showOverview;
   detail.hidden = !onPluginsTab || !state.pluginDetail;
+  // Der Marktplatz steht unter dem Raster und weicht der Detailansicht genauso.
+  const market = $('pluginMarket');
+  if (market) market.hidden = !showOverview;
 }
 
 function openPluginDetailFromKey(key) {
@@ -1072,9 +1086,156 @@ async function removePlugin(id) {
   if (!ok) return;
   await api('/plugins/' + encodeURIComponent(id), { method: 'DELETE' });
   await refreshPlugin();
+  // Marktplatz (Phase W1): die „installiert“-Markierung stimmt sonst nicht mehr.
+  await refreshCatalog();
   if (state.pluginDetail && state.pluginDetail.id === id) closePluginDetail();
   state.pluginTileSignature = '';
   render();
+}
+
+/* ---------------- Plugins: Marktplatz (Phase W1) ----------------
+   Quelle: GET /plugin-catalog (`catalogVersion`, `plugins[]` mit `id`, `name`,
+   `description`, `version`, `installed`, `kind`). Geladen wird nur, solange der
+   Plugins-Tab offen ist: beim Tabwechsel, nach Aktionen und über
+   „Aktualisieren“ – kein Takt, kein Abruf im Hintergrund (Regel D1).
+   Ein leerer oder kaputter Katalog ist kein Absturz: der Abschnitt zeigt einen
+   ruhigen Hinweis, der Rest der Seite bleibt bedienbar. */
+
+const CATALOG_TEXT_MAX = 140;
+
+/// Beschreibung für die Zeile kürzen; der volle Text bleibt im Katalog.
+function catalogDescription(text) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) return 'Keine Beschreibung im Katalog.';
+  return value.length > CATALOG_TEXT_MAX
+    ? value.slice(0, CATALOG_TEXT_MAX - 1).trim() + '…'
+    : value;
+}
+
+/// Zeile unter dem Namen: Art · Version · gekürzte Beschreibung.
+function catalogSubText(entry) {
+  return [pluginKindText(entry), 'v' + (entry.version || '1'),
+    catalogDescription(entry.description)].join(' · ');
+}
+
+/// Eine Katalogzeile: Name, Beschreibung, Version, Status und (nur `admin` und
+/// nicht installiert) der Knopf „Installieren“.
+function catalogRow(entry) {
+  const id = String(entry.id);
+  const installed = entry.installed === true;
+  const busy = state.catalogInstalling === id;
+  let action;
+  if (installed) {
+    action = '<span class="chip">installiert</span>';
+  } else if (canWrite()) {
+    action = '<button type="button" data-install="' + esc(id) + '"' + (busy ? ' disabled' : '') +
+      '>' + (busy ? 'Installiere …' : 'Installieren') + '</button>';
+  } else {
+    action = '<span class="mut">nicht installiert</span>';
+  }
+  return '<div class="devrow cols">' +
+    '<div class="grow wrap">' + esc(entry.name || id) +
+    '<div class="sub">' + esc(catalogSubText(entry)) + '</div></div>' +
+    action +
+    '</div>';
+}
+
+/// Ruhezeile unter der Liste: Ladezustand, Fehler, leerer Katalog oder Stand.
+function catalogHintText(entries) {
+  if (state.catalogError) return state.catalogError;
+  if (state.catalog === null) return 'Marktplatz wird geladen …';
+  if (!entries.length) return 'Marktplatz nicht erreichbar – der Katalog ist leer.';
+  const count = entries.length === 1 ? '1 Eintrag' : entries.length + ' Einträge';
+  const version = state.catalogVersion ? ' · Katalog ' + state.catalogVersion : '';
+  return count + ' im Katalog' + version + '.';
+}
+
+function renderCatalog() {
+  const list = $('catalogList');
+  const hint = $('catalogHint');
+  if (!list || !hint) return;
+  const entries = Array.isArray(state.catalog) ? state.catalog : [];
+  const signature = JSON.stringify(entries) + '#' + canWrite() + '#' +
+    state.catalogInstalling + '#' + state.catalogError + '#' + state.catalogVersion;
+  if (signature !== state.catalogSignature) {
+    state.catalogSignature = signature;
+    list.innerHTML = entries.length ? entries.map(catalogRow).join('') : '';
+    list.hidden = !entries.length;
+    list.querySelectorAll('button[data-install]').forEach((button) => {
+      button.onclick = () => installPluginFromCatalog(button.dataset.install);
+    });
+    hint.textContent = catalogHintText(entries);
+    hint.className = state.catalogError ? 'mut err' : 'mut';
+  }
+}
+
+/// Lädt den Katalog – nur bei offenem Plugins-Tab und sichtbarer Seite.
+async function refreshCatalog() {
+  if (document.hidden || state.activeTab !== 'plugins') return;
+  if (!state.connected) {
+    state.catalog = null;
+    state.catalogVersion = 0;
+    state.catalogError = 'Marktplatz nicht erreichbar: keine Verbindung zum Agenten.';
+    renderCatalog();
+    return;
+  }
+  try {
+    const data = await api('/plugin-catalog');
+    const list = (data && Array.isArray(data.plugins)) ? data.plugins : [];
+    // Kaputte Einträge (ohne id) werden still übersprungen.
+    state.catalog = list.filter((entry) => entry && typeof entry.id === 'string' && entry.id);
+    state.catalogVersion =
+      (data && typeof data.catalogVersion === 'number') ? data.catalogVersion : 0;
+    state.catalogError = '';
+  } catch (error) {
+    // 404/500/Netzwerk: ruhiger Hinweis im Abschnitt, kein Banner.
+    state.catalog = null;
+    state.catalogVersion = 0;
+    state.catalogError = 'Marktplatz nicht erreichbar: ' + error.message;
+  }
+  renderCatalog();
+}
+
+/// „Installieren“ → POST /plugins/{id}/install; danach Katalog, Kacheln und eine
+/// offene Detailansicht neu laden. Erfolg im Banner, Fehler im Abschnitt.
+async function installPluginFromCatalog(id) {
+  if (!guardWrite()) return;
+  if (state.catalogInstalling) return;
+  const entry = (Array.isArray(state.catalog) ? state.catalog : [])
+    .find((item) => item.id === id) || null;
+  if (!entry || entry.installed === true) return;
+  const name = entry.name || id;
+  const ok = await askConfirm({
+    title: 'Plugin installieren',
+    text: 'Plugin „' + name + '“ aus dem Katalog installieren?\n' +
+      'Das Paket landet im Datenordner, gestartet wird es nicht.',
+    ok: 'Installieren',
+  });
+  if (!ok) return;
+
+  state.catalogInstalling = id;
+  state.catalogError = '';
+  renderCatalog();
+  try {
+    await api('/plugins/' + encodeURIComponent(id) + '/install', { method: 'POST' });
+    state.catalogError = '';
+    state.pluginTileSignature = '';
+    await refreshPlugin();
+    await refreshCatalog();
+    if (state.pluginDetail && state.pluginDetail.kind === 'plugin' &&
+        state.pluginDetail.id === id) {
+      await refreshPluginSettings();
+      await refreshPluginOutput();
+    }
+    showBanner('Plugin „' + name + '“ installiert.', 'ok');
+  } catch (error) {
+    // 403/400/422/500: `detail` des Agenten steht in `error.message`.
+    state.catalogError = 'Installation fehlgeschlagen: ' + error.message;
+  } finally {
+    state.catalogInstalling = '';
+    renderCatalog();
+    render();
+  }
 }
 
 /* ---- Plugin-Ausgabe (3 s, nur bei offener Detailansicht) ---- */
@@ -2082,6 +2243,8 @@ function syncTabPolling() {
   else stopWarnings();
   // Plugins: Ausgabe-Takt nur bei offener Detailansicht (3 s), sonst gar nichts.
   syncPluginDetailPolling();
+  // Marktplatz (Phase W1): nur beim Wechsel auf den Plugins-Tab laden, kein Takt.
+  if (state.activeTab === 'plugins') refreshCatalog();
   // Routinen: Vorlagen und die Plugin-Auswahl der Bedingungen nachladen.
   if (state.activeTab === 'routines') {
     loadRoutineTemplates();
@@ -2635,6 +2798,12 @@ function resetData() {
   state.gameConfig = null;
   state.gameConfigError = '';
   state.gameDetailSignature = '';
+  // Marktplatz (Phase W1): der Katalog gehört zum alten Agenten.
+  state.catalog = null;
+  state.catalogVersion = 0;
+  state.catalogError = '';
+  state.catalogInstalling = '';
+  state.catalogSignature = '';
   stopPluginDetailPolling();
   // Routinen: Vorlagen erneut laden, Verlauf zuklappen.
   state.routineTemplates = [];
