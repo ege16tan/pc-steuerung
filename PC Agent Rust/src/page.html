@@ -281,6 +281,11 @@
         </div>
       </div>
       <div class="mut" id="detailState"></div>
+      <!-- Nur bei einem Plugin: Hinweis auf den Idle-Timeout (rein informativ,
+           kein zusaetzlicher Abruf – der Text gilt fuer alle JS-Plugins). -->
+      <p class="mut" id="detailIdleInfo" hidden>Ohne Abruf der Ausgabe stoppt der Agent das
+        Plugin nach der Idle-Zeit aus dem Manifest; <code>game-optimizer</code> läuft bewusst
+        ohne Timeout.</p>
       <div class="btns" id="detailActions"></div>
 
       <!-- Ausgabe: Takt 3 s, nur solange diese Detailansicht offen ist -->
@@ -320,6 +325,26 @@
 
         <div class="lab" style="margin-top:12px">Ausgeblendet</div>
         <div class="devlist" id="gamesHidden"></div>
+
+        <div class="lab" style="margin-top:14px">Eigene Suchordner</div>
+        <div class="mut">Zusätzliche Ordner für „Spiele suchen“ (z. B. <code>D:\Spiele</code>).
+          Neue Ordner wirken erst beim nächsten Scan.</div>
+        <div class="devlist" id="scanPaths"></div>
+        <div class="row">
+          <input id="scanPathInput" placeholder="D:\Spiele" autocomplete="off"
+                 aria-label="Eigener Suchordner">
+          <button type="button" class="ghost" id="btnAddScanPath" style="flex:0 0 auto">Hinzufügen</button>
+        </div>
+        <p class="mut" id="scanPathHint" style="margin:8px 0 0"></p>
+
+        <div class="lab" style="margin-top:14px">Automatik</div>
+        <div class="checkline">
+          <button type="button" class="switch" role="switch" aria-checked="false"
+                  id="gameAutoSwitch" aria-label="Laufendes Spiel automatisch erkennen"></button>
+          <label for="gameAutoSwitch">Laufendes Spiel automatisch erkennen</label>
+        </div>
+        <p class="mut" style="margin:6px 0 0">Nur beim Start der Optimierung – kein
+          Hintergrund-Wächter.</p>
 
         <div class="lab" style="margin-top:14px">Kill-Liste</div>
         <div class="mut">Diese Programme werden beim Optimieren geschlossen.</div>

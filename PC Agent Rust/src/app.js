@@ -89,6 +89,10 @@ const state = {
   gameConfig: null,
   gameConfigError: '',
   gameDetailSignature: '',
+  // Phase W3: Rueckmeldung im Abschnitt „Eigene Suchordner“ (leer = Standardtext)
+  // und ob sie als Fehler (Ablehnung) statt als Hinweis gilt.
+  scanPathHint: '',
+  scanPathError: false,
   // Marktplatz (Phase W1): Katalog nur bei offenem Plugins-Tab laden, kein Takt.
   // `catalog` = null (noch nicht geladen) | [] (leer) | Einträge aus dem Katalog.
   catalog: null,
@@ -435,6 +439,20 @@ function mount() {
     const button = event.target.closest('button');
     if (!button) return;
     if (button.dataset.customRemove !== undefined) removeCustomGame(button.dataset.customRemove);
+  };
+  // Phase W3: eigene Suchordner und der Automatik-Schalter (beides `/game-config`).
+  $('btnAddScanPath').onclick = () => addScanPath();
+  $('scanPathInput').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); addScanPath(); }
+  });
+  $('scanPaths').onclick = (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    if (button.dataset.scanRemove !== undefined) removeScanPath(button.dataset.scanRemove);
+  };
+  $('gameAutoSwitch').onclick = () => {
+    const on = $('gameAutoSwitch').getAttribute('aria-checked') === 'true';
+    setGameAuto(!on);
   };
 
   $('gameSelect').onchange = () => {
@@ -1242,6 +1260,8 @@ async function openPluginDetail(kind, id) {
   state.pluginSettingsValues = {};
   state.pluginSettingsError = '';
   state.gameDetailSignature = '';
+  state.scanPathHint = '';
+  state.scanPathError = false;
   state.pluginTileSignature = '';
   applyPluginDetailVisibility();
   syncPluginDetailPolling();
@@ -1265,6 +1285,8 @@ function closePluginDetail() {
   state.pluginOutputError = '';
   state.pluginSettings = null;
   state.pluginSettingsValues = {};
+  state.scanPathHint = '';
+  state.scanPathError = false;
   stopPluginDetailPolling();
   state.pluginTileSignature = '';
   applyPluginDetailVisibility();
@@ -1295,6 +1317,9 @@ function renderPluginDetail() {
   $('detailOutputBox').hidden = !isPlugin;
   $('detailSteam').hidden = detail.kind !== 'steam';
   $('detailGames').hidden = detail.kind !== 'game';
+  // Idle-Timeout-Hinweis (Phase W3): nur bei einem Plugin, rein informativ.
+  const idleInfo = $('detailIdleInfo');
+  if (idleInfo) idleInfo.hidden = !isPlugin;
   const write = canWrite();
 
   if (isPlugin) {
@@ -1943,6 +1968,73 @@ async function removeCustomGame(exe) {
   await saveGameConfig({ custom: config.custom.filter((entry) => entry.exe !== exe) });
 }
 
+/* ---- Eigene Suchordner und Automatik (Phase W3) ----
+   Beides liegt in `/game-config` und wird über denselben Weg gespeichert
+   (`POST` ersetzt den kompletten Satz; hier also immer der geladene Satz plus
+   genau dieses eine Feld). */
+
+/// Vergleichsform eines Ordnerpfads: `\` und `/` gelten gleich, Gross/Klein
+/// egal, ein Trenner am Ende zählt nicht (Windows-Pfade). `C:\` bleibt `c:\`.
+function scanPathKey(path) {
+  const text = String(path || '').trim();
+  if (!text) return '';
+  const trimmed = text.replace(/[\\/]+$/, '');
+  const key = trimmed.replace(/\//g, '\\').toLowerCase();
+  return /^[a-z]:$/.test(key) ? key + '\\' : key;
+}
+
+/// Rückmeldung im Abschnitt: Text plus (bei Ablehnung) Fehlerfarbe.
+function setScanPathHint(text, isError) {
+  state.scanPathHint = text || '';
+  state.scanPathError = !!isError;
+  renderGameDetail();
+}
+
+async function addScanPath() {
+  if (!guardWrite()) return;
+  const input = $('scanPathInput');
+  if (!input) return;
+  // Nur Leerzeichen ist keine Eingabe – der Ordnername selbst darf aber
+  // Leerzeichen enthalten, deshalb wird nur aussen getrimmt.
+  const path = String(input.value || '').trim();
+  if (!path) {
+    setScanPathHint('Bitte einen Ordner angeben, z. B. D:\\Spiele.', true);
+    input.focus();
+    return;
+  }
+  const config = gameConfigOrEmpty();
+  const key = scanPathKey(path);
+  if (config.scan_paths.some((entry) => scanPathKey(entry) === key)) {
+    setScanPathHint('„' + path + '“ steht schon in den Suchordnern.', true);
+    return;
+  }
+  const saved = await saveGameConfig({ scan_paths: config.scan_paths.concat([path]) });
+  if (saved) {
+    input.value = '';
+    setScanPathHint('„' + path + '“ hinzugefügt – wirkt beim nächsten „Spiele suchen“.', false);
+  }
+}
+
+async function removeScanPath(path) {
+  if (!guardWrite()) return;
+  const config = gameConfigOrEmpty();
+  const key = scanPathKey(path);
+  const remaining = config.scan_paths.filter((entry) => scanPathKey(entry) !== key);
+  const saved = await saveGameConfig({ scan_paths: remaining });
+  if (saved) setScanPathHint('„' + path + '“ entfernt.', false);
+}
+
+/// Schalter „Laufendes Spiel automatisch erkennen“ (`game-config.auto`).
+async function setGameAuto(on) {
+  if (!guardWrite()) return;
+  const saved = await saveGameConfig({ auto: !!on });
+  if (!saved) {
+    // Der Schalter zeigt weiter den gespeicherten Wert – kein Schalter, der lügt.
+    state.gameDetailSignature = '';
+    renderGameDetail();
+  }
+}
+
 /// Pfad für die Anzeige kürzen; der volle Pfad bleibt im `data`-Attribut.
 function shortExe(exe) {
   const text = String(exe || '');
@@ -1958,7 +2050,8 @@ function renderGameDetail() {
   const games = Array.isArray(state.games) ? state.games : [];
   const config = gameConfigOrEmpty();
   const signature = JSON.stringify(games) + '#' + JSON.stringify(config) + '#' +
-    state.scannedAt + '#' + write + '#' + state.gameConfigError;
+    state.scannedAt + '#' + write + '#' + state.gameConfigError + '#' +
+    state.scanPathHint + '#' + state.scanPathError;
   if (signature === state.gameDetailSignature) return;
   state.gameDetailSignature = signature;
 
@@ -2009,14 +2102,43 @@ function renderGameDetail() {
       '</div>').join('')
     : '<div class="mut">Noch kein eigenes Spiel.</div>';
 
+  // Eigene Suchordner: Liste mit „Entfernen“, Eingabe steht fest im HTML (der
+  // Text geht beim Neuzeichnen der Liste nicht verloren).
+  $('scanPaths').innerHTML = config.scan_paths.length
+    ? config.scan_paths.map((entry) =>
+      '<div class="devrow">' +
+      '<div class="grow" title="' + esc(entry) + '">' + esc(entry) + '</div>' +
+      (write ? '<button type="button" data-scan-remove="' + esc(entry) + '">Entfernen</button>'
+        : '<span class="chip">Suchordner</span>') +
+      '</div>').join('')
+    : '<div class="mut">Noch kein eigener Ordner.</div>';
+
+  const scanHint = $('scanPathHint');
+  scanHint.textContent = state.scanPathHint ||
+    (write ? 'Neue Ordner gelten beim nächsten „Spiele suchen“.'
+      : 'Diese Sitzung hat nur Lesezugriff.');
+  scanHint.className = state.scanPathError ? 'mut err' : 'mut';
+
+  const pathInput = $('scanPathInput');
+  const addPathButton = $('btnAddScanPath');
+  if (pathInput) pathInput.disabled = !write;
+  if (addPathButton) addPathButton.disabled = !write;
+
+  // Automatik-Schalter zeigt immer den gespeicherten Wert aus `/game-config`.
+  const autoSwitch = $('gameAutoSwitch');
+  if (autoSwitch) {
+    autoSwitch.setAttribute('aria-checked', config.auto ? 'true' : 'false');
+    autoSwitch.disabled = !write;
+  }
+
   $('gamesHint').textContent = 'Scan: ' + (state.scannedAt || 'noch nie') + ' · ' +
     visible.length + ' sichtbar, ' + hiddenEntries.length + ' ausgeblendet.';
 
   $('gameConfigHint').textContent = state.gameConfigError
     ? state.gameConfigError
     : (write
-      ? 'Kill-Liste und eigene Spiele gelten sofort. Automatik: ' +
-        (config.auto ? 'an' : 'aus') + '.'
+      ? 'Kill-Liste und eigene Spiele gelten sofort, der Automatik-Schalter beim ' +
+        'nächsten Start der Optimierung.'
       : 'Diese Sitzung hat nur Lesezugriff.');
 }
 
