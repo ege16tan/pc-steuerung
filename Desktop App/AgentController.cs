@@ -31,7 +31,27 @@ internal sealed class AgentController
     /// <summary>Pfad zu `pc-agent.exe` (null = nicht gefunden).</summary>
     public string? ExePath { get; } = ResolveExe();
 
+    /// <summary>Gemeinsamer Marker fuer einen vom Handy angeforderten Stopp.</summary>
+    public string RemoteStopRequestPath =>
+        Path.Combine(ResolveDataDirectory(), "service-stop.requested");
+
     public bool ExeFound => ExePath != null;
+
+    public bool RemoteStopRequested => File.Exists(RemoteStopRequestPath);
+
+    /// <summary>Hebt den Fernstopp auf, bevor der Service manuell gestartet wird.</summary>
+    public string? ClearRemoteStopRequest()
+    {
+        try
+        {
+            File.Delete(RemoteStopRequestPath);
+            return null;
+        }
+        catch (Exception error)
+        {
+            return $"Stopp-Marker konnte nicht entfernt werden: {error.Message}";
+        }
+    }
 
     /// <summary>`GET /status`; null = keine (brauchbare) Antwort.</summary>
     public async Task<ServiceStatus?> GetStatusAsync()
@@ -278,5 +298,24 @@ internal sealed class AgentController
         }
 
         return null;
+    }
+
+    private string ResolveDataDirectory()
+    {
+        string? configured = Environment.GetEnvironmentVariable("PC_AGENT_DATA");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return Path.IsPathRooted(configured)
+                ? configured
+                : Path.GetFullPath(Path.Combine(
+                    Path.GetDirectoryName(ExePath) ?? AppContext.BaseDirectory,
+                    configured));
+        }
+
+        string localAppData = Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData);
+        return string.IsNullOrWhiteSpace(localAppData)
+            ? Path.GetDirectoryName(ExePath) ?? AppContext.BaseDirectory
+            : Path.Combine(localAppData, "PC Steuerung");
     }
 }

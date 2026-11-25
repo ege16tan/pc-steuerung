@@ -10,6 +10,7 @@
 //! GET/POST /plugins/{id}/settings (Einstellungen aus dem Manifest, Phase G4),
 //! GET /games, POST /games/scan, GET/POST /game-config,
 //! GET /steam, GET /downloads (Steam, nur Lesen),
+//! GET /processes, POST /processes/{pid}/close, POST /service/stop,
 //! GET/POST /routines, DELETE /routines/{id}, POST /routines/{id}/run,
 //! GET /routine-templates (fertige Vorlagen, Phase E5).
 
@@ -1320,6 +1321,90 @@ pub async fn downloads_ep(State(app): State<SharedApp>, _auth: Auth) -> Response
             format!("Downloads konnten nicht gelesen werden: {error}"),
         ),
     }
+}
+
+/// GET /processes — sichtbare Anwendungen ohne kritische Systemprozesse.
+pub async fn processes_ep(State(_app): State<SharedApp>, _auth: WriteAuth) -> Response {
+    match tokio::task::spawn_blocking(crate::optimize::interactive_processes).await {
+        Ok(processes) => {
+            let processes = processes
+                .into_iter()
+                .map(|(name, pid)| json!({ "name": name, "pid": pid }))
+                .collect::<Vec<_>>();
+            Json(json!({ "processes": processes })).into_response()
+        }
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Prozessliste fehlgeschlagen: {error}"),
+        ),
+    }
+}
+
+/// Body fuer `POST /processes/{pid}/close`.
+#[derive(Debug, Deserialize)]
+pub struct ProcessCloseRequest {
+    #[serde(default)]
+    pub expected_name: String,
+}
+
+/// POST /processes/{pid}/close — sendet WM_CLOSE, beendet nie erzwungen.
+pub async fn process_close_ep(
+    State(_app): State<SharedApp>,
+    _auth: WriteAuth,
+    Path(pid): Path<u32>,
+    Json(request): Json<ProcessCloseRequest>,
+) -> Response {
+    if request.expected_name.trim().is_empty() || request.expected_name.len() > 260 {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Ungueltiger Prozessname".to_string(),
+        );
+    }
+
+    match tokio::task::spawn_blocking(move || {
+        crate::optimize::request_process_close(pid, &request.expected_name)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(crate::optimize::ProcessCloseError::Protected)) => error_response(
+            StatusCode::FORBIDDEN,
+            "Dieser Prozess darf nicht geschlossen werden".to_string(),
+        ),
+        Ok(Err(crate::optimize::ProcessCloseError::NotFound)) => error_response(
+            StatusCode::NOT_FOUND,
+            "Die Anwendung hat kein sichtbares Fenster mehr".to_string(),
+        ),
+        Ok(Err(crate::optimize::ProcessCloseError::NameChanged)) => error_response(
+            StatusCode::CONFLICT,
+            "Der Prozess hat sich seit der Liste geaendert".to_string(),
+        ),
+        Ok(Err(crate::optimize::ProcessCloseError::RequestFailed)) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Das Schliessen konnte nicht angefordert werden".to_string(),
+        ),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Schliessen fehlgeschlagen: {error}"),
+        ),
+    }
+}
+
+/// POST /service/stop — markiert den Fernstopp und beendet den Agenten geordnet.
+pub async fn service_stop_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Response {
+    if let Err(error) = std::fs::write(&app.service_stop_file, b"remote") {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Stopp-Anforderung konnte nicht gespeichert werden: {error}"),
+        );
+    }
+
+    let shutdown = app.service_shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        let _ = shutdown.send(true);
+    });
+    Json(json!({ "ok": true, "message": "Service-Stopp angefordert" })).into_response()
 }
 
 // ---------------- Benutzer und Rollen (Phase 3) ----------------

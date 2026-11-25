@@ -163,6 +163,17 @@ mod win {
         pub fn IsUserAnAdmin() -> i32;
     }
 
+    #[link(name = "user32")]
+    extern "system" {
+        pub fn EnumWindows(
+            callback: Option<unsafe extern "system" fn(Handle, isize) -> i32>,
+            parameter: isize,
+        ) -> i32;
+        pub fn IsWindowVisible(window: Handle) -> i32;
+        pub fn GetWindowThreadProcessId(window: Handle, process_id: *mut u32) -> u32;
+        pub fn PostMessageW(window: Handle, message: u32, wparam: usize, lparam: isize) -> i32;
+    }
+
     pub const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
     pub const PROCESS_SET_QUOTA: u32 = 0x0100;
     pub const PROCESS_SET_INFORMATION: u32 = 0x0200;
@@ -182,6 +193,147 @@ mod win {
     /// `SYSTEM_INFORMATION_CLASS::SystemCombinePhysicalMemoryInformation`.
     pub const SYSTEM_COMBINE_PHYSICAL_MEMORY_INFORMATION: u32 = 0x5F;
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProcessCloseError {
+    Protected,
+    NotFound,
+    NameChanged,
+    RequestFailed,
+}
+
+/// Laufende Apps mit sichtbarem Fenster, ausgenommen kritische System- und
+/// Steuerungsprozesse.
+pub fn interactive_processes() -> Vec<(String, u32)> {
+    #[cfg(windows)]
+    {
+        let visible_ids = windows_ui::visible_process_ids(None);
+        let mut processes = task_list()
+            .into_iter()
+            .filter(|(name, pid)| visible_ids.contains(pid) && !is_protected_process(name))
+            .collect::<Vec<_>>();
+        processes.sort_by(|(left_name, left_pid), (right_name, right_pid)| {
+            left_name
+                .to_lowercase()
+                .cmp(&right_name.to_lowercase())
+                .then_with(|| left_pid.cmp(right_pid))
+        });
+        processes.dedup_by_key(|(_, pid)| *pid);
+        processes
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+/// Sendet WM_CLOSE an alle sichtbaren Fenster des ausgewählten Prozesses.
+/// Der Prozess wird nie zwangsweise beendet.
+pub fn request_process_close(pid: u32, expected_name: &str) -> Result<(), ProcessCloseError> {
+    if pid <= 4 || is_protected_process(expected_name) {
+        return Err(ProcessCloseError::Protected);
+    }
+
+    #[cfg(windows)]
+    {
+        let Some((actual_name, _)) = interactive_processes()
+            .into_iter()
+            .find(|(_, actual_pid)| *actual_pid == pid)
+        else {
+            return Err(ProcessCloseError::NotFound);
+        };
+        if !actual_name.eq_ignore_ascii_case(expected_name) {
+            return Err(ProcessCloseError::NameChanged);
+        }
+        if windows_ui::post_close_to_process(pid) {
+            Ok(())
+        } else {
+            Err(ProcessCloseError::RequestFailed)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = expected_name;
+        Err(ProcessCloseError::NotFound)
+    }
+}
+
+fn is_protected_process(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "system"
+            | "registry"
+            | "idle"
+            | "smss.exe"
+            | "csrss.exe"
+            | "wininit.exe"
+            | "services.exe"
+            | "lsass.exe"
+            | "winlogon.exe"
+            | "svchost.exe"
+            | "dwm.exe"
+            | "explorer.exe"
+            | "pc-agent.exe"
+            | "pc steuerung.exe"
+    )
+}
+
+#[cfg(windows)]
+mod interactive_windows {
+    use super::win;
+    use std::collections::HashSet;
+
+    struct WindowScan {
+        process_ids: HashSet<u32>,
+        target_pid: Option<u32>,
+        close_sent: bool,
+    }
+
+    unsafe extern "system" fn visit_window(window: win::Handle, parameter: isize) -> i32 {
+        if unsafe { win::IsWindowVisible(window) } == 0 {
+            return 1;
+        }
+
+        let scan = unsafe { &mut *(parameter as *mut WindowScan) };
+        let mut process_id = 0;
+        unsafe {
+            win::GetWindowThreadProcessId(window, &mut process_id);
+        }
+        if process_id == 0 {
+            return 1;
+        }
+
+        if scan.target_pid == Some(process_id) {
+            scan.close_sent |= unsafe { win::PostMessageW(window, 0x0010, 0, 0) != 0 };
+        } else if scan.target_pid.is_none() {
+            scan.process_ids.insert(process_id);
+        }
+        1
+    }
+
+    fn scan(target_pid: Option<u32>) -> WindowScan {
+        let mut scan = WindowScan {
+            process_ids: HashSet::new(),
+            target_pid,
+            close_sent: false,
+        };
+        unsafe {
+            win::EnumWindows(Some(visit_window), &mut scan as *mut WindowScan as isize);
+        }
+        scan
+    }
+
+    pub fn visible_process_ids(target_pid: Option<u32>) -> HashSet<u32> {
+        scan(target_pid).process_ids
+    }
+
+    pub fn post_close_to_process(pid: u32) -> bool {
+        scan(Some(pid)).close_sent
+    }
+}
+
+#[cfg(windows)]
+use interactive_windows as windows_ui;
 
 #[cfg(windows)]
 #[repr(C)]
@@ -453,5 +605,28 @@ mod tests {
     fn kill_liste_laesst_das_spiel_leben() {
         let entries = vec!["".to_string(), "  ".to_string()];
         assert!(kill_list(&entries, Some("game.exe")).is_empty());
+    }
+
+    #[test]
+    fn critical_processes_cannot_be_closed_remotely() {
+        assert_eq!(
+            request_process_close(4, "System"),
+            Err(ProcessCloseError::Protected)
+        );
+        assert_eq!(
+            request_process_close(123, "pc-agent.exe"),
+            Err(ProcessCloseError::Protected)
+        );
+        assert_eq!(
+            request_process_close(124, "explorer.exe"),
+            Err(ProcessCloseError::Protected)
+        );
+    }
+
+    #[test]
+    fn process_names_are_checked_case_insensitively() {
+        assert!(is_protected_process("PC-Agent.exe"));
+        assert!(is_protected_process("Explorer.EXE"));
+        assert!(!is_protected_process("ollama.exe"));
     }
 }

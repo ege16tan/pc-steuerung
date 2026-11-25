@@ -1301,6 +1301,12 @@ fun MainApp(
     var gamesLoading by remember { mutableStateOf(true) }
     var gamesRefresh by remember { mutableIntStateOf(0) }
 
+    // Sichtbare PC-Apps zum gezielten, normalen Schliessen.
+    var runningApps by remember { mutableStateOf<List<RunningApp>>(emptyList()) }
+    var runningAppsLoading by remember { mutableStateOf(true) }
+    var runningAppsError by remember { mutableStateOf<String?>(null) }
+    var processesRefresh by remember { mutableIntStateOf(0) }
+
     fun installModule(module: CatalogModule) {
         val next = installedModules + module.id
         // Beim Installieren wird die Katalogversion festgeschrieben.
@@ -1454,6 +1460,58 @@ fun MainApp(
         games = if (config == null) result.first else mergeCustomGames(result.first, config.custom)
         gameConfig = config
         gamesLoading = false
+    }
+
+    suspend fun loadRunningApps() {
+        runningAppsLoading = true
+        runningAppsError = null
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val body = httpCall(active.base, "/processes", active.authHeader())
+                if (body.startsWith("HTTP ")) {
+                    emptyList<RunningApp>() to body
+                } else {
+                    parseRunningApps(body) to null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Laufende Apps konnten nicht geladen werden", e)
+                emptyList<RunningApp>() to "Nicht erreichbar: ${e.message ?: "Fehler"}"
+            }
+        }
+        runningApps = result.first
+        runningAppsError = result.second
+        runningAppsLoading = false
+    }
+
+    fun requestCloseApp(app: RunningApp) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(
+                            active.base,
+                            "/processes/${app.pid}/close",
+                            active.authHeader(),
+                            "POST",
+                            processCloseBody(app),
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Schliessen von ${app.name} fehlgeschlagen", e)
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
+                }
+                if (result.startsWith("HTTP ") || result.startsWith("Nicht")) {
+                    message = result
+                } else {
+                    message = context.getString(R.string.process_close_requested, app.name)
+                    processesRefresh++
+                }
+            } finally {
+                busy = false
+            }
+        }
     }
 
     /** Letzte Ausgabezeilen eines Plugins (`GET /plugins/{id}/output?lines=100`). */
@@ -1800,7 +1858,7 @@ fun MainApp(
 
     // Nachladen abhaengig von der sichtbaren Seite. Die Startseite braucht die
     // Kurzstatus, die Aktionsseiten ihre vollen Listen.
-    LaunchedEffect(active, route, pluginRefresh, refresh, gamesRefresh) {
+    LaunchedEffect(active, route, pluginRefresh, refresh, gamesRefresh, processesRefresh) {
         // `val current` statt `route`: der Zustand ist delegiert, ein Smart-Cast
         // auf `route` ist in Kotlin deshalb nicht erlaubt.
         when (val current = route) {
@@ -1825,6 +1883,7 @@ fun MainApp(
             }
 
             Route.GameOptimization -> loadGames()
+            Route.ProcessManager -> loadRunningApps()
             Route.Steam -> loadSteam()
             Route.Warnings -> loadWarnings()
             Route.Routines -> {
@@ -2140,6 +2199,27 @@ fun MainApp(
                             onRefresh = {
                                 sensorsRefreshing = true
                                 sensorsRefresh++
+                            },
+                        )
+                    }
+
+                    Route.ProcessManager -> ActionPage(
+                        title = stringResource(R.string.process_page_title),
+                        subtitle = stringResource(R.string.process_page_subtitle),
+                        onBack = { route = Route.Home },
+                    ) {
+                        ProcessManagerPage(
+                            apps = runningApps,
+                            loading = runningAppsLoading,
+                            error = runningAppsError,
+                            busy = busy,
+                            onRefresh = { processesRefresh++ },
+                            onClose = ::requestCloseApp,
+                            onStopService = {
+                                runAction(
+                                    "/service/stop",
+                                    context.getString(R.string.process_service_stop_requested),
+                                )
                             },
                         )
                     }
@@ -5314,6 +5394,7 @@ sealed interface Route {
 
     /** Systemwerte (CPU, RAM, GPU, Netzwerk, Datentraeger, Luefter, Temperaturen). */
     data object Sensors : Route
+    data object ProcessManager : Route
     data object Steam : Route
     data object Plugins : Route
 
@@ -5566,6 +5647,12 @@ private fun HomeScreen(
             icon = Icons.Default.Home,
             dotColor = statusColor(state.status),
             pulsing = state.status == PcStatus.ONLINE,
+        ),
+        HomeTileSpec(
+            route = Route.ProcessManager,
+            title = stringResource(R.string.tile_process_manager),
+            status = stringResource(R.string.tile_process_manager_status),
+            icon = Icons.Default.Close,
         ),
         HomeTileSpec(
             route = Route.Steam,
@@ -6607,6 +6694,175 @@ private fun etaLabel(seconds: Long): String {
 // koennen zusaetzlich geloescht werden. Jede Aenderung ist ein kompletter
 // Zustand: GET /game-config -> Feld aendern -> POST /game-config.
 // ---------------------------------------------------------------------------
+
+@Composable
+private fun ProcessManagerPage(
+    apps: List<RunningApp>,
+    loading: Boolean,
+    error: String?,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onClose: (RunningApp) -> Unit,
+    onStopService: () -> Unit,
+) {
+    var pendingClose by remember { mutableStateOf<RunningApp?>(null) }
+    var confirmServiceStop by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.process_list_title),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Text(
+                    text = stringResource(R.string.process_list_count, apps.size),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            IconButton(onClick = onRefresh, enabled = !busy) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.process_refresh),
+                )
+            }
+        }
+
+        Text(
+            text = stringResource(R.string.process_page_hint),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+
+        Button(
+            onClick = { confirmServiceStop = true },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            ),
+        ) {
+            Icon(Icons.Default.Close, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.process_service_stop))
+        }
+
+        if (loading && apps.isEmpty()) {
+            Text(
+                text = stringResource(R.string.process_loading),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        error?.let {
+            Text(text = it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+        }
+        if (!loading && error == null && apps.isEmpty()) {
+            Text(
+                text = stringResource(R.string.process_empty),
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        apps.forEach { app ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                ),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+                    ) {
+                        Text(
+                            text = app.name,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = stringResource(R.string.process_pid, app.pid),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    TextButton(
+                        onClick = { pendingClose = app },
+                        enabled = !busy,
+                    ) {
+                        Text(stringResource(R.string.process_close))
+                    }
+                }
+            }
+        }
+    }
+
+    pendingClose?.let { app ->
+        AlertDialog(
+            onDismissRequest = { pendingClose = null },
+            title = { Text(stringResource(R.string.process_close_title)) },
+            text = { Text(stringResource(R.string.process_close_confirm, app.name)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingClose = null
+                        onClose(app)
+                    },
+                ) {
+                    Text(stringResource(R.string.process_close))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingClose = null }) {
+                    Text(stringResource(R.string.action_back))
+                }
+            },
+        )
+    }
+
+    if (confirmServiceStop) {
+        AlertDialog(
+            onDismissRequest = { confirmServiceStop = false },
+            title = { Text(stringResource(R.string.process_service_stop)) },
+            text = { Text(stringResource(R.string.process_service_stop_confirm)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmServiceStop = false
+                        onStopService()
+                    },
+                ) {
+                    Text(stringResource(R.string.process_service_stop))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmServiceStop = false }) {
+                    Text(stringResource(R.string.action_back))
+                }
+            },
+        )
+    }
+}
 
 @Composable
 private fun GameOptimizationPage(

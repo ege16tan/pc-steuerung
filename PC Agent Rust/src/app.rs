@@ -162,6 +162,10 @@ pub struct App {
     pub exe_dir: PathBuf,
     /// Zentraler Datenordner (`%LOCALAPPDATA%\PC Steuerung`).
     pub data_dir: PathBuf,
+    /// Marker fuer den abgestimmten Fernstopp zwischen Agent und Desktop-App.
+    pub service_stop_file: PathBuf,
+    /// Signal fuer einen geordneten HTTP-Server-Stopp.
+    pub service_shutdown: tokio::sync::watch::Sender<bool>,
     /// Laufende Plugins und deren Ausgabe (siehe `plugins`).
     pub plugins: Mutex<crate::plugins::PluginState>,
     /// JavaScript-Plugins (Boa) und deren Ausgabe.
@@ -186,6 +190,7 @@ pub struct App {
 
 impl App {
     pub fn new(token: String, simulate: bool, base_dir: &Path, port: u16) -> App {
+        let (service_shutdown, _) = tokio::sync::watch::channel(false);
         let creds_file = base_dir.join("credentials.json");
         let log_file = base_dir.join("agent.log");
         let credentials = load_credentials(&creds_file);
@@ -220,6 +225,8 @@ impl App {
             device_settings: Mutex::new(device_settings),
             exe_dir,
             data_dir: base_dir.to_path_buf(),
+            service_stop_file: base_dir.join("service-stop.requested"),
+            service_shutdown,
             plugins: Mutex::new(crate::plugins::PluginState::default()),
             jsplugins: Mutex::new(crate::jsplugins::JsPluginState::default()),
             metrics: Mutex::new(crate::metrics::MetricsState::default()),

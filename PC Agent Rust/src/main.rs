@@ -218,6 +218,12 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         // Steam-Erkennung (nur Lesen): Status fuer Plugin und App.
         .route("/steam", axum::routing::get(routes::steam_ep))
         .route("/downloads", axum::routing::get(routes::downloads_ep))
+        .route("/processes", axum::routing::get(routes::processes_ep))
+        .route(
+            "/processes/{pid}/close",
+            axum::routing::post(routes::process_close_ep),
+        )
+        .route("/service/stop", axum::routing::post(routes::service_stop_ep))
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
         // CSRF: schreibende Anfragen von localhost brauchen die Kopfzeile
@@ -229,7 +235,7 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
             app.clone(),
             routes::cors_guard,
         ))
-        .with_state(shared);
+        .with_state(shared.clone());
 
     // Live-Rundruf fuer `/events/stream` (schickt nur, wenn jemand zuhoert).
     tokio::spawn(crate::live::run_loop(app.clone()));
@@ -249,10 +255,14 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         "PC-Agent laeuft auf http://0.0.0.0:{port} (SIMULATION={})",
         simulate
     );
+    let mut shutdown = shared.service_shutdown.subscribe();
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(async move {
+        let _ = shutdown.changed().await;
+    })
     .await
     .expect("HTTP-Server laufen lassen");
 }

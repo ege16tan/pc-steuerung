@@ -68,6 +68,7 @@ Status).
   `GET /plugins/{id}/settings`, `POST /plugins/{id}/settings`,
   `GET /plugin-catalog`, `POST /plugins/{id}/install`, `DELETE /plugins/{id}`,
   `GET /games`, `POST /games/scan`, `GET /game-config`, `POST /game-config`,
+  `GET /processes`, `POST /processes/{pid}/close`, `POST /service/stop`,
   `GET /steam`, `GET /downloads`, `GET /warnings`, `POST /warnings`.
 - **Plugins (neu, 15.11.2026):** `src/jsplugins.rs` betreibt JavaScript-Plugins mit
   der eingebetteten Engine **Boa** (reines Rust, kein C-Toolchain nötig). Ein Plugin
@@ -115,6 +116,12 @@ Status).
   Inhalt als normale Progress-Notification. Texte in
   `res/values/strings_live.xml`. Samsung Now Bar kann die Karte zeigen – abhängig
   von One UI/„Live-Benachrichtigungen“, nicht erzwingbar.
+- **PC-Apps fernsteuern:** Die Android-Kachel „PC-Apps“ zeigt sichtbare Fensterprozesse
+  (ausser kritischen System-/Steuerungsprozessen) und sendet zum Schliessen nur `WM_CLOSE`;
+  es gibt kein erzwungenes Beenden. Beide Prozess-Endpunkte sind Admin-geschuetzt.
+  `POST /service/stop` schreibt `service-stop.requested` in den Agent-Datenordner und
+  beendet den HTTP-Agenten geordnet. Die Desktop-App erkennt den Marker, unterdrueckt
+  den Watchdog-Neustart und entfernt den Marker erst bei manuellem Start im Tray/Fenster.
 - **Dauerkarte (21.11.2026):** `LiveStatusService` laesst nicht mehr nur
   Download/Countdown/Startphase laufen, sondern zeigt – solange der Agent antwortet
   und nichts anderes ansteht – eine ongoing Statuskarte „<PC> ist an“ (Kategorie

@@ -660,7 +660,59 @@ fn games_liste_ist_lesbar() {
     }
 }
 
-/// 8) Unbekannter Pfad: 404 wie FastAPI.
+/// 8) GET /processes: liefert eine Liste sichtbarer Anwendungen.
+#[test]
+fn processes_liefert_sichtbare_apps() {
+    let Some(agent) = Agent::start() else { return };
+
+    let response = agent.get("/processes");
+    expect_status(&response, 200, "GET /processes");
+    let body = response.json();
+    let processes = body["processes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("processes ist keine Liste: {body}"));
+    for process in processes {
+        assert!(
+            process["pid"].as_u64().unwrap_or(0) > 4,
+            "Prozess ohne gueltige PID: {process}"
+        );
+        assert!(
+            process["name"].as_str().is_some_and(|name| !name.is_empty()),
+            "Prozess ohne Namen: {process}"
+        );
+    }
+}
+
+/// 9) POST /service/stop: speichert den Marker und beendet den Agenten.
+#[test]
+fn service_stop_speichert_marker_und_beendet_agenten() {
+    let Some(mut agent) = Agent::start() else { return };
+
+    let response = agent.post("/service/stop", Some("{}"));
+    expect_status(&response, 200, "POST /service/stop");
+    assert!(
+        agent.data_dir.join("service-stop.requested").is_file(),
+        "Fernstopp-Marker fehlt nach erfolgreicher Antwort"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if agent
+            .child
+            .as_mut()
+            .is_some_and(|child| child.try_wait().ok().flatten().is_some())
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Agent wurde nach der Stopp-Anforderung nicht beendet"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// 10) Unbekannter Pfad: 404 wie FastAPI.
 #[test]
 fn unbekannter_pfad_ist_404() {
     let Some(agent) = Agent::start() else { return };
