@@ -186,8 +186,15 @@ mod win {
 #[cfg(windows)]
 #[repr(C)]
 struct SystemFileCacheInformationEx {
+    current_size: usize,
+    peak_size: usize,
+    page_fault_count: usize,
     minimum_working_set: usize,
     maximum_working_set: usize,
+    current_size_including_transition_in_pages: usize,
+    peak_size_including_transition_in_pages: usize,
+    transition_re_purpose_count: usize,
+    flags: usize,
 }
 
 #[cfg(windows)]
@@ -245,8 +252,15 @@ pub fn trim_all_processes() -> usize {
 #[cfg(windows)]
 pub fn purge_system_file_cache() -> bool {
     let mut info = SystemFileCacheInformationEx {
+        current_size: 0,
+        peak_size: 0,
+        page_fault_count: 0,
         minimum_working_set: usize::MAX,
         maximum_working_set: usize::MAX,
+        current_size_including_transition_in_pages: 0,
+        peak_size_including_transition_in_pages: 0,
+        transition_re_purpose_count: 0,
+        flags: 0,
     };
     let status = unsafe {
         win::NtSetSystemInformation(
