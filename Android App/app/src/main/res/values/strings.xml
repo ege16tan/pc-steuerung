@@ -145,6 +145,8 @@
 
     <!-- Kacheln und ihre Kurzstatus -->
     <string name="tile_control">Steuerung</string>
+    <string name="tile_process_manager">PC-Apps</string>
+    <string name="tile_process_manager_status">Apps ansehen und schließen</string>
     <!-- Kachel Systemwerte: Kurzstatus CPU/RAM, sonst "Nicht verfügbar" -->
     <string name="tile_sensors">Systemwerte</string>
     <string name="tile_sensors_status">CPU %1$s · RAM %2$s</string>
@@ -173,6 +175,22 @@
 
     <!-- Aktionsseiten: Kopfzeilen -->
     <string name="page_control_title">Steuerung</string>
+    <string name="process_page_title">PC-Apps</string>
+    <string name="process_page_subtitle">Laufende Anwendungen</string>
+    <string name="process_list_title">SICHTBARE ANWENDUNGEN</string>
+    <string name="process_list_count">%1$d Anwendungen</string>
+    <string name="process_page_hint">Es werden nur Anwendungen mit sichtbarem Fenster angezeigt. Schließen sendet eine normale Windows-Anfrage; sichere ungespeicherte Arbeit vorher.</string>
+    <string name="process_refresh">Apps aktualisieren</string>
+    <string name="process_loading">Laufende Apps werden geladen …</string>
+    <string name="process_empty">Keine schließbaren Apps mit sichtbarem Fenster gefunden.</string>
+    <string name="process_pid">Prozess-ID %1$d</string>
+    <string name="process_close">Schließen</string>
+    <string name="process_close_title">Anwendung schließen?</string>
+    <string name="process_close_confirm">Eine Schließen-Anfrage an %1$s senden? Ungespeicherte Arbeit vorher speichern.</string>
+    <string name="process_close_requested">Schließen für %1$s angefordert. Bestätige einen Speichern-Dialog gegebenenfalls direkt am PC.</string>
+    <string name="process_service_stop">PC-Service stoppen</string>
+    <string name="process_service_stop_confirm">Der PC-Agent und damit die Fernverbindung werden beendet. Zum Neustart den Service im PC-Tray starten.</string>
+    <string name="process_service_stop_requested">Service-Stopp angefordert. Die Verbindung zum PC wird getrennt.</string>
     <string name="page_sensors_title">Systemwerte</string>
     <string name="page_sensors_subtitle">Live-Werte vom PC</string>
     <string name="page_steam_title">Steam</string>

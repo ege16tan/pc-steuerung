@@ -343,6 +343,10 @@ internal sealed class MainForm : Form
         _polling = true;
         try
         {
+            if (_agent.RemoteStopRequested)
+            {
+                _stopRequested = true;
+            }
             ServiceStatus? status = await _agent.GetStatusAsync();
             _processRunning = _agent.IsServiceRunning();
             ApplyStatus(status);
@@ -489,6 +493,12 @@ internal sealed class MainForm : Form
 
     private async void OnStartService(object? sender, EventArgs e)
     {
+        string? clearError = _agent.ClearRemoteStopRequest();
+        if (clearError != null)
+        {
+            Warn(clearError);
+            return;
+        }
         _stopRequested = false;
         StartService();
         UpdateControls();
