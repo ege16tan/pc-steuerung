@@ -446,7 +446,7 @@ class LiveStatusService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 getString(R.string.live_channel_name),
-                NotificationManager.IMPORTANCE_LOW,
+                NotificationManager.IMPORTANCE_DEFAULT,
             ).apply {
                 description = getString(R.string.live_channel_desc)
                 setShowBadge(false)
