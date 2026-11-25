@@ -19,6 +19,14 @@ data class AppSettings(
     val updateInstallMethod: UpdateInstallMethod = UpdateInstallMethod.SYSTEM,
     /** Dauerkarte in der Statusleiste ("PC ist an" mit zwei Knoepfen). */
     val onlineCard: Boolean = true,
+    /** Live-Benachrichtigungen: Steam-Downloads. */
+    val liveDownloads: Boolean = true,
+    /** Live-Benachrichtigungen: Shutdown-Countdown. */
+    val liveCountdown: Boolean = true,
+    /** Live-Benachrichtigungen: Warnungen. */
+    val liveWarnings: Boolean = true,
+    /** Live-Benachrichtigungen: Startphase. */
+    val liveStarting: Boolean = true,
     /**
      * Plugin-Detailseite nach einem erfolgreichen Start automatisch schliessen
      * (zurueck zur Uebersicht). Default aus = "Manager offen lassen".
@@ -39,6 +47,10 @@ object AppSettingsStore {
     private const val KEY_REFRESH = "refresh_seconds"
     private const val KEY_UPDATE_INSTALL_METHOD = "update_install_method"
     private const val KEY_ONLINE_CARD = "online_card"
+    private const val KEY_LIVE_DOWNLOADS = "live_downloads"
+    private const val KEY_LIVE_COUNTDOWN = "live_countdown"
+    private const val KEY_LIVE_WARNINGS = "live_warnings"
+    private const val KEY_LIVE_STARTING = "live_starting"
     private const val KEY_PLUGIN_AUTO_CLOSE = "plugin_auto_close_map"
     private const val KEY_HISTORY_LINES = "history_lines"
 
@@ -74,6 +86,10 @@ object AppSettingsStore {
             refreshSeconds = refresh,
             updateInstallMethod = installMethod,
             onlineCard = prefs.getBoolean(KEY_ONLINE_CARD, true),
+            liveDownloads = prefs.getBoolean(KEY_LIVE_DOWNLOADS, true),
+            liveCountdown = prefs.getBoolean(KEY_LIVE_COUNTDOWN, true),
+            liveWarnings = prefs.getBoolean(KEY_LIVE_WARNINGS, true),
+            liveStarting = prefs.getBoolean(KEY_LIVE_STARTING, true),
             pluginAutoClose = pluginAutoClose,
             historyLines = decodeHistoryLines(prefs.getString(KEY_HISTORY_LINES, null)),
         )
@@ -86,6 +102,10 @@ object AppSettingsStore {
             .putInt(KEY_REFRESH, settings.refreshSeconds)
             .putString(KEY_UPDATE_INSTALL_METHOD, settings.updateInstallMethod.name)
             .putBoolean(KEY_ONLINE_CARD, settings.onlineCard)
+            .putBoolean(KEY_LIVE_DOWNLOADS, settings.liveDownloads)
+            .putBoolean(KEY_LIVE_COUNTDOWN, settings.liveCountdown)
+            .putBoolean(KEY_LIVE_WARNINGS, settings.liveWarnings)
+            .putBoolean(KEY_LIVE_STARTING, settings.liveStarting)
             .putString(KEY_PLUGIN_AUTO_CLOSE, gson.toJson(settings.pluginAutoClose))
             .putString(KEY_HISTORY_LINES, encodeHistoryLines(settings.historyLines))
             .apply()

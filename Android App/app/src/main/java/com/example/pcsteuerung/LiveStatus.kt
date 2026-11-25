@@ -80,6 +80,10 @@ class LiveStatusService : Service() {
 
     /** Dauerkarte aktiv? (Einstellung `onlineCard`, Default an) */
     private var onlineCard = true
+    private var liveDownloads = true
+    private var liveCountdown = true
+    private var liveWarnings = true
+    private var liveStarting = true
 
     /** Steht gerade nur die Dauerkarte? (ruhiger Abfragetakt) */
     private var idleCard = false
@@ -127,6 +131,11 @@ class LiveStatusService : Service() {
         // Die Dauerkarte laesst sich in den Einstellungen abschalten; der Wert
         // wird bei jedem Aufruf neu gelesen, damit Umschalten sofort wirkt.
         onlineCard = AppSettingsStore.load(this).onlineCard
+        val s = AppSettingsStore.load(this)
+        liveDownloads = s.liveDownloads
+        liveCountdown = s.liveCountdown
+        liveWarnings = s.liveWarnings
+        liveStarting = s.liveStarting
         val active = profile
         if (active == null || !active.isComplete) {
             Log.d(LIVE_TAG, "Kein vollstaendiges Profil - Live-Anzeige beendet")
@@ -232,7 +241,7 @@ class LiveStatusService : Service() {
         // Nur fragen, wenn der Agent ueberhaupt antwortet. 404 = Route fehlt
         // (aeltere Agent-Version) -> Steam-Zustand ehrlich ueberspringen.
         val downloads = if (reachable) readDownloads(active, auth) else emptyList()
-        val running = downloads.filter { !it.isFinished }
+        val running = if (liveDownloads) downloads.filter { !it.isFinished } else emptyList()
 
         val remaining = status?.pendingRemaining ?: 0
         val total = status?.pendingTotal ?: 0
@@ -240,13 +249,13 @@ class LiveStatusService : Service() {
 
         // Warnungen (Phase C): der Agent prueft alle 30 s. Ein eigener, ruhiger
         // Takt reicht - ein Handy im Standby soll nicht dauernd fragen.
-        if (reachable && now - lastWarningsAt >= WARNINGS_POLL_MS) {
+        if (reachable && liveWarnings && now - lastWarningsAt >= WARNINGS_POLL_MS) {
             lastWarningsAt = now
             checkWarnings(active, auth)
         }
 
         return when {
-            remaining > 0 -> {
+            remaining > 0 && liveCountdown -> {
                 clearGrace()
                 countdownTotal = maxOf(total, remaining)
                 countdownRemaining = remaining
@@ -280,7 +289,7 @@ class LiveStatusService : Service() {
                 // Countdown waere hier geraten - deshalb sofort auf "unbekannt".
                 countdownTotal = 0
                 countdownRemaining = 0
-                if (waitOnline) {
+                if (waitOnline && liveStarting) {
                     val keep = now < waitDeadlineMs
                     if (keep) postForeground(notificationStarting(active.name))
                     keep
