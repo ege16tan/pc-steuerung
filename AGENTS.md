@@ -40,7 +40,7 @@ Status).
   und `docs/decisions/`, Planung in `docs/planung.md`, offene Web-UI-Punkte in
   `docs/planung-webui.md`, Kachel-Rework-Phasen in `docs/planung-kachel-rework.md`,
   Release-Notizen in `docs/releases/`.
-- Agent startet nur mit `PC_AGENT_TOKEN` (>= 24 Zeichen); leer = Open-Modus (nur lokaler Test).
+- `PC_AGENT_TOKEN` (Fallback-Schutz, bleibt kompatibel; leer = Open-Modus nur bei localhost).
 - `PC_AGENT_SIMULATE` (Default `0` im Manager) = echte Aktion; `1` = Simulation (nur Loggen).
   Simulation nur bewusst einschalten; destruktive Aufrufe (Shutdown) immer mit Countdown testen.
 - `PC_WOL_BROADCAST` (Default `192.168.1.255`) = Broadcast-Ziel für `/wake`.

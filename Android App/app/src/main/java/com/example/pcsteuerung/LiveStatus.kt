@@ -127,7 +127,7 @@ class LiveStatusService : Service() {
         val fromCard =
             action == ACTION_SHUTDOWN || action == ACTION_HIBERNATE || action == ACTION_ABORT
         val stored = if (fromCard) profile else ProfileStore.active(this)
-        profile = intent?.let { readProfile(it) } ?: stored ?: ProfileStore.active(this)
+        profile = intent?.let { readProfile(it, this) } ?: stored ?: ProfileStore.active(this)
         // Die Dauerkarte laesst sich in den Einstellungen abschalten; der Wert
         // wird bei jedem Aufruf neu gelesen, damit Umschalten sofort wirkt.
         onlineCard = AppSettingsStore.load(this).onlineCard
@@ -541,6 +541,11 @@ class LiveStatusService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }
+        // Android 16 "Live Updates": Promotion anfordern (compileSdk 36 kennt die
+        // Methode noch nicht - daher ueber den Extras-Schluessel).
+        val promoted = android.os.Bundle()
+        promoted.putBoolean("android.requestPromotedOngoing", true)
+        builder.addExtras(promoted)
 
         if (card.progress) {
             val permille = card.permille?.coerceIn(0, 1000)
@@ -853,21 +858,10 @@ class LiveStatusService : Service() {
         return remaining / speedBps
     }
 
-    private fun readProfile(intent: Intent): Profile? {
-        val host = intent.getStringExtra(EXTRA_HOST)?.trim().orEmpty()
-        if (host.isBlank()) return null
-        val port = intent.getStringExtra(EXTRA_PORT)?.trim().orEmpty().ifBlank { "8000" }
-        return Profile(
-            id = "live",
-            name = intent.getStringExtra(EXTRA_NAME)?.trim().orEmpty().ifBlank { "PC" },
-            host = host,
-            port = port,
-            user = intent.getStringExtra(EXTRA_USER).orEmpty(),
-            pass = intent.getStringExtra(EXTRA_PASS).orEmpty(),
-            // Standard-Timer des Profils: bestimmt den Countdown, wenn
-            // "Herunterfahren" direkt aus der Karte kommt.
-            defaultDelay = intent.getIntExtra(EXTRA_DELAY, 60),
-        )
+    private fun readProfile(intent: Intent, context: Context): Profile? {
+        val profileId = intent.getStringExtra(EXTRA_PROFILE_ID)?.trim().orEmpty()
+        if (profileId.isBlank()) return null
+        return ProfileStore.active(context)?.takeIf { it.id == profileId }
     }
 
     companion object {
@@ -879,12 +873,7 @@ class LiveStatusService : Service() {
         const val ACTION_HIBERNATE = "com.example.pcsteuerung.action.LIVE_HIBERNATE"
         const val ACTION_STOP = "com.example.pcsteuerung.action.LIVE_STOP"
 
-        const val EXTRA_HOST = "live_host"
-        const val EXTRA_PORT = "live_port"
-        const val EXTRA_NAME = "live_name"
-        const val EXTRA_USER = "live_user"
-        const val EXTRA_PASS = "live_pass"
-        const val EXTRA_DELAY = "live_delay"
+        const val EXTRA_PROFILE_ID = "live_profile_id"
         const val EXTRA_WAIT_SECONDS = "live_wait_seconds"
 
         /** Kanal-ID; Name/Beschreibung stehen in `res/values/strings_live.xml`. */
@@ -918,20 +907,20 @@ class LiveStatusService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
         /** Live-Anzeige pruefen: zeigt Download/Countdown, sonst Ende nach 60 s. */
-        fun startSync(context: Context, profile: Profile? = null) {
-            start(context, Intent(context, LiveStatusService::class.java).setAction(ACTION_SYNC), profile)
+        fun startSync(context: Context, profileId: String? = null) {
+            start(context, Intent(context, LiveStatusService::class.java).setAction(ACTION_SYNC), profileId)
         }
 
         /** Startphase anzeigen ("PC startet ..."), z. B. direkt nach dem WoL-Paket. */
         fun startWaitOnline(
             context: Context,
-            profile: Profile? = null,
+            profileId: String? = null,
             waitSeconds: Int = DEFAULT_WAIT_SECONDS,
         ) {
             val intent = Intent(context, LiveStatusService::class.java)
                 .setAction(ACTION_WAIT_ONLINE)
                 .putExtra(EXTRA_WAIT_SECONDS, waitSeconds)
-            start(context, intent, profile)
+            start(context, intent, profileId)
         }
 
         /** Live-Anzeige beenden (inklusive Benachrichtigung). */
@@ -955,14 +944,9 @@ class LiveStatusService : Service() {
                 }
         }
 
-        private fun start(context: Context, intent: Intent, profile: Profile?) {
-            if (profile != null) {
-                intent.putExtra(EXTRA_HOST, profile.host)
-                intent.putExtra(EXTRA_PORT, profile.port)
-                intent.putExtra(EXTRA_NAME, profile.name)
-                intent.putExtra(EXTRA_USER, profile.user)
-                intent.putExtra(EXTRA_PASS, profile.pass)
-                intent.putExtra(EXTRA_DELAY, profile.defaultDelay)
+        private fun start(context: Context, intent: Intent, profileId: String?) {
+            if (profileId != null) {
+                intent.putExtra(EXTRA_PROFILE_ID, profileId)
             }
             runCatching { ContextCompat.startForegroundService(context, intent) }
                 .onFailure { Log.d(LIVE_TAG, "Live-Dienst nicht gestartet: ${it.javaClass.simpleName}") }

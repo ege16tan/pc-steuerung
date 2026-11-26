@@ -60,7 +60,7 @@ private fun JSONObject.optDoubleOrNull(name: String): Double? {
 
 private fun JSONObject.optIntOrNull(name: String): Int? {
     if (!has(name) || isNull(name)) return null
-    return optInt(name).takeIf { it != 0 }
+    return optInt(name)
 }
 
 private fun JSONObject.optBooleanOrNull(name: String): Boolean? {

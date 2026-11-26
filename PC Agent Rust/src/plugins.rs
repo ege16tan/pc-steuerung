@@ -131,7 +131,7 @@ fn resolve_bin(app: &App, manifest: &Manifest) -> Option<PathBuf> {
 
 /// Eine Zeile Plugin-Ausgabe aufnehmen (Ringpuffer je Plugin).
 pub fn push_line(app: &App, id: &str, line: &str) {
-    let mut state = app.plugins.lock().expect("Plugin-Sperre");
+    let mut state = app.plugins.lock().unwrap_or_else(|e| e.into_inner());
     let buffer = state.output.entry(id.to_string()).or_default();
     buffer.push_back(line.to_string());
     while buffer.len() > OUTPUT_MAX {
@@ -142,7 +142,7 @@ pub fn push_line(app: &App, id: &str, line: &str) {
 /// Zustand aller Plugins fuer `GET /plugins`.
 pub fn describe(app: &Arc<App>) -> Vec<Value> {
     let manifests = manifests(app);
-    let mut state = app.plugins.lock().expect("Plugin-Sperre");
+    let mut state = app.plugins.lock().unwrap_or_else(|e| e.into_inner());
     let mut out = Vec::with_capacity(manifests.len());
     for manifest in manifests {
         let mut running = false;
@@ -221,7 +221,7 @@ pub fn start(
     let bin = resolve_bin(app, &manifest)
         .ok_or_else(|| format!("Plugin-Datei '{}' wurde nicht gefunden", manifest.bin))?;
     {
-        let state = app.plugins.lock().expect("Plugin-Sperre");
+        let state = app.plugins.lock().unwrap_or_else(|e| e.into_inner());
         if state.runs.contains_key(&manifest.id) {
             return Err(format!("Plugin '{}' laeuft bereits", manifest.id));
         }
@@ -256,7 +256,7 @@ pub fn start(
     let started_at = now_epoch();
 
     {
-        let mut state = app.plugins.lock().expect("Plugin-Sperre");
+        let mut state = app.plugins.lock().unwrap_or_else(|e| e.into_inner());
         state.output.insert(manifest.id.clone(), VecDeque::new());
         state.runs.insert(
             manifest.id.clone(),
@@ -281,7 +281,7 @@ pub fn start(
         None => format!("{} gestartet (pid {pid})", manifest.id),
     };
     {
-        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         log_event(app, &mut guard, "plugin", &detail, true);
     }
 
@@ -309,7 +309,7 @@ fn spawn_reader<R: Read + Send + 'static>(app: Arc<App>, id: String, source: R) 
             push_line(&app, &id, &line);
             // Nur Ergebniszeilen ins Journal, damit das Log nicht zumuellt.
             if line.starts_with('>') {
-                let mut guard = app.inner.lock().expect("Zustands-Sperre");
+                let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
                 log_event(
                     &app,
                     &mut guard,
@@ -324,7 +324,7 @@ fn spawn_reader<R: Read + Send + 'static>(app: Arc<App>, id: String, source: R) 
 
 /// Nimmt einen laufenden Plugin-Prozess aus der Verwaltung (fuer `/stop`).
 pub fn take_run(app: &App, id: &str) -> Result<PluginRun, String> {
-    let mut state = app.plugins.lock().expect("Plugin-Sperre");
+    let mut state = app.plugins.lock().unwrap_or_else(|e| e.into_inner());
     state
         .runs
         .remove(id)
@@ -357,7 +357,7 @@ pub fn stop_run(mut run: PluginRun) -> String {
 
 /// Letzte Ausgabezeilen eines Plugins (fuer `GET /plugins/{id}/output`).
 pub fn output(app: &App, id: &str, lines: usize) -> String {
-    let state = app.plugins.lock().expect("Plugin-Sperre");
+    let state = app.plugins.lock().unwrap_or_else(|e| e.into_inner());
     let Some(buffer) = state.output.get(id) else {
         return String::new();
     };
@@ -434,4 +434,5 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
 

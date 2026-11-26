@@ -68,23 +68,12 @@ fn default_data_dir() -> PathBuf {
 }
 
 /// Einstellungen aus `game-config.json` (gleiche Datei wie im Agenten).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct GameConfig {
     kill_list: Vec<String>,
     scan_paths: Vec<String>,
     auto: bool,
-}
-
-impl Default for GameConfig {
-    fn default() -> Self {
-        // Bewusst leer: ohne Konfiguration wird nichts beendet.
-        Self {
-            kill_list: Vec::new(),
-            scan_paths: Vec::new(),
-            auto: false,
-        }
-    }
 }
 
 fn load_config(data_dir: &Path) -> GameConfig {

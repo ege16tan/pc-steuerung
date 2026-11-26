@@ -1793,8 +1793,27 @@ fun MainApp(
                 .put("duration_s", rule.durationS)
                 .put("enabled", rule.enabled)
         })).toString()
-        pluginAction("/warnings", "POST", "Warnregeln gespeichert") {
-            httpCall(active.base, "/warnings", active.authHeader(), "POST", body)
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        httpCall(active.base, "/warnings", active.authHeader(), "POST", body)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Warnregeln speichern fehlgeschlagen", e)
+                        "Nicht erreichbar: ${e.message ?: "Fehler"}"
+                    }
+                }
+                val failed = result.startsWith("HTTP ") || result.startsWith("Nicht")
+                message = if (failed) result else "Warnregeln gespeichert"
+                if (!failed) {
+                    loadWarnings()
+                }
+                refresh++
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -4108,6 +4127,8 @@ private enum class SettingsDestination(
     PROFILE("PC-Profile", "Verbindung und Geräte verwalten"),
     APPEARANCE("Darstellung", "Farbschema und Aktualisierung"),
     HISTORY("Verlauf", "Aufbewahrung und Logzeilen"),
+    LIVE_CARD("Live-Karte", "Statusleisten-Benachrichtigung"),
+    RESET("Zurücksetzen", "Einstellungen zurücksetzen"),
     UPDATES("Aktualisierungen", "Neue App-Versionen laden"),
     ABOUT("Über die App", "Version und weitere Informationen"),
 }
@@ -4505,6 +4526,49 @@ private fun SettingsTab(
                     }
                 }
 
+SettingsDestination.LIVE_CARD -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        SettingsDetailCard {
+                            Text("Live-Karte in der Statusleiste", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Dauerkarte \"PC ist an\" mit Herunterfahren/Ruhezustand-Knöpfen.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            SettingsSwitchRow(icon = Icons.Default.Build, title = "Dauerkarte", subtitle = "PC ist an", checked = settings.onlineCard, enabled = true, onCheckedChange = { onSettingsChange(settings.copy(onlineCard = it)) })
+                        }
+                        SettingsDetailCard {
+                            Text("Live-Benachrichtigungen", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            SettingsSwitchRow(icon = Icons.Default.Build, title = "Downloads", subtitle = "", checked = settings.liveDownloads, enabled = true, onCheckedChange = { onSettingsChange(settings.copy(liveDownloads = it)) })
+                            SettingsSwitchRow(icon = Icons.Default.Build, title = "Countdown", subtitle = "", checked = settings.liveCountdown, enabled = true, onCheckedChange = { onSettingsChange(settings.copy(liveCountdown = it)) })
+                            SettingsSwitchRow(icon = Icons.Default.Build, title = "Warnungen", subtitle = "", checked = settings.liveWarnings, enabled = true, onCheckedChange = { onSettingsChange(settings.copy(liveWarnings = it)) })
+                            SettingsSwitchRow(icon = Icons.Default.Build, title = "Startphase", subtitle = "", checked = settings.liveStarting, enabled = true, onCheckedChange = { onSettingsChange(settings.copy(liveStarting = it)) })
+                        }
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                }
+
+                SettingsDestination.RESET -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        SettingsDetailCard {
+                            Text("Zurücksetzen", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Setzt nur die App-Einstellungen zurück, keine Profile.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Button(onClick = { onSettingsChange(AppSettings()) }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Alle Einstellungen zurücksetzen")
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                }
+
                 SettingsDestination.UPDATES -> {
                     Column(
                         modifier = Modifier
@@ -4727,15 +4791,15 @@ private fun SettingsOverview(
                     controlSection,
                 ),
                 searchEntry(
-                    "simulation",
-                    stringResource(R.string.settings_simulation),
-                    simulationSubtitle,
+                    "live_card",
+                    "Live-Karte",
+                    "Statusleisten-Benachrichtigung",
                     controlSection,
                 ),
                 searchEntry(
-                    "webui",
-                    stringResource(R.string.settings_webui),
-                    active.base,
+                    "reset",
+                    "Zurücksetzen",
+                    "Einstellungen zurücksetzen",
                     controlSection,
                 ),
             ),
@@ -4904,20 +4968,18 @@ private fun SettingsOverview(
                             },
                         )
 
-                        "simulation" -> SettingsSwitchRow(
-                            icon = Icons.Default.Settings,
+                        "live_card" -> SettingsOverviewRow(
+                            icon = Icons.Default.Build,
                             title = item.title,
                             subtitle = item.subtitle,
-                            checked = simulate == true,
-                            enabled = simulate != null,
-                            onCheckedChange = onModeChange,
+                            onClick = { onOpenPage(SettingsDestination.LIVE_CARD) },
                         )
 
-                        "webui" -> SettingsOverviewRow(
-                            icon = Icons.Default.Home,
+                        "reset" -> SettingsOverviewRow(
+                            icon = Icons.Default.Refresh,
                             title = item.title,
                             subtitle = item.subtitle,
-                            onClick = onOpenWeb,
+                            onClick = { onOpenPage(SettingsDestination.RESET) },
                         )
 
                         "history" -> SettingsOverviewRow(

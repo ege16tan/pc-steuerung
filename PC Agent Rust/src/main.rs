@@ -78,7 +78,7 @@ fn main() {
     warnings::ensure_config(shared.as_ref());
 
     let credentials_missing = {
-        let guard = shared.inner.lock().expect("Zustands-Sperre");
+        let guard = shared.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.credentials.is_none()
     };
     if credentials_missing && token.is_empty() {
@@ -256,3 +256,4 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
     .await
     .expect("HTTP-Server laufen lassen");
 }
+

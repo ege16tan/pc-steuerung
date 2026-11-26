@@ -7,9 +7,13 @@
   --card: #131a2e;
   --card2: #1a2340;
   --line: #243052;
+  --border: #243052;
   --text: #e8ecf8;
+  --fg: #e8ecf8;
   --mut: #8b97b8;
   --teal: #2dd4bf;
+  --primary: #2dd4bf;
+  --primary-fg: #04231f;
   --blue: #60a5fa;
   --red: #f87171;
   --amb: #fbbf24;
@@ -312,9 +316,13 @@ input:focus, select:focus { outline: 2px solid #2dd4bf55; border-color: var(--te
   --card: #ffffff;
   --card2: #f1f5fb;
   --line: #d7dded;
+  --border: #d7dded;
   --text: #0f172a;
+  --fg: #0f172a;
   --mut: #5b6785;
   --teal: #0f766e;
+  --primary: #0f766e;
+  --primary-fg: #ffffff;
   --blue: #2563eb;
   --red: #c02626;
   --amb: #a16207;

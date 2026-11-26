@@ -35,6 +35,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use boa_engine::{Context as JsContext, JsString, JsValue, NativeFunction, Source};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::app::App;
 use crate::journal::log_event;
@@ -229,6 +230,10 @@ pub struct JsRun {
     pub idle_timeout_s: u64,
     /// Letzter Abruf der Ausgabe bzw. Start (Pflichtregel D2).
     pub last_seen: Arc<Mutex<Instant>>,
+    /// Host-Kontext, der dem Plugin als `pc.*` API zur Verfügung steht.
+    /// Das `Arc` hält den Host-Kontext so lange am Leben wie das Plugin läuft.
+    #[allow(dead_code)]
+    pub host: Arc<HostCtx>,
 }
 
 /// Zustand aller JavaScript-Plugins (ueber den Mutex in `App` geschuetzt).
@@ -422,7 +427,7 @@ pub fn ensure_builtins(app: &App) {
             ..bundle.manifest()
         };
         if install_bundle(app, &bundle, manifest).is_ok() {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(app, &mut guard, "plugin", &format!("{}: eingebautes Plugin bereit", bundle.name), true);
         }
     }
@@ -507,7 +512,7 @@ pub fn uninstall(app: &App, id: &str) -> Result<(), String> {
         return Err(format!("Plugin '{id}' ist nicht installiert"));
     }
     std::fs::remove_dir_all(&dir).map_err(|error| format!("Plugin-Ordner blieb bestehen: {error}"))?;
-    let mut state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+    let mut state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
     state.output.remove(id);
     state.status.remove(id);
     Ok(())
@@ -985,7 +990,7 @@ pub fn report_schema_problems(app: &Arc<App>, manifest: &Manifest) {
     } else {
         manifest.name.clone()
     };
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     for problem in schema.problems {
         log_event(app, &mut guard, "plugin", &format!("{name}: {problem}"), false);
     }
@@ -1010,6 +1015,8 @@ pub struct CatalogEntry {
     pub version: String,
     /// URL des Pakets (JSON).
     pub url: String,
+    /// SHA-256-Hash des Pakets zur Integritätsprüfung (optional, aber empfohlen).
+    pub sha256: Option<String>,
 }
 
 impl Default for CatalogEntry {
@@ -1020,6 +1027,7 @@ impl Default for CatalogEntry {
             description: String::new(),
             version: "1".to_string(),
             url: String::new(),
+            sha256: None,
         }
     }
 }
@@ -1033,7 +1041,7 @@ const DEFAULT_CATALOG: &str = r#"{
 /// Katalog vom Server laden; bei Fehlern den eingebauten Stand nehmen.
 pub fn catalog(app: &App) -> Vec<CatalogEntry> {
     let mut entries = parse_catalog(DEFAULT_CATALOG);
-    if let Some(text) = download(app, CATALOG_URL) {
+    if let Some((text, _)) = download(app, CATALOG_URL) {
         if let Some(remote) = try_parse_catalog(&text) {
             if !remote.is_empty() {
                 entries = remote;
@@ -1068,8 +1076,9 @@ fn parse_catalog(text: &str) -> Vec<CatalogEntry> {
 }
 
 /// Laedt eine Datei ueber `curl.exe` (Windows-Bordmittel) als Text.
-/// Downloads sind lesend und laufen auch im Simulationsmodus.
-fn download(_app: &App, url: &str) -> Option<String> {
+/// Gibt (Inhalt, SHA-256-Hex) zurück. Downloads sind lesend und laufen auch
+/// im Simulationsmodus.
+fn download(_app: &App, url: &str) -> Option<(String, String)> {
     if url.trim().is_empty() || !url.starts_with("http://") && !url.starts_with("https://") {
         return None;
     }
@@ -1080,9 +1089,13 @@ fn download(_app: &App, url: &str) -> Option<String> {
         let _ = std::fs::remove_file(&target);
         return None;
     }
-    let text = std::fs::read_to_string(&target).ok();
+    let bytes = std::fs::read(&target).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let hash = format!("{:x}", hasher.finalize());
+    let text = String::from_utf8(bytes).ok()?;
     let _ = std::fs::remove_file(&target);
-    text
+    Some((text, hash))
 }
 
 fn sanitize_file_name(url: &str) -> String {
@@ -1098,13 +1111,27 @@ pub fn install_from_catalog(app: &Arc<App>, id: &str) -> Result<Manifest, String
         .into_iter()
         .find(|entry| entry.id == id)
         .ok_or_else(|| format!("Plugin '{id}' steht nicht im Katalog"))?;
-    install_from_url(app, &entry.id, &entry.url, &entry.version)
+    install_from_url(app, &entry.id, &entry.url, &entry.version, entry.sha256.as_deref())
 }
 
 /// Paket von einer URL laden und installieren.
-pub fn install_from_url(app: &Arc<App>, id: &str, url: &str, version: &str) -> Result<Manifest, String> {
-    let text = download(app, url)
+pub fn install_from_url(
+    app: &Arc<App>,
+    id: &str,
+    url: &str,
+    version: &str,
+    expected_sha256: Option<&str>,
+) -> Result<Manifest, String> {
+    let (text, hash) = download(app, url)
         .ok_or_else(|| format!("Paket konnte nicht geladen werden: {url}"))?;
+    // SHA-256 Integritätsprüfung, wenn im Katalog angegeben.
+    if let Some(expected) = expected_sha256 {
+        if hash != expected {
+            return Err(format!(
+                "Paket-Hash stimmt nicht ueberein (erwartet {expected}, erhalten {hash})"
+            ));
+        }
+    }
     let bundle: Bundle =
         serde_json::from_str(&text).map_err(|error| format!("Paket ist kein gueltiges Plugin: {error}"))?;
     if bundle.id != id {
@@ -1122,7 +1149,7 @@ pub fn install_from_url(app: &Arc<App>, id: &str, url: &str, version: &str) -> R
 /// Zustand aller Plugins fuer `GET /plugins`.
 pub fn describe(app: &Arc<App>) -> Vec<Value> {
     let manifests = manifests(app);
-    let state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+    let state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
     manifests
         .into_iter()
         .map(|manifest| {
@@ -1164,7 +1191,7 @@ pub fn describe(app: &Arc<App>) -> Vec<Value> {
 /// Gibt eine Zeile aus (Ringpuffer + Journal fuer Ergebniszeilen).
 pub fn push_line(app: &Arc<App>, id: &str, line: &str) {
     {
-        let mut state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+        let mut state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
         let buffer = state.output.entry(id.to_string()).or_default();
         buffer.push_back(line.to_string());
         while buffer.len() > OUTPUT_MAX {
@@ -1172,13 +1199,13 @@ pub fn push_line(app: &Arc<App>, id: &str, line: &str) {
         }
     }
     if line.starts_with('>') {
-        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         log_event(app, &mut guard, "plugin", line.trim_start_matches('>').trim(), true);
     }
 }
 
 fn set_status(app: &Arc<App>, id: &str, text: &str) {
-    let mut state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+    let mut state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
     state.status.insert(id.to_string(), text.to_string());
 }
 
@@ -1196,7 +1223,7 @@ pub fn start(app: &Arc<App>, id: &str, game: Option<String>, auto: bool) -> Resu
         .map_err(|_| format!("Datei '{}' fehlt", manifest.entry))?;
 
     {
-        let state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+        let state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
         if state.runs.contains_key(&manifest.id) {
             return Err(format!("Plugin '{}' laeuft bereits", manifest.id));
         }
@@ -1204,28 +1231,28 @@ pub fn start(app: &Arc<App>, id: &str, game: Option<String>, auto: bool) -> Resu
 
     let (tx, rx) = mpsc::channel::<Command>();
     let done = Arc::new(AtomicBool::new(false));
-    let host = Box::new(HostCtx {
+    let host = Arc::new(HostCtx {
         app: Arc::clone(app),
         plugin_id: manifest.id.clone(),
         permissions: manifest.permissions.iter().cloned().collect(),
     });
-    let host_ptr = Box::into_raw(host) as usize;
 
     let thread_app = Arc::clone(app);
     let thread_id = manifest.id.clone();
     let thread_manifest = manifest.clone();
     let thread_done = Arc::clone(&done);
+    let thread_host = Arc::clone(&host);
     std::thread::Builder::new()
         .name(format!("plugin-{id}"))
         .spawn(move || {
-            run_plugin(thread_app, thread_id, thread_manifest, source, host_ptr, rx);
+            run_plugin(thread_app, thread_id, thread_manifest, source, thread_host, rx);
             thread_done.store(true, Ordering::SeqCst);
         })
         .map_err(|error| format!("Plugin-Thread konnte nicht gestartet werden: {error}"))?;
 
     let started_at = now_epoch();
     {
-        let mut state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+        let mut state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
         state.output.insert(manifest.id.clone(), VecDeque::new());
         state.runs.insert(
             manifest.id.clone(),
@@ -1237,10 +1264,11 @@ pub fn start(app: &Arc<App>, id: &str, game: Option<String>, auto: bool) -> Resu
                 done,
                 idle_timeout_s: manifest.idle_timeout_s,
                 last_seen: Arc::new(Mutex::new(Instant::now())),
+                host: Arc::clone(&host),
             },
         );
     }
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(app, &mut guard, "plugin", &format!("{} gestartet", manifest.name), true);
     drop(guard);
 
@@ -1255,7 +1283,7 @@ pub fn start(app: &Arc<App>, id: &str, game: Option<String>, auto: bool) -> Resu
 /// Stoppt ein Plugin (wartet bis zu drei Sekunden auf das Ende).
 pub fn stop(app: &Arc<App>, id: &str) -> Result<String, String> {
     let run = {
-        let mut state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+        let mut state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
         state.runs.remove(id)
     }
     .ok_or_else(|| format!("Plugin '{id}' laeuft nicht"))?;
@@ -1272,14 +1300,14 @@ pub fn stop(app: &Arc<App>, id: &str) -> Result<String, String> {
     } else {
         "beendet sich nicht".to_string()
     };
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(app, &mut guard, "plugin", &format!("{id} {detail}"), true);
     Ok(detail)
 }
 
 /// Letzte Ausgabezeilen eines Plugins.
 pub fn output(app: &Arc<App>, id: &str, lines: usize) -> String {
-    let state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+    let state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
     // Ein Abruf gilt als Nutzung: solange die App die Ausgabe liest, laeuft das
     // Plugin weiter (Pflichtregel D2).
     if let Some(run) = state.runs.get(id) {
@@ -1309,7 +1337,7 @@ pub fn idle_expired(last_seen: Instant, now: Instant, timeout_s: u64) -> bool {
 /// Beendet Plugins, deren Ausgabe zu lange niemand abgerufen hat.
 pub fn stop_idle(app: &Arc<App>) {
     let due: Vec<(String, u64)> = {
-        let state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+        let state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         state
             .runs
@@ -1343,17 +1371,21 @@ pub async fn idle_loop(app: Arc<App>) {
 // ---------------- Host-Funktionen ----------------
 
 /// Zustand, den die Host-Funktionen brauchen.
-struct HostCtx {
+pub(crate) struct HostCtx {
     app: Arc<App>,
     plugin_id: String,
     permissions: HashSet<String>,
 }
 
 /// Baut die JavaScript-Bruecke: `__pc_host(name, json)`.
+///
+/// `host_ptr` ist ein roher Zeiger auf ein `Arc<HostCtx>`, das im
+/// [`JsRun`] gespeichert ist und so lange lebt wie das Plugin.
+/// Der Pointer bleibt gültig, weil [`JsRun.host`] das `Arc` besitzt.
 fn register_host(context: &mut JsContext, host_ptr: usize) {
-    let function = NativeFunction::from_copy_closure(
-        move |_this: &JsValue, args: &[JsValue], js_context: &mut JsContext| {
-            let host = unsafe { &*(host_ptr as *const HostCtx) };
+    let function = NativeFunction::from_copy_closure_with_captures(
+        move |_this: &JsValue, args: &[JsValue], host_ptr: &usize, js_context: &mut JsContext| {
+            let host = unsafe { &*(*host_ptr as *const HostCtx) };
             let name = arg_string(args.first(), js_context);
             let payload = arg_string(args.get(1), js_context);
             let parsed: Value = if payload.trim().is_empty() {
@@ -1367,6 +1399,7 @@ fn register_host(context: &mut JsContext, host_ptr: usize) {
             };
             Ok(JsValue::from(JsString::from(answer)))
         },
+        host_ptr,
     );
     let _ = context.register_global_builtin_callable(
         boa_engine::js_string!("__pc_host"),
@@ -1437,11 +1470,11 @@ fn run_plugin(
     id: String,
     manifest: Manifest,
     source: String,
-    host_ptr: usize,
+    host: Arc<HostCtx>,
     rx: Receiver<Command>,
 ) {
     let mut context = JsContext::default();
-    register_host(&mut context, host_ptr);
+    register_host(&mut context, Arc::as_ptr(&host) as usize);
 
     let failed = |app: &Arc<App>, id: &str, message: String| {
         push_line(app, id, &format!("> Fehler: {message}"));
@@ -1449,12 +1482,10 @@ fn run_plugin(
 
     if let Err(error) = context.eval(Source::from_bytes(PRELUDE)) {
         failed(&app, &id, format!("Host-API: {error}"));
-        unsafe { drop(Box::from_raw(host_ptr as *mut HostCtx)) };
         return;
     }
     if let Err(error) = context.eval(Source::from_bytes(&source)) {
         failed(&app, &id, format!("beim Laden: {error}"));
-        unsafe { drop(Box::from_raw(host_ptr as *mut HostCtx)) };
         return;
     }
     if let Err(error) = call_global(&mut context, "activate") {
@@ -1468,22 +1499,22 @@ fn run_plugin(
         Duration::from_millis(manifest.interval_ms)
     };
 
-    loop {
+while {
         match rx.recv_timeout(interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Err(error) = call_global(&mut context, "tick") {
                     failed(&app, &id, error);
                 }
+                true
             }
-            Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => false,
         }
-    }
+    } {}
 
     if let Err(error) = call_global(&mut context, "stop") {
         failed(&app, &id, error);
     }
     drop(context);
-    unsafe { drop(Box::from_raw(host_ptr as *mut HostCtx)) };
 }
 
 /// Eine Host-Funktion ausfuehren. Rueckgabe ist immer JSON.
@@ -1528,7 +1559,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         "now" => Ok(json!(now_epoch() * 1000.0)),
         "status" => {
             let (simulate, pending_seconds, sim_plan, events) = {
-                let guard = app.inner.lock().expect("Zustands-Sperre");
+                let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
                 (
                     guard.simulate,
                     crate::app::remaining_seconds(guard.pending_at, now_epoch()),
@@ -1585,7 +1616,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         // Einstellungen aus `settings.json` (Phase G4), nur lesend.
         "settings" => Ok(Value::Object(load_values(app, &host.plugin_id))),
         "events" => {
-            let guard = app.inner.lock().expect("Zustands-Sperre");
+            let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             Ok(json!(guard.events.iter().collect::<Vec<_>>()))
         }
         "killProcesses" => {
@@ -1600,7 +1631,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
                         .collect()
                 })
                 .unwrap_or_default();
-            let simulate = app.inner.lock().expect("Zustands-Sperre").simulate;
+            let simulate = app.inner.lock().unwrap_or_else(|e| e.into_inner()).simulate;
             let killed = if simulate {
                 names.clone()
             } else {
@@ -1610,7 +1641,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         }
         "boost" => {
             let exe = args.get(0).and_then(Value::as_str).unwrap_or_default();
-            let simulate = app.inner.lock().expect("Zustands-Sperre").simulate;
+            let simulate = app.inner.lock().unwrap_or_else(|e| e.into_inner()).simulate;
             if simulate {
                 return Ok(json!({ "ok": true, "simulated": true }));
             }
@@ -1624,7 +1655,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
             }
         }
         "cleanMemory" => {
-            let simulate = app.inner.lock().expect("Zustands-Sperre").simulate;
+            let simulate = app.inner.lock().unwrap_or_else(|e| e.into_inner()).simulate;
             if simulate {
                 let metrics = crate::metrics::read(&app.metrics);
                 return Ok(json!({
@@ -1640,6 +1671,8 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
                     "volume": false,
                     "used_mb": metrics.ram_used_mb,
                     "free_mb": metrics.ram_total_mb.saturating_sub(metrics.ram_used_mb),
+                    "before_used_mb": metrics.ram_used_mb,
+                    "before_free_mb": metrics.ram_total_mb.saturating_sub(metrics.ram_used_mb),
                 }));
             }
             let before = crate::metrics::read(&app.metrics);
@@ -1653,7 +1686,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
                 combined,
                 volume,
                 admin,
-            ) = crate::optimize::clean_memory_full();
+            ) = crate::optimize::clean_memory_full(simulate);
             let after = crate::metrics::read(&app.metrics);
             Ok(json!({
                 "admin": admin,
@@ -1668,6 +1701,7 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
                 "used_mb": after.ram_used_mb,
                 "free_mb": after.ram_total_mb.saturating_sub(after.ram_used_mb),
                 "before_used_mb": before.ram_used_mb,
+                "before_free_mb": before.ram_total_mb.saturating_sub(before.ram_used_mb),
             }))
         }
         "isAdmin" => Ok(json!(crate::optimize::is_admin())),
@@ -1789,14 +1823,14 @@ mod tests {
         };
         let (port, server) = serve_once(serde_json::to_string(&bundle).unwrap());
         let url = format!("http://127.0.0.1:{port}/demo.json");
-        let manifest = install_from_url(&app, "demo", &url, "1").unwrap();
+        let manifest = install_from_url(&app, "demo", &url, "1", None).unwrap();
         assert_eq!(manifest.id, "demo");
         assert!(is_installed(&app, "demo"));
         let code = std::fs::read_to_string(plugin_dir(&app, "demo").join(DEFAULT_ENTRY)).unwrap();
         assert!(code.contains("activate"));
 
         // Falsche ID im Paket wird abgelehnt.
-        let error = install_from_url(&app, "fremd", &url, "1").unwrap_err();
+        let error = install_from_url(&app, "fremd", &url, "1", None).unwrap_err();
         assert!(error.contains("gehoert zu 'demo'"));
 
         // Der Server laeuft bis zum Ende des Testprogramms weiter.

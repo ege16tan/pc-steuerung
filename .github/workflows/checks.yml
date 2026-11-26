@@ -13,8 +13,7 @@ jobs:
       - name: Sensible Daten prüfen
         run: bash scripts/check-sensitive.sh
 
-  # Rust-Agent: bauen und Unit-/Integrationstests (HTTP-Endpunkte gegen die EXE).
-  # Android wird hier bewusst nicht gebaut (zu schwer fuer CI).
+  # Rust-Agent: bauen, clippy, Unit-/Integrationstests.
   rust:
     runs-on: windows-latest
     defaults:
@@ -26,5 +25,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Bauen (debug)
         run: cargo build
+      - name: Clippy (Warnungen als Fehler)
+        run: cargo clippy -D warnings
       - name: Tests
         run: cargo test
+
+  # Android-App: Unit-Tests (kein APK-Build, zu schwer fuer CI).
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Java-Toolchain installieren
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Android Unit-Tests
+        run: ./gradlew testDebugUnitTest
+        working-directory: Android App

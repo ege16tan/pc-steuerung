@@ -1,5 +1,5 @@
 ﻿#define AppName "PC Steuerung"
-#define AppVersion "0.13.0"
+#define AppVersion "0.16.0"
 #define AppPublisher "PC Steuerung"
 #define AppExeName "PC Steuerung.exe"
 #define AgentExeName "pc-agent.exe"
@@ -28,7 +28,6 @@ SetupIconFile=..\assets\PC Steuerung.ico
 
 [Tasks]
 Name: "desktopicon"; Description: "Desktop-Symbol anlegen"; GroupDescription: "Symbole:"
-Name: "autostart"; Description: "PC Steuerung bei der Windows-Anmeldung starten"; GroupDescription: "Startverhalten:"
 
 [Files]
 Source: "..\dist\PC Steuerung.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -38,9 +37,6 @@ Source: "..\assets\PC Steuerung.ico"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\PC Steuerung"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\PC Steuerung.ico"
 Name: "{commondesktop}\PC Steuerung"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\PC Steuerung.ico"; Tasks: desktopicon
-
-[Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PCSteuerung"; ValueData: """{app}\{#AppExeName}"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "PC Steuerung starten"; Flags: nowait postinstall skipifsilent

@@ -31,8 +31,8 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 pub const HISTORY_MAX: usize = 30;
 /// Mehr Regeln sind nicht sinnvoll und werden abgelehnt.
 pub const RULES_MAX: usize = 20;
-/// Laengste erlaubte Dauer einer Schwelle (24 Stunden).
-pub const DURATION_MAX_S: u64 = 86400;
+/// Laengste erlaubte Dauer einer Schwelle (1 Stunde).
+pub const DURATION_MAX_S: u64 = 3600;
 
 /// Erlaubte Messwerte (`metric` in `warnings.json`).
 pub const METRICS: [&str; 4] = ["cpu_percent", "ram_percent", "disk_free_percent", "gpu_percent"];
@@ -308,12 +308,12 @@ pub fn read_values(app: &App, rules: &[WarningRule]) -> BTreeMap<String, f64> {
 /// Eine Pruefung: Werte lesen, Regeln anwenden, Zeitpunkt merken.
 pub fn check_now(app: &App) -> Vec<Change> {
     let rules = {
-        let guard = app.warnings.lock().expect("Warn-Sperre");
+        let guard = app.warnings.lock().unwrap_or_else(|e| e.into_inner());
         guard.rules.clone()
     };
     let values = read_values(app, &rules);
     let stamp = stamp_now();
-    let mut guard = app.warnings.lock().expect("Warn-Sperre");
+    let mut guard = app.warnings.lock().unwrap_or_else(|e| e.into_inner());
     let changes = evaluate(&mut guard, &values, Instant::now(), &stamp);
     guard.checked_at = Some(stamp.time);
     changes
@@ -321,7 +321,7 @@ pub fn check_now(app: &App) -> Vec<Change> {
 
 /// Antwort von `GET /warnings`: Regeln, aktive Warnungen, Verlauf.
 pub fn describe(app: &App) -> Value {
-    let guard = app.warnings.lock().expect("Warn-Sperre");
+    let guard = app.warnings.lock().unwrap_or_else(|e| e.into_inner());
     json!({
         "rules": guard.rules.clone(),
         "active": guard.active.values().cloned().collect::<Vec<_>>(),
@@ -409,7 +409,7 @@ pub fn save(app: &App, rules: Vec<WarningRule>) -> Result<Vec<WarningRule>, Stri
     let json = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
     std::fs::write(&app.warnings_file, json).map_err(|error| error.to_string())?;
     {
-        let mut guard = app.warnings.lock().expect("Warn-Sperre");
+        let mut guard = app.warnings.lock().unwrap_or_else(|e| e.into_inner());
         guard.rules = rules.clone();
         guard.active.clear();
         guard.breached_since.clear();
@@ -440,7 +440,7 @@ pub async fn run_loop(app: SharedApp) {
         if changes.is_empty() {
             continue;
         }
-        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         for change in changes {
             match change {
                 Change::Triggered(entry) => {
@@ -653,6 +653,7 @@ mod tests {
         assert!(rules.iter().all(|rule| !rule.label.is_empty()));
     }
 }
+
 
 
 

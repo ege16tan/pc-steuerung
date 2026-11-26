@@ -55,7 +55,7 @@ pub fn cpu_percent_from(prev: (u64, u64, u64), cur: (u64, u64, u64)) -> Option<f
 
 /// Aktuelle Messwerte lesen und die Stichprobe fortschreiben.
 pub fn read(state: &Mutex<MetricsState>) -> Metrics {
-    let mut guard = state.lock().expect("Metrik-Sperre");
+    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
     if guard.cpu_cores == 0 {
         guard.cpu_cores = std::thread::available_parallelism()
             .map(|value| value.get() as u32)
@@ -198,3 +198,4 @@ mod tests {
         assert!(second.cpu_cores > 0 || cfg!(not(windows)));
     }
 }
+

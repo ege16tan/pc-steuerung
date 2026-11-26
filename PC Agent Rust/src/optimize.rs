@@ -18,38 +18,16 @@
 //! - Volume Cache flushen
 
 use std::path::Path;
-use std::process::{Command, Stdio};
-
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-/// Windows-Schalter, damit kein Konsolenfenster aufblinkt.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Energieplan-GUIDs (wie im Agenten).
 pub const PLAN_HIGH: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
 pub const PLAN_BALANCED: &str = "381b4222-f694-41f0-9685-ff5bb260df2e";
 pub const PLAN_SAVER: &str = "a1841308-3541-4fab-bc81-f71556f20b4a";
 
-/// Fuehrt einen Befehl aus und liefert (Rueckgabecode, Ausgabe).
+/// Fuehrt einen Befehl aus (delegiert an `crate::commands::run` mit `real = true`,
+/// damit der Befehl wirklich ausgefuehrt wird).
 pub fn run(cmd: &[&str]) -> (i32, String) {
-    if cmd.is_empty() {
-        return (-1, "leerer Befehl".to_string());
-    }
-    let mut command = Command::new(cmd[0]);
-    command.args(&cmd[1..]);
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-    match command.output() {
-        Ok(output) => {
-            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&output.stderr));
-            (output.status.code().unwrap_or(-1), text.trim().to_string())
-        }
-        Err(error) => (-1, format!("Befehl nicht gefunden: {error}")),
-    }
+    crate::commands::run(cmd, false, true)
 }
 
 /// Aktiver Energieplan als Name (`high`/`balanced`/`saver`/`anderer`).
@@ -114,6 +92,18 @@ pub fn kill_by_name(name: &str) -> bool {
     run(&["taskkill", "/IM", name, "/F"]).0 == 0
 }
 
+/// Blockliste: kritische Systemprozesse dürfen niemals über die Kill-Liste
+/// beendet werden (Fußschuss-Schutz).
+const KILL_BLOCKLIST: &[&str] = &[
+    "explorer.exe",
+    "winlogon.exe",
+    "csrss.exe",
+    "smss.exe",
+    "wininit.exe",
+    "services.exe",
+    "lsass.exe",
+];
+
 /// Beendet Prozesse; das Spiel selbst bleibt verschont.
 pub fn kill_list(entries: &[String], keep_exe: Option<&str>) -> Vec<String> {
     let keep = keep_exe
@@ -125,7 +115,11 @@ pub fn kill_list(entries: &[String], keep_exe: Option<&str>) -> Vec<String> {
         if name.is_empty() {
             continue;
         }
-        if keep.as_deref() == Some(name.to_lowercase().as_str()) {
+        let lower = name.to_lowercase();
+        if KILL_BLOCKLIST.iter().any(|blocked| *blocked == lower) {
+            continue;
+        }
+        if keep.as_deref() == Some(lower.as_str()) {
             continue;
         }
         if kill_by_name(name) {
@@ -371,7 +365,7 @@ pub fn combine_memory() -> bool {
     false
 }
 
-/// Volumen-Cache flushen (Dateisystem-Caches auf alle Volumes).
+/// Volumen-Cache flushen (Dateisystem-Caches auf feste Laufwerke).
 #[cfg(windows)]
 pub fn flush_volume_cache() -> bool {
     use std::fs::File;
@@ -379,9 +373,13 @@ pub fn flush_volume_cache() -> bool {
     let mut any_ok = false;
     for letter in b'C'..=b'Z' {
         let path = format!("{}:\\", letter as char);
-        if let Ok(file) = File::open(&path) {
-            if file.sync_all().is_ok() {
-                any_ok = true;
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            if metadata.file_type().is_dir() {
+                if let Ok(file) = File::open(&path) {
+                    if file.sync_all().is_ok() {
+                        any_ok = true;
+                    }
+                }
             }
         }
     }
@@ -416,7 +414,10 @@ pub fn boost_priority(_pid: u32) -> bool {
 /// Liefert zurueck: (trimmed, system_cache_purged, modified_flushed, standby_purged,
 /// standby_prio0_purged, registry_purged, combined, volume_flushed, admin)
 #[cfg(windows)]
-pub fn clean_memory_full() -> (usize, bool, bool, bool, bool, bool, bool, bool, bool) {
+pub fn clean_memory_full(simulate: bool) -> (usize, bool, bool, bool, bool, bool, bool, bool, bool) {
+    if simulate {
+        return (0, false, false, false, false, false, false, false, is_admin());
+    }
     let admin = is_admin();
     let trimmed = trim_all_processes();
     let system_cache = purge_system_file_cache();
@@ -436,7 +437,7 @@ pub fn clean_memory_full() -> (usize, bool, bool, bool, bool, bool, bool, bool, 
 }
 
 #[cfg(not(windows))]
-pub fn clean_memory_full() -> (usize, bool, bool, bool, bool, bool, bool, bool, bool) {
+pub fn clean_memory_full(_simulate: bool) -> (usize, bool, bool, bool, bool, bool, bool, bool, bool) {
     (0, false, false, false, false, false, false, false, false)
 }
 

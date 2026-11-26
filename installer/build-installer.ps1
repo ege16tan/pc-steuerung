@@ -33,7 +33,9 @@ if (-not $compiler) {
         (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe'),
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
-        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 7\ISCC.exe'),
+        (Join-Path $env:ProgramFiles 'Inno Setup 7\ISCC.exe')
     )
     $compilerPath = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 } else {
@@ -48,25 +50,3 @@ New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 & $compilerPath $issFile
 if ($LASTEXITCODE -ne 0) { throw "Inno-Setup-Build fehlgeschlagen (Exit-Code $LASTEXITCODE)." }
 Write-Host "Installer erstellt in $outputDir"
-if (-not $compiler) {
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
-        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 7\ISCC.exe'),
-        (Join-Path $env:ProgramFiles 'Inno Setup 7\ISCC.exe')
-    )
-    $compilerPath = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-} else {
-    $compilerPath = $compiler.Source
-}
-if (-not $compilerPath) {
-    throw 'Inno Setup 6 oder 7 wurde nicht gefunden. Installiere Inno Setup und führe installer\build-installer.ps1 erneut aus.'
-}
-
-$outputDir = Join-Path $projectRoot 'dist'
-New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-& $compilerPath $issFile
-if ($LASTEXITCODE -ne 0) { throw "Inno-Setup-Build fehlgeschlagen (Exit-Code $LASTEXITCODE)." }
-Write-Host "Installer erstellt: $(Join-Path $projectRoot 'dist\PC-Steuerung-Setup-0.9.5.exe')"

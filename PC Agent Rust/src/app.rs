@@ -4,9 +4,10 @@
 //! Datenordner, das Ereignis-Log ist ein Ringpuffer (neueste zuerst) und ein
 //! geplantes Herunterfahren wird als Zeitpunkt (Unix-Epoche) gespeichert.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -101,18 +102,12 @@ pub struct TokenCredentials {
     pub hash: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DeviceSettings {
     pub name: String,
     pub wol_enabled: bool,
     pub mac: String,
-}
-
-impl Default for DeviceSettings {
-    fn default() -> Self {
-        Self { name: String::new(), wol_enabled: false, mac: String::new() }
-    }
 }
 
 impl Credentials {
@@ -131,6 +126,49 @@ pub struct Event {
     pub action: String,
     pub detail: String,
     pub ok: bool,
+}
+
+/// Zaehlt fehlgeschlagene Login-Versuche pro IP (Rate-Limit).
+/// 5 Fehlversuche -> 60s Sperre.
+#[derive(Clone, Debug, Default)]
+pub struct LoginLimiter {
+    attempts: HashMap<std::net::IpAddr, (u32, Instant)>,
+}
+
+impl LoginLimiter {
+    /// Maximal erlaubte fehlgeschlagene Versuche vor Sperre.
+    const MAX_ATTEMPTS: u32 = 5;
+    /// Sperrdauer nach Erreichen des Limits.
+    const LOCKOUT_SECS: u64 = 60;
+
+    /// Registriert einen fehlgeschlagenen Versuch. Liefert true, wenn die IP
+    /// derzeit gesperrt ist.
+    pub fn record_failure(&mut self, ip: std::net::IpAddr) -> bool {
+        let now = Instant::now();
+        let (count, locked_until) = self.attempts.entry(ip).or_insert((0, now));
+        if now < *locked_until {
+            return true;
+        }
+        *count += 1;
+        if *count >= Self::MAX_ATTEMPTS {
+            *locked_until = now + std::time::Duration::from_secs(Self::LOCKOUT_SECS);
+            *count = 0;
+            return true;
+        }
+        false
+    }
+
+    /// Registriert einen erfolgreichen Login und setzt den Zaehler zurueck.
+    pub fn record_success(&mut self, ip: std::net::IpAddr) {
+        self.attempts.remove(&ip);
+    }
+
+    /// Prueft, ob die IP derzeit gesperrt ist (ohne Zaehler zu aendern).
+    pub fn is_locked(&self, ip: std::net::IpAddr) -> bool {
+        self.attempts
+            .get(&ip)
+            .is_some_and(|(_, locked_until)| Instant::now() < *locked_until)
+    }
 }
 
 /// Veraenderbarer Zustand; alles ueber den Mutex geschuetzt.
@@ -180,6 +218,8 @@ pub struct App {
     /// Warnregeln (Phase C) im Speicher und ihre Datei (`warnings.json`).
     pub warnings_file: PathBuf,
     pub warnings: Mutex<crate::warnings::WarningState>,
+    /// Rate-Limit fuer fehlgeschlagene Login-Versuche (pro IP).
+    pub login_limiter: Mutex<crate::app::LoginLimiter>,
     /// Live-Updates (SSE) und CORS-Allowlist fuer die Geraeteliste.
     pub live: crate::live::LiveHub,
 }
@@ -230,6 +270,7 @@ impl App {
             routines: Mutex::new(routines),
             warnings_file,
             warnings: Mutex::new(warnings),
+            login_limiter: Mutex::new(LoginLimiter::default()),
             live: crate::live::LiveHub::new(crate::live::cors_origins_from_env()),
         }
     }

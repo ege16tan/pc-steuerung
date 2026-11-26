@@ -500,7 +500,7 @@ pub fn validate(routine: &Routine, plugins: &[String]) -> Result<(), String> {
     if conditions.days.iter().any(|day| !(1..=7).contains(day)) {
         return Err("Wochentage muessen zwischen 1 (Mo) und 7 (So) liegen".to_string());
     }
-    if !conditions.plugin.is_empty() && !plugins.iter().any(|id| *id == conditions.plugin) {
+    if !conditions.plugin.is_empty() && !plugins.contains(&conditions.plugin) {
         return Err(format!("Unbekanntes Plugin '{}'", conditions.plugin));
     }
     if !conditions.power_plan.is_empty() && !crate::actions::plan_known(&conditions.power_plan) {
@@ -644,7 +644,7 @@ pub async fn run_chain(app: &App, routine: &Routine) -> Result<String, String> {
     }
     let detail = parts.join(", ");
     {
-        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         log_event(app, &mut guard, "routine", &format!("{}: {detail}", routine.name), ok);
     }
     if ok {
@@ -677,7 +677,7 @@ fn start_run(
     let slot = now.format(TIME_FMT).to_string();
     let planned = plan_text(routine);
     let (snapshot, previous) = {
-        let mut guard = app.routines.lock().expect("Routinen-Sperre");
+        let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
         let previous = guard.routines.clone();
         let entry = guard.routines.iter_mut().find(|entry| entry.id == routine.id)?;
         if scheduled {
@@ -690,10 +690,10 @@ fn start_run(
         // Nicht ausfuehren und alles zuruecknehmen: sonst wuerde die Routine
         // beim naechsten Takt erneut feuern (bzw. der Verlauf waere falsch).
         {
-            let mut guard = app.routines.lock().expect("Routinen-Sperre");
+            let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
             guard.routines = previous;
         }
-        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         log_event(
             app,
             &mut guard,
@@ -718,7 +718,7 @@ fn start_run(
 /// Ersetzt nach einem Fehler den Verlaufstext des Laufs durch den echten Text.
 fn mark_failed(app: &SharedApp, routine_id: &str, at: &str, planned: &str, detail: &str) {
     let snapshot = {
-        let mut guard = app.routines.lock().expect("Routinen-Sperre");
+        let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = guard.routines.iter_mut().find(|entry| entry.id == routine_id) else {
             return;
         };
@@ -768,7 +768,7 @@ async fn running_games(app: &SharedApp) -> Vec<String> {
                 continue;
             };
             let name = name.to_ascii_lowercase();
-            if running.iter().any(|exe| *exe == name) && !names.contains(&name) {
+            if !running.contains(&name) && !names.contains(&name) {
                 names.push(name);
             }
         }
@@ -783,14 +783,14 @@ fn plugin_running(app: &App, id: &str) -> bool {
     if id.is_empty() {
         return true;
     }
-    let state = app.jsplugins.lock().expect("JS-Plugin-Sperre");
+    let state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
     state.runs.contains_key(id)
 }
 
 /// Aktiver Energieplan (wie in `GET /status`; im Simulationsmodus der gemerkte).
 async fn active_plan(app: &SharedApp) -> String {
     let (simulate, sim_plan) = {
-        let guard = app.inner.lock().expect("Zustands-Sperre");
+        let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         (guard.simulate, guard.sim_plan.clone())
     };
     if simulate {
@@ -817,7 +817,7 @@ pub async fn tick_once(app: &SharedApp) {
     let weekday = now.date().weekday().number_from_monday();
 
     let routines: Vec<Routine> = {
-        let guard = app.routines.lock().expect("Routinen-Sperre");
+        let guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
         guard.routines.iter().filter(|routine| routine.enabled).cloned().collect()
     };
     let needs = |event: &str| {
@@ -851,14 +851,14 @@ pub async fn tick_once(app: &SharedApp) {
     let plan = if wants_plan { active_plan(app).await } else { String::new() };
 
     let fired = {
-        let mut guard = app.routines.lock().expect("Routinen-Sperre");
+        let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
         update_events(&mut guard.events, running.as_deref(), downloading)
     };
     // Idle-Phasen je Routine genau einmal melden – auch dann, wenn eine
     // Bedingung den Lauf gerade verhindert (die Phase ist verbraucht).
     let mut idle_flags: Vec<(String, bool)> = Vec::new();
     if wants_idle {
-        let mut guard = app.routines.lock().expect("Routinen-Sperre");
+        let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
         let events = &mut guard.events;
         for routine in routines.iter().filter(|routine| {
             routine.trigger.kind == "event" && routine.trigger.event == "idle"
@@ -1303,7 +1303,7 @@ mod tests {
 
         run_chain(&app, &routine).await.unwrap();
 
-        let guard = app.inner.lock().expect("Zustands-Sperre");
+        let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         assert!(guard
             .events
             .iter()
@@ -1330,7 +1330,7 @@ mod tests {
             wait: 0,
         }];
         {
-            let mut guard = app.routines.lock().expect("Routinen-Sperre");
+            let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
             guard.routines.push(routine.clone());
         }
 
@@ -1351,3 +1351,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+

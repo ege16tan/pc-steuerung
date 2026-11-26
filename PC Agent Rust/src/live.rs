@@ -113,7 +113,7 @@ pub async fn state_message(app: &SharedApp) -> LiveMessage {
     let status = crate::routes::status_payload(app).await;
     let metrics = crate::metrics::read(&app.metrics);
     let events = {
-        let guard = app.inner.lock().expect("Zustands-Sperre");
+        let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.events.iter().take(STATE_EVENTS).cloned().collect::<Vec<_>>()
     };
     LiveMessage::State(serde_json::json!({
@@ -177,4 +177,5 @@ mod tests {
         assert_eq!(hub.receiver_count(), 0);
     }
 }
+
 

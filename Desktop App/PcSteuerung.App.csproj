@@ -13,7 +13,7 @@
     <RootNamespace>PcSteuerung.Desktop</RootNamespace>
     <Product>PC Steuerung</Product>
     <Company>PC Steuerung</Company>
-    <Version>0.13.0</Version>
+    <Version>0.16.0</Version>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

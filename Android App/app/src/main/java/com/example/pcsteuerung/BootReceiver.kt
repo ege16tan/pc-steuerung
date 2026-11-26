@@ -27,6 +27,6 @@ class BootReceiver : BroadcastReceiver() {
         val profile = ProfileStore.active(context) ?: return
         if (!profile.isComplete) return
         Log.d("PCSteuerung", "Dauerkarte nach ${intent.action} neu starten")
-        LiveStatusService.startSync(context, profile)
+        LiveStatusService.startSync(context, profile.id)
     }
 }

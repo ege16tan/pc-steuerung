@@ -24,7 +24,7 @@ pub const HASH_LEN: usize = 32;
 
 /// Hex-String in Bytes (Paritaet zu Python bytes.fromhex, scharf bei Fehlern).
 pub fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(value.len() / 2);
@@ -78,27 +78,30 @@ pub fn check_basic(credentials: &Credentials, authorization: &str) -> bool {
 }
 
 /// Benutzername + PBKDF2-Hash vergleichen (konstante Zeit fuer den Hash).
+/// Rechnet IMMER PBKDF2, auch bei unbekanntem Benutzernamen (Dummy-Hash),
+/// damit die Laufzeit nicht verraet, ob ein User existiert.
 fn verify_password(user: &str, expected_user: &str, salt: &str, hash: &str, password: &str) -> bool {
-    if expected_user.is_empty() || user != expected_user {
-        return false;
-    }
-    let Some(salt) = hex_decode(salt) else {
-        return false;
+    let user_matches = expected_user.is_empty() || user == expected_user;
+    // Dummy-Salt/Hash fuer unbekannte Benutzer, damit PBKDF2 immer gleich teuer ist.
+    let (salt_bytes, expected) = if user_matches {
+        match (hex_decode(salt), hex_decode(hash)) {
+            (Some(salt), Some(expected)) if expected.len() == HASH_LEN => (salt, expected),
+            _ => return false,
+        }
+    } else {
+        // Dummy-Werte: PBKDF2 wird dennoch mit gleichen Runden berechnet.
+        (vec![0u8; 16], vec![0u8; HASH_LEN])
     };
-    let Some(expected) = hex_decode(hash) else {
-        return false;
-    };
-    if expected.len() != HASH_LEN {
-        return false;
-    }
     let mut actual = [0u8; HASH_LEN];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ROUNDS, &mut actual);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt_bytes, PBKDF2_ROUNDS, &mut actual);
     // Konstanter Zeitvergleich: XOR-Akkumulator, keine Kurzschluss-Optik.
     let mut difference = 0u8;
     for index in 0..HASH_LEN {
         difference |= actual[index] ^ expected[index];
     }
-    difference == 0
+    // User-Name muss ebenfalls stimmen (konstantzeitig ueber das Hash-Ergebnis
+    // kombiniert, aber explizit geprüft).
+    difference == 0 && user_matches
 }
 
 fn check_token(credentials: &TokenCredentials, token: &str) -> bool {
@@ -165,6 +168,14 @@ impl AuthDenied {
             www_auth: false,
         }
     }
+
+    fn rate_limited() -> AuthDenied {
+        AuthDenied {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            detail: "Zu viele fehlgeschlagene Anmeldeversuche. Später erneut versuchen.",
+            www_auth: false,
+        }
+    }
 }
 
 /// Ergebnis der Anmeldung: Rolle des Benutzers.
@@ -192,19 +203,43 @@ impl FromRequestParts<Arc<App>> for Auth {
         parts: &mut Parts,
         app: &Arc<App>,
     ) -> Result<Self, Self::Rejection> {
-        // 1) Lokale Zugriffe (PC selbst: Tray, Web-UI) brauchen keinen Login
-        //    und haben alle Rechte.
+        // 1) Lokale Zugriffe brauchen keinen Login und haben alle Rechte.
         if is_local(parts) {
             return Ok(Auth::admin());
         }
-        // 2) Anmeldung per Benutzername/Passwort (Basic Auth).
+
+        // 2) IP-Adresse fuer Rate-Limit ermitteln.
+        let ip = parts
+            .extensions
+            .get::<ConnectInfo<std::net::SocketAddr>>()
+            .map(|info| info.ip())
+            .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+
+        // 3) Rate-Limit prüfen: gesperrte IP wird abgewiesen.
+        {
+            let limiter = app.login_limiter.lock().expect("Login-Sperre");
+            if limiter.is_locked(ip) {
+                return Err(AuthDenied::rate_limited());
+            }
+        }
+
+        // 4) Anmeldung per Benutzername/Passwort (Basic Auth).
         let (credentials, token_credentials) = {
-            let guard = app.inner.lock().expect("Zustands-Sperre");
+            let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             (guard.credentials.clone(), guard.token_credentials.clone())
         };
         if let Some(cursor) = credentials {
             let authorization = header_str(parts, AUTHORIZATION);
-            let Some(role) = check_basic_role(&cursor, &authorization) else {
+            let result = check_basic_role(&cursor, &authorization);
+            {
+                let mut limiter = app.login_limiter.lock().expect("Login-Sperre");
+                if result.is_some() {
+                    limiter.record_success(ip);
+                } else {
+                    limiter.record_failure(ip);
+                }
+            }
+            let Some(role) = result else {
                 return Err(AuthDenied::missing_login());
             };
             return Ok(Auth {
@@ -410,3 +445,4 @@ mod tests {
         assert!(legacy.users.is_empty());
     }
 }
+

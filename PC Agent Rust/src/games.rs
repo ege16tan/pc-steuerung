@@ -384,7 +384,7 @@ fn steam_install_path() -> Option<String> {
     reg_value(&lines, "InstallPath")
 }
 
-/// Liest `"path"		"D:\\Spiele\\Steam"`-Zeilen aus `libraryfolders.vdf`.
+/// Liest `"path"    "D:\\Spiele\\Steam"`-Zeilen aus `libraryfolders.vdf`.
 fn vdf_paths(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {

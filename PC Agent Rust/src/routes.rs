@@ -83,7 +83,7 @@ struct Snapshot {
 }
 
 fn snapshot(app: &App) -> Snapshot {
-    let guard = app.inner.lock().expect("Zustands-Sperre");
+    let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     Snapshot {
         simulate: guard.simulate,
         sim_plan: guard.sim_plan.clone(),
@@ -95,7 +95,7 @@ fn snapshot(app: &App) -> Snapshot {
 
 /// Anzeigename des PCs aus `device.json` (sonst der Windows-Computername).
 fn device_name(app: &App) -> String {
-    let settings = app.device_settings.lock().expect("Setup-Sperre");
+    let settings = app.device_settings.lock().unwrap_or_else(|e| e.into_inner());
     if settings.name.trim().is_empty() {
         std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".to_string())
     } else {
@@ -105,7 +105,7 @@ fn device_name(app: &App) -> String {
 
 /// MAC aus den Geraeteeinstellungen – nur wenn Wake-on-LAN aktiviert ist.
 fn configured_mac(app: &App) -> Option<String> {
-    let settings = app.device_settings.lock().expect("Setup-Sperre");
+    let settings = app.device_settings.lock().unwrap_or_else(|e| e.into_inner());
     if settings.wol_enabled && !settings.mac.trim().is_empty() {
         Some(settings.mac.trim().to_string())
     } else {
@@ -328,7 +328,7 @@ fn sse_event(message: LiveMessage) -> SseEvent {
 
 pub async fn setup_status(State(app): State<SharedApp>) -> Response {
     let required = {
-        let guard = app.inner.lock().expect("Zustands-Sperre");
+        let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.credentials.is_none() && guard.token_credentials.is_none() && app.token.is_empty()
     };
     Json(json!({ "required": required })).into_response()
@@ -343,7 +343,7 @@ pub async fn pairing_info(State(app): State<SharedApp>) -> Response {
         }))
         .into_response();
     };
-    let settings = app.device_settings.lock().expect("Setup-Sperre").clone();
+    let settings = app.device_settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let name = if settings.name.trim().is_empty() {
         std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".to_string())
     } else { settings.name.clone() };
@@ -369,7 +369,7 @@ pub async fn pairing_qr(State(app): State<SharedApp>) -> Response {
             "Keine LAN-IPv4-Adresse erkannt".to_string(),
         );
     };
-    let settings = app.device_settings.lock().expect("Setup-Sperre").clone();
+    let settings = app.device_settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let name = if settings.name.trim().is_empty() {
         std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".to_string())
     } else { settings.name.clone() };
@@ -433,7 +433,7 @@ pub async fn device_setup(
     if let Err(error) = std::fs::write(&app.device_file, serial) {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Setup konnte nicht gespeichert werden: {error}"));
     }
-    *app.device_settings.lock().expect("Setup-Sperre") = settings.clone();
+    *app.device_settings.lock().unwrap_or_else(|e| e.into_inner()) = settings.clone();
     Json(json!({"ok": true, "name": settings.name, "wol_enabled": settings.wol_enabled, "mac": settings.mac})).into_response()
 }
 
@@ -455,7 +455,7 @@ pub async fn setup(
     }
     // Schon eingerichtet? (wie Python: 409)
     {
-        let guard = app.inner.lock().expect("Zustands-Sperre");
+        let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         if guard.credentials.is_some() || guard.token_credentials.is_some() || !app.token.is_empty() {
             return error_response(
                 StatusCode::CONFLICT,
@@ -479,7 +479,7 @@ pub async fn setup(
         if let Err(error) = std::fs::write(&app.token_file, serial) {
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Token konnte nicht gespeichert werden: {error}"));
         }
-        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.token_credentials = Some(hashed);
         log_event(&app, &mut guard, "setup", "Token-Zugang eingerichtet", true);
         return Json(json!({"ok": true, "auth_mode": "token", "token": token})).into_response();
@@ -517,7 +517,7 @@ pub async fn setup(
             format!("Speichern fehlgeschlagen: {error}"),
         );
     }
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(
         &app,
         &mut guard,
@@ -547,7 +547,7 @@ pub async fn set_mode(
             )
         }
     };
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     guard.simulate = simulate;
     guard.sim_plan = None;
     guard.pending_at = None;
@@ -640,10 +640,11 @@ pub async fn sensors_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
 /// Registry Cache leeren (Win 8.1+), Memory Combine (Win 10+), Volume Cache flushen.
 /// Braucht Admin-Rechte fuer Standby-bezogene Operationen.
 pub async fn clean_memory_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Response {
+    let simulate = snapshot(&app).simulate;
     // Metrik VOR dem Bereinigen lesen
     let before = crate::metrics::read(&app.metrics);
     let result = tokio::task::spawn_blocking(move || {
-        crate::optimize::clean_memory_full()
+        crate::optimize::clean_memory_full(simulate)
     })
     .await
     .unwrap_or((0, false, false, false, false, false, false, false, false));
@@ -663,6 +664,7 @@ pub async fn clean_memory_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> 
         "used_mb": after.ram_used_mb,
         "free_mb": after.ram_total_mb.saturating_sub(after.ram_used_mb),
         "before_used_mb": before.ram_used_mb,
+        "before_free_mb": before.ram_total_mb.saturating_sub(before.ram_used_mb),
     })).into_response()
 }
 
@@ -688,7 +690,7 @@ pub async fn warnings_save(
 ) -> Response {
     match crate::warnings::save(&app, body.rules) {
         Ok(rules) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(
                 &app,
                 &mut guard,
@@ -741,7 +743,7 @@ pub async fn abort_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Respons
     let (code, out) = tokio::task::spawn_blocking(move || run(&["shutdown", "/a"], simulate, false))
         .await
         .unwrap_or((-1, String::new()));
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     guard.pending_at = None;
     guard.pending_seconds = 0;
     let state_text = if out.is_empty() {
@@ -833,7 +835,7 @@ pub async fn wake_ep(
     if simulate {
         detail.push_str(" (simuliert)");
     }
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mac_bytes) = parse_mac(&mac) else {
         // Unlesbare MAC: sauber Fehler melden, statt unkontrolliert abzubrechen.
         log_event(&app, &mut guard, "wake", &detail, false);
@@ -844,7 +846,7 @@ pub async fn wake_ep(
     let ok = tokio::task::spawn_blocking(move || send_wol(&mac_bytes, port, &broadcast, simulate))
         .await
         .unwrap_or(false);
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(&app, &mut guard, "wake", &detail, ok);
     if !ok {
         return error_response(
@@ -857,7 +859,7 @@ pub async fn wake_ep(
 
 /// POST /ping — Verbindungstest vom Handy.
 pub async fn ping_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(&app, &mut guard, "ping", "Verbindungstest vom Handy", true);
     Json(json!({ "ok": true, "detail": "Verbindung steht" })).into_response()
 }
@@ -865,7 +867,7 @@ pub async fn ping_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
 /// GET /events — Ringpuffer, neueste zuerst (wie Python list(deque)).
 pub async fn events_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
     let events = {
-        let guard = app.inner.lock().expect("Zustands-Sperre");
+        let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.events.iter().cloned().collect::<Vec<_>>()
     };
     Json(json!({ "events": events })).into_response()
@@ -952,7 +954,7 @@ pub async fn plugin_install(
         .unwrap_or_else(|error| Err(format!("Abbruch: {error}")));
     match result {
         Ok(manifest) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(
                 &app,
                 &mut guard,
@@ -969,7 +971,7 @@ pub async fn plugin_install(
             .into_response()
         }
         Err(message) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(&app, &mut guard, "plugin", &message, false);
             error_response(StatusCode::BAD_REQUEST, message)
         }
@@ -984,12 +986,12 @@ pub async fn plugin_delete(
 ) -> Response {
     match crate::jsplugins::uninstall(&app, &id) {
         Ok(()) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(&app, &mut guard, "plugin", &format!("{id} entfernt"), true);
             Json(json!({ "ok": true, "id": id })).into_response()
         }
         Err(message) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(&app, &mut guard, "plugin", &message, false);
             error_response(StatusCode::BAD_REQUEST, message)
         }
@@ -1045,7 +1047,7 @@ pub async fn plugin_settings_set(
 ) -> Response {
     match crate::jsplugins::save_values(&app, &id, &body.values) {
         Ok(values) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(
                 &app,
                 &mut guard,
@@ -1068,7 +1070,10 @@ pub async fn plugin_settings_set(
 
 /// GET /plugin-catalog — was der Marktplatz anbietet.
 pub async fn plugin_catalog_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
-    let catalog = crate::jsplugins::catalog(&app);
+    let worker = Arc::clone(&app);
+    let catalog = tokio::task::spawn_blocking(move || crate::jsplugins::catalog(&worker))
+        .await
+        .unwrap_or_default();
     let installed: Vec<String> = crate::jsplugins::manifests(&app)
         .into_iter()
         .map(|manifest| manifest.id)
@@ -1112,7 +1117,7 @@ pub async fn plugin_start(
         match crate::games::find_running(&games) {
             Some(found) => game = Some(found.exe),
             None => {
-                let mut guard = app.inner.lock().expect("Zustands-Sperre");
+                let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
                 log_event(
                     &app,
                     &mut guard,
@@ -1134,7 +1139,7 @@ pub async fn plugin_start(
         return match crate::jsplugins::start(&app, &id, game, auto) {
             Ok(value) => Json(value).into_response(),
             Err(message) => {
-                let mut guard = app.inner.lock().expect("Zustands-Sperre");
+                let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
                 log_event(&app, &mut guard, "plugin", &message, false);
                 error_response(StatusCode::BAD_REQUEST, message)
             }
@@ -1144,7 +1149,7 @@ pub async fn plugin_start(
     match crate::plugins::start(&app, &id, game, auto, simulate) {
         Ok(value) => Json(value).into_response(),
         Err(message) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(&app, &mut guard, "plugin", &message, false);
             error_response(StatusCode::BAD_REQUEST, message)
         }
@@ -1176,7 +1181,7 @@ pub async fn plugin_stop(
     let detail = tokio::task::spawn_blocking(move || crate::plugins::stop_run(run))
         .await
         .unwrap_or_else(|_| "Abbruch fehlgeschlagen".to_string());
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(&app, &mut guard, "plugin", &format!("{id} {detail}"), true);
     Json(json!({ "ok": true, "id": id, "detail": detail })).into_response()
 }
@@ -1205,10 +1210,16 @@ pub async fn plugin_output(
 /// braucht deshalb weiterhin keine Schreibrechte. Ausgeblendete Spiele bleiben
 /// in der Antwort – die App filtert selbst.
 pub async fn games_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
-    let (scanned, scanned_at) = crate::games::cached(&app);
-    let config = crate::games::load_config(&app);
+    let worker = Arc::clone(&app);
+    let (scanned, scanned_at, config, running) = tokio::task::spawn_blocking(move || {
+        let (scanned, scanned_at) = crate::games::cached(&worker);
+        let config = crate::games::load_config(&worker);
+        let running = crate::games::running_exes();
+        (scanned, scanned_at, config, running)
+    })
+    .await
+    .unwrap_or_default();
     let entries = crate::games::merge_games(&scanned, &config);
-    let running = crate::games::running_exes();
     let list: Vec<serde_json::Value> = entries
         .iter()
         .map(|entry| {
@@ -1234,7 +1245,7 @@ pub async fn games_scan_ep(State(app): State<SharedApp>, _auth: WriteAuth) -> Re
     let result = tokio::task::spawn_blocking(move || crate::games::scan_and_store(&worker)).await;
     match result {
         Ok(games) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(
                 &app,
                 &mut guard,
@@ -1267,7 +1278,7 @@ pub async fn game_config_set(
     crate::games::fill_custom_source(&mut config);
     match crate::games::save_config(&app, &config) {
         Ok(()) => {
-            let mut guard = app.inner.lock().expect("Zustands-Sperre");
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             log_event(
                 &app,
                 &mut guard,
@@ -1352,7 +1363,7 @@ pub async fn users_ep(State(app): State<SharedApp>, auth: Auth) -> Response {
             "Benutzerverwaltung nur fuer Administratoren".to_string(),
         );
     }
-    let guard = app.inner.lock().expect("Zustands-Sperre");
+    let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     let Some(credentials) = guard.credentials.as_ref() else {
         return Json(json!({
             "primary": serde_json::Value::Null,
@@ -1413,7 +1424,7 @@ pub async fn user_add(
         Err(detail) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, detail),
     };
 
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut credentials) = guard.credentials.clone() else {
         return error_response(
             StatusCode::CONFLICT,
@@ -1462,7 +1473,7 @@ pub async fn user_delete(
             "Nur Administratoren duerfen Benutzer verwalten".to_string(),
         );
     }
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut credentials) = guard.credentials.clone() else {
         return error_response(
             StatusCode::NOT_FOUND,
@@ -1515,7 +1526,7 @@ pub async fn routine_templates(_auth: Auth) -> Response {
 /// GET /routines — alle Routinen inklusive naechstem Lauf (nur lesen fuer viewer).
 pub async fn routines_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
     let now = chrono::Local::now().naive_local();
-    let guard = app.routines.lock().expect("Routinen-Sperre");
+    let guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
     let routines = guard
         .routines
         .iter()
@@ -1555,7 +1566,7 @@ pub async fn routine_save(
         return error_response(StatusCode::UNPROCESSABLE_ENTITY, message);
     }
 
-    let mut guard = app.routines.lock().expect("Routinen-Sperre");
+    let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
     match guard.routines.iter_mut().find(|entry| entry.id == routine.id) {
         Some(existing) => {
             // `last_run` und Verlauf bleiben erhalten: ein erneutes Speichern
@@ -1586,7 +1597,7 @@ pub async fn routine_save(
             format!("Speichern fehlgeschlagen: {error}"),
         );
     }
-    let mut inner = app.inner.lock().expect("Zustands-Sperre");
+    let mut inner = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(
         &app,
         &mut inner,
@@ -1603,7 +1614,7 @@ pub async fn routine_delete(
     Path(id): Path<String>,
     _auth: WriteAuth,
 ) -> Response {
-    let mut guard = app.routines.lock().expect("Routinen-Sperre");
+    let mut guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
     let before = guard.routines.len();
     guard.routines.retain(|routine| routine.id != id);
     if guard.routines.len() == before {
@@ -1618,7 +1629,7 @@ pub async fn routine_delete(
             format!("Speichern fehlgeschlagen: {error}"),
         );
     }
-    let mut inner = app.inner.lock().expect("Zustands-Sperre");
+    let mut inner = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(
         &app,
         &mut inner,
@@ -1639,7 +1650,7 @@ pub async fn routine_run(
     _auth: WriteAuth,
 ) -> Response {
     let routine = {
-        let guard = app.routines.lock().expect("Routinen-Sperre");
+        let guard = app.routines.lock().unwrap_or_else(|e| e.into_inner());
         guard.routines.iter().find(|routine| routine.id == id).cloned()
     };
     let Some(routine) = routine else {
@@ -1720,3 +1731,4 @@ mod tests {
         assert_eq!(parse_query_bool(""), None);
     }
 }
+

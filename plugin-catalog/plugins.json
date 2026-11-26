@@ -8,21 +8,24 @@
       "name": "Game Optimization",
       "description": "Optimiert den PC fuer ein Spiel: Energieplan, Hintergrund-Apps, Arbeitsspeicher.",
       "version": "1",
-      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/game-optimizer.json"
+      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/game-optimizer.json",
+      "sha256": "A6CBEEE9DFE3E39EE78FC249A40741DEE361F8AA2DE0A79D02E08C4C24670935"
     },
     {
       "id": "system-monitor",
       "name": "System-Monitor",
       "description": "Meldet CPU- und RAM-Auslastung im Plugin-Log (alle 5 s).",
       "version": "1",
-      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/system-monitor.json"
+      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/system-monitor.json",
+      "sha256": "B7C968F4EEE3B7C81647CFF9E763D987084B59C4A87ABEA30883BE40EADD404E"
     },
     {
       "id": "steam-millennium",
       "name": "Steam + Millennium",
       "description": "Zeigt Steam-Installation, Millennium-Status und laufende Downloads mit Tempo und Restzeit (nur Lesen).",
       "version": "2",
-      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/steam-millennium.json"
+      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/steam-millennium.json",
+      "sha256": "FF23413FD2D91A6C452F749D989751ED6D9F648DE2D5FA913CC65A6469E73F80"
     }
   ]
 }

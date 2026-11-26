@@ -24,7 +24,7 @@ fn now_epoch() -> f64 {
 }
 
 fn simulate(app: &App) -> bool {
-    app.inner.lock().expect("Zustands-Sperre").simulate
+    app.inner.lock().unwrap_or_else(|e| e.into_inner()).simulate
 }
 
 /// Ist der Plan-Name bekannt (`high`/`balanced`/`saver`)?
@@ -34,7 +34,7 @@ pub fn plan_known(name: &str) -> bool {
 
 /// Gemeinsamer Abschluss eines Herunterfahrens (Journal + `pending_*`).
 fn finish_shutdown(app: &App, code: i32, out: &str, delay: u32) -> Result<String, String> {
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     if code != 0 {
         let problem = if out.is_empty() { "Fehler".to_string() } else { out.to_string() };
         log_event(app, &mut guard, "shutdown", &problem, false);
@@ -81,7 +81,7 @@ pub async fn perform_shutdown(app: &App, delay: u32) -> Result<String, String> {
 
 /// Gemeinsamer Abschluss eines Ruhezustands.
 fn finish_hibernate(app: &App, code: i32, out: &str) -> Result<String, String> {
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     let state_text = if out.is_empty() { "Ruhezustand".to_string() } else { out.to_string() };
     log_event(app, &mut guard, "hibernate", &state_text, code == 0);
     if code != 0 {
@@ -115,7 +115,7 @@ pub async fn perform_hibernate(app: &App) -> Result<String, String> {
 fn finish_power_plan(app: &App, name: &str, code: i32, out: &str) -> Result<String, String> {
     // Vorher lesen: `simulate` sperrt den Zustand, der Guard muss erst danach kommen.
     let simulate = simulate(app);
-    let mut guard = app.inner.lock().expect("Zustands-Sperre");
+    let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
     log_event(
         app,
         &mut guard,
@@ -165,7 +165,7 @@ pub fn abort_sync(app: &App) -> Result<String, String> {
     let simulate = simulate(app);
     let (code, out) = run(&["shutdown", "/a"], simulate, false);
     {
-        let mut guard = app.inner.lock().expect("Zustands-Sperre");
+        let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
         log_event(app, &mut guard, "abort", "Abbruch gesendet", code == 0);
         if code == 0 {
             guard.pending_at = None;

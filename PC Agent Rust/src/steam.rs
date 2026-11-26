@@ -210,12 +210,10 @@ fn steam_path_value(line: &str) -> Option<String> {
     if !lowered.starts_with("steampath") {
         return None;
     }
-    let (position, kind_len) = if let Some(position) = lowered.find("reg_expand_sz") {
-        (position, "reg_expand_sz".len())
-    } else if let Some(position) = lowered.find("reg_sz") {
-        (position, "reg_sz".len())
-    } else {
-        return None;
+    let (position, kind_len) = match (lowered.find("reg_expand_sz"), lowered.find("reg_sz")) {
+        (Some(position), _) => (position, "reg_expand_sz".len()),
+        (None, Some(position)) => (position, "reg_sz".len()),
+        (None, None) => return None,
     };
     let value = trimmed
         .get(position + kind_len..)?

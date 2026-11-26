@@ -22,8 +22,8 @@ android {
         applicationId = "com.example.pcsteuerung"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "0.15.5"
+        versionCode = 27
+        versionName = "0.16.0"
     }
 
     signingConfigs {

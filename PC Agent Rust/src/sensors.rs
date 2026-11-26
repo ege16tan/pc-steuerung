@@ -205,7 +205,7 @@ pub fn rates_from_samples(
     let Some((prev_rx, prev_tx)) = previous else {
         return (None, None);
     };
-    if !(elapsed_s > 0.0) {
+    if elapsed_s <= 0.0 {
         return (None, None);
     }
     let rx = current.0.saturating_sub(prev_rx) as f64 / elapsed_s;
