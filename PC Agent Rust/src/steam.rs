@@ -449,6 +449,10 @@ static SPEED: Mutex<Option<HashMap<String, SpeedSample>>> = Mutex::new(None);
 /// liefern nur Rauschen).
 const MIN_SPEED_GAP: Duration = Duration::from_millis(700);
 
+/// Wartezeit fuer das Priming beim ersten Aufruf: muss ueber `MIN_SPEED_GAP`
+/// liegen, damit eine gueltige Geschwindigkeitsdifferenz berechnet werden kann.
+const PRIME_GAP: Duration = Duration::from_millis(900);
+
 /// Restzeit in Sekunden; 0, wenn das Tempo unbekannt oder der Rest 0 ist.
 fn eta_seconds(remaining: u64, bps: u64) -> u64 {
     if bps == 0 || remaining == 0 {
@@ -505,6 +509,48 @@ fn with_speed(list: &mut [SteamDownload]) {
     *guard = Some(next);
 }
 
+/// Wie `with_speed`, aber beim allerersten Aufruf (kein bisheriger `SPEED`-Cache)
+/// wird zuerst eine Start-Messung gemacht, eine kurze Pause abgewartet und dann
+/// die `.acf`-Dateien erneut gelesen, damit die erste Antwort schon echte
+/// `speed_bps`/`eta_seconds` liefert statt `0`. Spätere Aufrufe bleiben sofort
+/// fertig (Cache-Treffer). Der Wartezeitraum liegt ueber `MIN_SPEED_GAP`, damit
+/// eine gueltige Differenz berechnet werden kann.
+fn with_speed_primed(list: &mut [SteamDownload]) {
+    let Ok(guard) = SPEED.lock() else {
+        return;
+    };
+    let ist_erster_aufruf = guard.is_none();
+    drop(guard);
+
+    if ist_erster_aufruf {
+        // Erste (priming) Messung: aktuelle Werte merken, ohne Tempo zu berechnen.
+        with_speed(list);
+        std::thread::sleep(PRIME_GAP);
+        // Frische Werte aus den .acf-Dateien lesen, um die Differenz zu bilden.
+        let frisch = downloads_in_aktuell();
+        if !frisch.is_empty() {
+            // Die uebergebene Liste mit frischen Byte-Werten ueberschreiben, damit
+            // SPEED-Cache und zurueckgegebene Liste konsistent bleiben.
+            let n = list.len().min(frisch.len());
+            list[..n].clone_from_slice(&frisch[..n]);
+            with_speed(list);
+        } else {
+            with_speed(list);
+        }
+    } else {
+        with_speed(list);
+    }
+}
+
+/// Liefert die aktuellen Downloads ohne Tempo, verwendet vom Priming-Helfer
+/// fuer die Zweitmessung nach der Start-Messung.
+fn downloads_in_aktuell() -> Vec<SteamDownload> {
+    let Some(steam) = steam_path() else {
+        return Vec::new();
+    };
+    downloads_in(&libraries(&steam))
+}
+
 /// Vergisst alle Messungen (kein Download mehr aktiv).
 fn reset_speed() {
     if let Ok(mut guard) = SPEED.lock() {
@@ -515,6 +561,13 @@ fn reset_speed() {
 // ---------------- Oeffentliche API ----------------
 
 /// Laufende Steam-Downloads; leer, wenn Steam nicht gefunden wird.
+///
+/// Beim allerersten Aufruf fuer eine App gibt es noch keinen Vergleichswert,
+/// deshalb wurde bisher `speed_bps: 0` zurueckgeliefert. Damit die erste
+/// Antwort schon wirklich lebendig ist, wird beim ersten Mal eine Start-
+/// Messung gemacht, eine kurze Pause abgewartet und dann die Differenz
+/// ausgewertet. Spätere Aufrufe bleiben sofort fertig (Cache-Treffer).
+#[allow(dead_code)]
 pub fn downloads(_app: &App) -> Vec<SteamDownload> {
     let Some(steam) = steam_path() else {
         reset_speed();
@@ -525,14 +578,16 @@ pub fn downloads(_app: &App) -> Vec<SteamDownload> {
         reset_speed();
         return list;
     }
-    with_speed(&mut list);
+    with_speed_primed(&mut list);
     list
 }
 
 /// Gesamtstatus fuer `GET /steam` und die Plugin-Freigabe `steam`.
 ///
 /// Ohne Steam-Installation: `detected = false` und sonst nur leere Werte –
-/// kein Fehler und kein Panik.
+/// kein Fehler und kein Panik. Beim ersten Aufruf fuer eine App wird das
+/// Tempo geprimt (siehe `downloads`), sodass die erste Antwort schon echte
+/// Werte liefert statt `speed_bps: 0`.
 pub fn status(_app: &App) -> SteamStatus {
     let Some(steam) = steam_path() else {
         reset_speed();
@@ -542,7 +597,7 @@ pub fn status(_app: &App) -> SteamStatus {
     if list.is_empty() {
         reset_speed();
     } else {
-        with_speed(&mut list);
+        with_speed_primed(&mut list);
     }
     let millennium = millennium_present(&steam);
     let running = steam_running();

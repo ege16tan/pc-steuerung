@@ -1321,11 +1321,45 @@ pub async fn steam_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
 
 /// GET /downloads — laufende Steam-Downloads (read-only, MVP).
 ///
-/// Gleiche Datenquelle wie `downloads` in `GET /steam`.
+/// Gleiche Datenquelle wie `downloads` in `GET /steam`. Die Antwort enthaelt
+/// zusatzlich die Kopfzeile des am weitesten fortgeschrittenen Downloads
+/// (`speed_bps`, `eta_seconds`, `progress_percent`, `app_name`, ...), damit
+/// der Fallback-Pfad auf dem Phone (bei Fehlen von `/steam`) vollstaendige
+/// Live-Werte bekommt.
 pub async fn downloads_ep(State(app): State<SharedApp>, _auth: Auth) -> Response {
     let worker = Arc::clone(&app);
-    match tokio::task::spawn_blocking(move || crate::steam::downloads(&worker)).await {
-        Ok(downloads) => Json(json!({ "downloads": downloads })).into_response(),
+    match tokio::task::spawn_blocking(move || crate::steam::status(&worker)).await {
+        Ok(status) => {
+            let downloads: Vec<_> = status
+                .downloads
+                .iter()
+                .map(|d| {
+                    json!({
+                        "app_id": d.app_id,
+                        "name": d.name,
+                        "percent": d.percent,
+                        "percent_staged": d.percent_staged,
+                        "bytes_downloaded": d.bytes_downloaded,
+                        "bytes_total": d.bytes_total,
+                        "bytes_staged": d.bytes_staged,
+                        "bytes_to_stage": d.bytes_to_stage,
+                        "speed_bps": d.speed_bps,
+                        "eta_seconds": d.eta_seconds,
+                    })
+                })
+                .collect();
+            let body = json!({
+                "downloads": downloads,
+                "speed_bps": status.speed_bps,
+                "eta_seconds": status.eta_seconds,
+                "progress_percent": status.progress_percent,
+                "app_name": status.app_name,
+                "bytes_downloaded": status.bytes_downloaded,
+                "bytes_total": status.bytes_total,
+                "downloading": status.downloading,
+            });
+            Json(body).into_response()
+        }
         Err(error) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Downloads konnten nicht gelesen werden: {error}"),
