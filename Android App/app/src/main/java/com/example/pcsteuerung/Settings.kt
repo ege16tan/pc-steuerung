@@ -81,14 +81,15 @@ fun searchSettings(
  * Bereiche mit eigenem "Zuruecksetzen". Welche Felder dazugehoeren, steht in
  * [settingsAreaFields]; alles andere bleibt beim Reset unberuehrt.
  */
-enum class SettingsArea { APPEARANCE, CONTROL, HISTORY, PLUGINS }
+enum class SettingsArea { APPEARANCE, CONTROL, HISTORY, PLUGINS, LIVE_CARD }
 
 /** Felder eines Bereichs (Schluessel wie im Export, `settingsToJson`). */
 fun settingsAreaFields(area: SettingsArea): List<String> = when (area) {
-    SettingsArea.APPEARANCE -> listOf("theme_mode", "refresh_seconds")
+    SettingsArea.APPEARANCE -> listOf("theme_mode", "refresh_seconds", "accent_color", "tile_columns")
     SettingsArea.CONTROL -> listOf("online_card")
     SettingsArea.HISTORY -> listOf("history_lines")
     SettingsArea.PLUGINS -> listOf("plugin_auto_close")
+    SettingsArea.LIVE_CARD -> listOf("live_downloads", "live_countdown", "live_warnings", "live_starting")
 }
 
 /**
@@ -102,11 +103,19 @@ fun resetSettingsArea(current: AppSettings, area: SettingsArea): AppSettings {
         SettingsArea.APPEARANCE -> current.copy(
             themeMode = defaults.themeMode,
             refreshSeconds = defaults.refreshSeconds,
+            accentColor = defaults.accentColor,
+            tileColumns = defaults.tileColumns,
         )
 
         SettingsArea.CONTROL -> current.copy(onlineCard = defaults.onlineCard)
         SettingsArea.HISTORY -> current.copy(historyLines = defaults.historyLines)
         SettingsArea.PLUGINS -> current.copy(pluginAutoClose = defaults.pluginAutoClose)
+        SettingsArea.LIVE_CARD -> current.copy(
+            liveDownloads = defaults.liveDownloads,
+            liveCountdown = defaults.liveCountdown,
+            liveWarnings = defaults.liveWarnings,
+            liveStarting = defaults.liveStarting,
+        )
     }
 }
 
@@ -135,6 +144,8 @@ fun settingsToJson(settings: AppSettings): JSONObject {
         .put("online_card", settings.onlineCard)
         .put("plugin_auto_close", JSONObject(gson.toJson(settings.pluginAutoClose, mapType)))
         .put("history_lines", settings.historyLines)
+        .put("accent_color", settings.accentColor.name.lowercase(Locale.ROOT))
+        .put("tile_columns", settings.tileColumns)
 }
 
 /**
@@ -284,6 +295,13 @@ fun parseSettingsImport(body: String): SettingsImportResult {
         historyLines = jsonNumber(raw.opt("history_lines"))?.toInt()
             ?.let(::normalizeHistoryLines)
             ?: defaults.historyLines,
+        accentColor = raw.optString("accent_color").trim()
+            .takeIf { it.isNotEmpty() }
+            ?.let { name -> AccentColor.entries.firstOrNull { it.name.equals(name, true) } }
+            ?: defaults.accentColor,
+        tileColumns = jsonNumber(raw.opt("tile_columns"))?.toInt()
+            ?.takeIf { it in listOf(2, 3) }
+            ?: defaults.tileColumns,
     )
 
     val modules = LinkedHashSet<String>()

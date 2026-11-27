@@ -776,6 +776,11 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
     val ctx = LocalContext.current
     val connectionReady = host.isNotBlank() && isValidPort(port)
 
+    // Auto-Entdeckung: PC-Steuerung-Agenten im lokalen WLAN-Subnetz finden
+    var discoveryResults by remember { mutableStateOf<List<DiscoveredPc>>(emptyList()) }
+    var discovering by remember { mutableStateOf(false) }
+    var discoveryError by remember { mutableStateOf<String?>(null) }
+
     if (showScanner) {
         QrScannerScreen(
             title = "QR-Code vom PC scannen",
@@ -949,14 +954,94 @@ fun SetupScreen(profile: Profile, onSave: (Profile) -> Unit, onCancel: (() -> Un
                                 ) {
                                     Text("QR-Code vom PC scannen (schnellster Weg)")
                                 }
-                                scanMessage?.let {
-                                    Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                                }
-                                Text(
-                                    text = "Oder die Felder darunter selbst ausfüllen.",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
+                                                scanMessage?.let {
+                                                    Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                                                }
+                                                val noneText = stringResource(R.string.setup_discover_none)
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        discovering = true
+                                                        discoveryError = null
+                                                        discoveryResults = emptyList()
+                                                        scope.launch {
+                                                            val found = withContext(Dispatchers.IO) { discoverPcs(ctx) }
+                                                            discovering = false
+                                                            discoveryResults = found
+                                                            if (found.isEmpty()) {
+                                                                discoveryError = noneText
+                                                            }
+                                                        }
+                                                    },
+                                                    enabled = !discovering,
+                                                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                                                    shape = RoundedCornerShape(16.dp)
+                                                ) {
+                                                    if (discovering) {
+                                                        Row(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.Center,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            CircularProgressIndicator(
+                                                                modifier = Modifier.size(18.dp),
+                                                                strokeWidth = 2.dp,
+                                                                color = MaterialTheme.colorScheme.onPrimary
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            Text(stringResource(R.string.setup_discover_searching))
+                                                        }
+                                                    } else {
+                                                        Text(stringResource(R.string.setup_discover))
+                                                    }
+                                                }
+                                                discoveryError?.let {
+                                                    Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                                                }
+                                                discoveryResults.forEach { pc ->
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                text = pc.name,
+                                                                fontWeight = FontWeight.SemiBold
+                                                            )
+                                                            Text(
+                                                                text = "${pc.host}:${pc.port}",
+                                                                fontSize = 12.sp,
+                                                                color = MaterialTheme.colorScheme.outline
+                                                            )
+                                                            if (pc.wolEnabled) {
+                                                                Text(
+                                                                    text = "WoL-MAC: ${pc.mac ?: "–"}",
+                                                                    fontSize = 12.sp,
+                                                                    color = MaterialTheme.colorScheme.outline
+                                                                )
+                                                            }
+                                                        }
+                                                        Button(
+                                                            onClick = {
+                                                                name = pc.name
+                                                                host = pc.host
+                                                                port = pc.port.toString()
+                                                                mac = pc.mac ?: ""
+                                                                wolEnabled = pc.mac != null
+                                                                discoveryResults = emptyList()
+                                                                discoveryError = null
+                                                            },
+                                                            modifier = Modifier.padding(horizontal = 8.dp),
+                                                            shape = RoundedCornerShape(16.dp)
+                                                        ) {
+                                                            Text(stringResource(R.string.setup_discover_adopt))
+                                                        }
+                                                    }
+                                                }
+                                                Text(
+                                                    text = "Oder die Felder darunter selbst ausfüllen.",
+                                                    fontSize = 12.sp,
+                                                    color = MaterialTheme.colorScheme.outline
+                                                )
                                 OutlinedTextField(
                                     value = name,
                                     onValueChange = { name = it },
@@ -2472,7 +2557,6 @@ fun MainApp(
                         SettingsTab(
                             profiles = profiles,
                             active = active,
-                            simulate = state.simulate,
                             busy = busy,
                             settings = settings,
                             installedModules = installedModules,
@@ -2482,21 +2566,12 @@ fun MainApp(
                                 ModuleStore.save(context, ids)
                                 installedModules = ids
                             },
-                            onOpenWeb = ::openWebInterface,
                             versionName = versionName,
                             onSwitch = ::switchProfile,
                             onAdd = ::addProfile,
                             onDelete = ::deleteProfile,
                             onSave = ::saveProfile,
                             onTestConnection = ::testConnection,
-                            onModeChange = { simulation ->
-                                if (simulation) {
-                                    state = state.copy(simulate = true)
-                                    runAction("/mode?simulate=true", context.getString(R.string.simulation_activated))
-                                } else {
-                                    showRealModeConfirm = true
-                                }
-                            },
                         )
                     }
                 }
@@ -4129,8 +4204,8 @@ private enum class SettingsDestination(
     HISTORY("Verlauf", "Aufbewahrung und Logzeilen"),
     LIVE_CARD("Live-Karte", "Statusleisten-Benachrichtigung"),
     RESET("Zurücksetzen", "Einstellungen zurücksetzen"),
-    UPDATES("Aktualisierungen", "Neue App-Versionen laden"),
-    ABOUT("Über die App", "Version und weitere Informationen"),
+    BACKUP("Sicherung", "Einstellungen exportieren/importieren"),
+    ABOUT("Über die App", "Version, Aktualisierungen und weitere Informationen"),
 }
 
 private val SettingsAccent = Color(0xFFB39DDB)
@@ -4139,20 +4214,17 @@ private val SettingsAccent = Color(0xFFB39DDB)
 private fun SettingsTab(
     profiles: List<Profile>,
     active: Profile,
-    simulate: Boolean?,
     busy: Boolean,
     settings: AppSettings,
     installedModules: Set<String>,
     onSettingsChange: (AppSettings) -> Unit,
     onModulesChange: (Set<String>) -> Unit,
-    onOpenWeb: () -> Unit,
     versionName: String,
     onSwitch: (String) -> Unit,
     onAdd: () -> Unit,
     onDelete: (String) -> Unit,
     onSave: (Profile) -> Unit,
     onTestConnection: () -> Unit,
-    onModeChange: (Boolean) -> Unit,
 ) {
     var destination by remember { mutableStateOf<SettingsDestination?>(null) }
 
@@ -4169,10 +4241,73 @@ private fun SettingsTab(
     var scanError by remember { mutableStateOf<String?>(null) }
     var showScanner by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
+    var resetArea by remember { mutableStateOf<SettingsArea?>(null) }
+    var resetNotice by remember { mutableStateOf<SettingsArea?>(null) }
+    var fileNotice by remember { mutableIntStateOf(0) }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var pendingImport by remember { mutableStateOf<SettingsImportResult.Ok?>(null) }
+    var pendingExport by remember { mutableStateOf("") }
     val valid = host.isNotBlank() && isValidPort(port)
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     BackHandler(enabled = destination != null) { destination = null }
     BackHandler(enabled = showScanner) { showScanner = false }
+
+    // G3 Export: System-Dateidialog (SAF), kein Speicher-Recht noetig.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri == null) {
+            fileNotice = R.string.settings_backup_export_cancelled
+        } else {
+            val text = pendingExport
+            scope.launch {
+                val written = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val out = context.contentResolver.openOutputStream(uri)
+                            ?: return@runCatching false
+                        out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        true
+                    }.getOrDefault(false)
+                }
+                fileNotice = if (written) {
+                    R.string.settings_backup_export_done
+                } else {
+                    R.string.settings_backup_export_failed
+                }
+            }
+        }
+    }
+
+    // G3 Import: tolerant lesen (parseSettingsImport); Profile bleiben aussen vor.
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            fileNotice = R.string.settings_backup_import_cancelled
+        } else {
+            scope.launch {
+                val body = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)
+                            ?.bufferedReader()?.use { it.readText() }
+                    }.getOrNull()
+                }
+                if (body == null) {
+                    importError = context.getString(R.string.settings_backup_import_unreadable)
+                } else when (val result = parseSettingsImport(body)) {
+                    is SettingsImportResult.Ok -> pendingImport = result
+                    is SettingsImportResult.Failed -> importError = context.getString(
+                        when (result.error) {
+                            SettingsImportError.WRONG_VERSION -> R.string.settings_backup_import_version
+                            else -> R.string.settings_backup_import_invalid
+                        }
+                    )
+                }
+            }
+        }
+    }
 
     if (showScanner) {
         QrScannerScreen(
@@ -4200,16 +4335,13 @@ private fun SettingsTab(
         if (page == null) {
             SettingsOverview(
                 active = active,
-                simulate = simulate,
                 busy = busy,
                 settings = settings,
                 versionName = versionName,
                 profiles = profiles,
                 modules = installedModules,
                 onOpenPage = { destination = it },
-                onOpenWeb = onOpenWeb,
                 onTestConnection = onTestConnection,
-                onModeChange = onModeChange,
                 onSettingsChange = onSettingsChange,
                 onModulesChange = onModulesChange,
             )
@@ -4447,6 +4579,50 @@ private fun SettingsTab(
 
                         SettingsDetailCard {
                             Text(
+                                "Akzentfarbe",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(R.string.settings_accent_color_sub),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AccentColor.entries.forEach { color ->
+                                    FilterChip(
+                                        selected = settings.accentColor == color,
+                                        onClick = { onSettingsChange(settings.copy(accentColor = color)) },
+                                        label = { Text(accentColorLabel(color)) },
+                                    )
+                                }
+                            }
+                        }
+
+                        SettingsDetailCard {
+                            Text(
+                                stringResource(R.string.settings_tile_columns),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(R.string.settings_tile_columns_sub),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(2 to stringResource(R.string.settings_tile_columns_2), 3 to stringResource(R.string.settings_tile_columns_3)).forEach { (columns, label) ->
+                                    FilterChip(
+                                        selected = settings.tileColumns == columns,
+                                        onClick = { onSettingsChange(settings.copy(tileColumns = columns)) },
+                                        label = { Text(label) },
+                                    )
+                                }
+                            }
+                        }
+
+                        SettingsDetailCard {
+                            Text(
                                 "Status-Aktualisierung",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -4561,26 +4737,81 @@ SettingsDestination.LIVE_CARD -> {
                         SettingsDetailCard {
                             Text("Zurücksetzen", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                             Text("Setzt nur die App-Einstellungen zurück, keine Profile.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Button(onClick = { onSettingsChange(AppSettings()) }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Alle Einstellungen zurücksetzen")
+                            listOf(
+                                SettingsArea.APPEARANCE to stringResource(R.string.settings_area_appearance),
+                                SettingsArea.CONTROL to stringResource(R.string.settings_area_control),
+                                SettingsArea.LIVE_CARD to stringResource(R.string.settings_area_live_card),
+                                SettingsArea.HISTORY to stringResource(R.string.settings_area_history),
+                            ).forEach { (area, label) ->
+                                Button(
+                                    onClick = { resetArea = area },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                                ) {
+                                    Text(stringResource(R.string.settings_reset), fontSize = 15.sp)
+                                }
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
                             }
                         }
                         Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
 
-                SettingsDestination.UPDATES -> {
+                SettingsDestination.BACKUP -> {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                             .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         SettingsDetailCard {
-                            AppUpdaterPanel(
-                                versionName = versionName,
-                                settings = settings,
-                                onSettingsChange = onSettingsChange,
+                            Text(stringResource(R.string.settings_backup), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text(stringResource(R.string.settings_backup_sub), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Button(
+                                onClick = {
+                                    pendingExport = settingsExportJson(
+                                        settings = settings,
+                                        modules = installedModules,
+                                        profiles = profiles,
+                                        exportedAt = LocalDateTime.now()
+                                            .format(
+                                                DateTimeFormatter.ofPattern(
+                                                    "yyyy-MM-dd HH:mm:ss",
+                                                    Locale.GERMANY,
+                                                ),
+                                            ),
+                                    )
+                                    fileNotice = 0
+                                    exportLauncher.launch(settingsExportFileName())
+                                },
+                                modifier = Modifier.fillMaxWidth().height(50.dp),
+                                shape = RoundedCornerShape(16.dp),
+                            ) {
+                                Text(stringResource(R.string.settings_backup_export), fontSize = 15.sp)
+                            }
+                            Button(
+                                onClick = {
+                                    fileNotice = 0
+                                    importLauncher.launch(arrayOf("*/*"))
+                                },
+                                modifier = Modifier.fillMaxWidth().height(50.dp),
+                                shape = RoundedCornerShape(16.dp),
+                            ) {
+                                Text(stringResource(R.string.settings_backup_import), fontSize = 15.sp)
+                            }
+                        }
+                        if (fileNotice != 0) {
+                            Text(
+                                text = stringResource(fileNotice),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.primary,
                             )
                         }
                         Spacer(modifier = Modifier.height(24.dp))
@@ -4596,124 +4827,165 @@ SettingsDestination.LIVE_CARD -> {
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         SettingsDetailCard {
-                            Text("PC Steuerung", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Version " + versionName,
+                                text = stringResource(R.string.settings_about_title),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_about_subtitle),
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
-                                "Die App prüft Aktualisierungen über GitHub Releases.",
+                                text = stringResource(R.string.settings_about_version, versionName),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_about_github_sub),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+
+                        SettingsDetailCard {
+                            Text(
+                                text = stringResource(R.string.settings_about_credits_title),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_about_credits),
                                 fontSize = 13.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+
                         SettingsDetailCard {
-                            SettingsOverviewRow(
-                                icon = Icons.Default.Home,
-                                title = stringResource(R.string.settings_webui),
-                                subtitle = active.base,
-                                onClick = onOpenWeb,
+                            Text(
+                                text = stringResource(R.string.settings_about_license_title),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_about_license),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+
+                        SettingsDetailCard {
+                            Text(
+                                text = stringResource(R.string.settings_about_permissions_title),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_about_permissions),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        val githubUrl = stringResource(R.string.settings_about_github_sub)
+                        SettingsOverviewRow(
+                            icon = Icons.Default.Info,
+                            title = stringResource(R.string.settings_about_github),
+                            subtitle = stringResource(R.string.settings_about_github_sub),
+                            onClick = {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(githubUrl)))
+                            },
+                        )
                     }
                 }
             }
         }
     }
+
+    // Bereichs-Reset: Bestaetigung vor dem Zuruecksetzen (AlertDialog wie im Bestand).
+    resetArea?.let { area ->
+        AlertDialog(
+            onDismissRequest = { resetArea = null },
+            title = {
+                Text(stringResource(R.string.settings_reset_title, settingsAreaLabel(area)))
+            },
+            text = { Text(stringResource(R.string.settings_reset_text, settingsAreaLabel(area))) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        // Nur die Felder dieses Bereichs, sofort speichern.
+                        onSettingsChange(resetSettingsArea(settings, area))
+                        resetNotice = area
+                        fileNotice = 0
+                        resetArea = null
+                    },
+                ) { Text(stringResource(R.string.settings_reset)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { resetArea = null }) {
+                    Text(stringResource(R.string.settings_reset_cancel))
+                }
+            },
+        )
+    }
+
+    // G3: Import erst nach Bestaetigung uebernehmen (Profile bleiben aussen vor).
+    pendingImport?.let { imported ->
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text(stringResource(R.string.settings_backup_import_title)) },
+            text = { Text(stringResource(R.string.settings_backup_import_text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onSettingsChange(imported.settings)
+                        onModulesChange(imported.modules)
+                        fileNotice = R.string.settings_backup_import_done
+                        pendingImport = null
+                    },
+                ) { Text(stringResource(R.string.settings_backup_import_apply)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImport = null }) {
+                    Text(stringResource(R.string.settings_reset_cancel))
+                }
+            },
+        )
+    }
+
+    // G3: Die Datei war keine Einstellungsdatei (oder nicht lesbar).
+    importError?.let { text ->
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text(stringResource(R.string.settings_backup_import)) },
+            text = { Text(text) },
+            confirmButton = {
+                TextButton(onClick = { importError = null }) {
+                    Text(stringResource(R.string.games_cancel))
+                }
+            },
+        )
+    }
+
 }
 
 @Composable
 private fun SettingsOverview(
     active: Profile,
-    simulate: Boolean?,
     busy: Boolean,
     settings: AppSettings,
     versionName: String,
     profiles: List<Profile>,
     modules: Set<String>,
     onOpenPage: (SettingsDestination) -> Unit,
-    onOpenWeb: () -> Unit,
     onTestConnection: () -> Unit,
-    onModeChange: (Boolean) -> Unit,
     onSettingsChange: (AppSettings) -> Unit,
     onModulesChange: (Set<String>) -> Unit,
 ) {
     // G1: Suchbegriff; gefiltert wird mit der reinen Funktion aus Settings.kt.
     var query by remember { mutableStateOf("") }
-    // G2: Bereich, dessen Zuruecksetzen gerade bestaetigt werden soll.
-    var resetArea by remember { mutableStateOf<SettingsArea?>(null) }
-    var resetNotice by remember { mutableStateOf<SettingsArea?>(null) }
-    // G3: Rueckmeldung der Datei-Aktionen und die zu bestaetigende Importdatei.
-    var fileNotice by remember { mutableIntStateOf(0) }
-    var importError by remember { mutableStateOf<String?>(null) }
-    var pendingImport by remember { mutableStateOf<SettingsImportResult.Ok?>(null) }
-    var pendingExport by remember { mutableStateOf("") }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    // Rueckmeldung des Resets nach ein paar Sekunden wieder ausblenden.
-    LaunchedEffect(resetNotice) {
-        if (resetNotice != null) {
-            delay(4000)
-            resetNotice = null
-        }
-    }
-
-    // G3 Export: System-Dateidialog (SAF), kein Speicher-Recht noetig.
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json"),
-    ) { uri ->
-        if (uri == null) {
-            fileNotice = R.string.settings_export_cancelled
-        } else {
-            val text = pendingExport
-            scope.launch {
-                val written = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val out = context.contentResolver.openOutputStream(uri)
-                            ?: return@runCatching false
-                        out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
-                        true
-                    }.getOrDefault(false)
-                }
-                fileNotice = if (written) {
-                    R.string.settings_export_done
-                } else {
-                    R.string.settings_export_failed
-                }
-            }
-        }
-    }
-
-    // G3 Import: tolerant lesen (parseSettingsImport); Profile bleiben aussen vor.
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri == null) {
-            fileNotice = R.string.settings_import_cancelled
-        } else {
-            scope.launch {
-                val body = withContext(Dispatchers.IO) {
-                    runCatching {
-                        context.contentResolver.openInputStream(uri)
-                            ?.bufferedReader()?.use { it.readText() }
-                    }.getOrNull()
-                }
-                if (body == null) {
-                    importError = context.getString(R.string.settings_import_unreadable)
-                } else when (val result = parseSettingsImport(body)) {
-                    is SettingsImportResult.Ok -> pendingImport = result
-                    is SettingsImportResult.Failed -> importError = context.getString(
-                        when (result.error) {
-                            SettingsImportError.WRONG_VERSION -> R.string.settings_import_version
-                            else -> R.string.settings_import_invalid
-                        }
-                    )
-                }
-            }
-        }
-    }
 
     // G1: Die Bereiche mit ihren Eintraegen. Gesucht wird in Titel, Untertitel
     // und Bereichsname (reine Funktion `searchSettings` in Settings.kt).
@@ -4722,7 +4994,6 @@ private fun SettingsOverview(
     val controlSection = stringResource(R.string.settings_section_control)
     val pluginsSection = stringResource(R.string.settings_section_plugins)
     val historySection = stringResource(R.string.settings_section_history)
-    val updatesSection = stringResource(R.string.settings_section_updates)
     val dataSection = stringResource(R.string.settings_section_data)
     val aboutSection = stringResource(R.string.settings_section_about)
 
@@ -4734,14 +5005,9 @@ private fun SettingsOverview(
     } else {
         active.name + "  ·  " + stringResource(R.string.settings_profiles_not_setup)
     }
-    val simulationSubtitle = when (simulate) {
-        true -> stringResource(R.string.settings_simulation_on)
-        false -> stringResource(R.string.settings_simulation_off)
-        null -> stringResource(R.string.settings_simulation_unknown)
-    }
 
     // Bereich (fuer das Zuruecksetzen) plus seine Eintraege. `null` = Bereich
-    // ohne eigenen Reset-Knopf (Verbindung, Updates, Daten, Ueber die App).
+    // ohne eigenen Reset-Knopf (Verbindung, Daten, Ueber die App).
     val sections: List<Pair<SettingsArea?, SettingsSearchSection>> = listOf(
         null to SettingsSearchSection(
             title = connectionSection,
@@ -4796,12 +5062,6 @@ private fun SettingsOverview(
                     "Statusleisten-Benachrichtigung",
                     controlSection,
                 ),
-                searchEntry(
-                    "reset",
-                    "Zurücksetzen",
-                    "Einstellungen zurücksetzen",
-                    controlSection,
-                ),
             ),
         ),
         SettingsArea.PLUGINS to SettingsSearchSection(
@@ -4821,31 +5081,8 @@ private fun SettingsOverview(
             ),
         ),
         null to SettingsSearchSection(
-            title = updatesSection,
-            entries = listOf(
-                searchEntry(
-                    "updates",
-                    stringResource(R.string.settings_updates),
-                    "GitHub Releases · PC Steuerung " + versionName,
-                    updatesSection,
-                ),
-            ),
-        ),
-        null to SettingsSearchSection(
             title = dataSection,
             entries = listOf(
-                searchEntry(
-                    "export",
-                    stringResource(R.string.settings_export),
-                    stringResource(R.string.settings_export_sub),
-                    dataSection,
-                ),
-                searchEntry(
-                    "import",
-                    stringResource(R.string.settings_import),
-                    stringResource(R.string.settings_import_sub),
-                    dataSection,
-                ),
             ),
         ),
         null to SettingsSearchSection(
@@ -4855,6 +5092,12 @@ private fun SettingsOverview(
                     "about",
                     stringResource(R.string.settings_about),
                     "Version " + versionName,
+                    aboutSection,
+                ),
+                searchEntry(
+                    "updates",
+                    stringResource(R.string.settings_updates),
+                    "GitHub Releases · PC Steuerung " + versionName,
                     aboutSection,
                 ),
             ),
@@ -4968,69 +5211,11 @@ private fun SettingsOverview(
                             },
                         )
 
-                        "live_card" -> SettingsOverviewRow(
-                            icon = Icons.Default.Build,
-                            title = item.title,
-                            subtitle = item.subtitle,
-                            onClick = { onOpenPage(SettingsDestination.LIVE_CARD) },
-                        )
-
-                        "reset" -> SettingsOverviewRow(
-                            icon = Icons.Default.Refresh,
-                            title = item.title,
-                            subtitle = item.subtitle,
-                            onClick = { onOpenPage(SettingsDestination.RESET) },
-                        )
-
                         "history" -> SettingsOverviewRow(
                             icon = Icons.AutoMirrored.Filled.List,
                             title = item.title,
                             subtitle = item.subtitle,
                             onClick = { onOpenPage(SettingsDestination.HISTORY) },
-                        )
-
-                        "updates" -> SettingsOverviewRow(
-                            icon = Icons.Default.Refresh,
-                            title = item.title,
-                            subtitle = item.subtitle,
-                            onClick = { onOpenPage(SettingsDestination.UPDATES) },
-                        )
-
-                        // G3: Inhalt vorbereiten, dann den System-Dialog oeffnen.
-                        "export" -> SettingsOverviewRow(
-                            icon = Icons.Default.Star,
-                            title = item.title,
-                            subtitle = item.subtitle,
-                            showChevron = false,
-                            onClick = {
-                                pendingExport = settingsExportJson(
-                                    settings = settings,
-                                    modules = modules,
-                                    profiles = profiles,
-                                    exportedAt = LocalDateTime.now()
-                                        .format(
-                                            DateTimeFormatter.ofPattern(
-                                                "yyyy-MM-dd HH:mm:ss",
-                                                Locale.GERMANY,
-                                            ),
-                                        ),
-                                )
-                                fileNotice = 0
-                                exportLauncher.launch(settingsExportFileName())
-                            },
-                        )
-
-                        "import" -> SettingsOverviewRow(
-                            icon = Icons.Default.Refresh,
-                            title = item.title,
-                            subtitle = item.subtitle,
-                            showChevron = false,
-                            onClick = {
-                                fileNotice = 0
-                                // Viele Dateimanager melden JSON als octet-stream,
-                                // deshalb bewusst alle Dateien anbieten.
-                                importLauncher.launch(arrayOf("*/*"))
-                            },
                         )
 
                         "about" -> SettingsOverviewRow(
@@ -5043,94 +5228,10 @@ private fun SettingsOverview(
                         else -> Unit
                     }
                 }
-                // G2: Zuruecksetzen je Bereich - nur Felder dieses Bereichs.
-                if (area != null) {
-                    SettingsGroupDivider()
-                    SettingsResetRow(enabled = !busy, onClick = { resetArea = area })
-                }
-            }
-            // Kurze Rueckmeldung im Bereich: Reset bzw. Export/Import.
-            if (area != null && resetNotice == area) {
-                Text(
-                    text = stringResource(R.string.settings_reset_done, settingsAreaLabel(area)),
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            if (section.title == dataSection && fileNotice != 0) {
-                Text(
-                    text = stringResource(fileNotice),
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                )
             }
         }
     }
 
-    // G2: Bestaetigung vor dem Zuruecksetzen (AlertDialog wie im Bestand).
-    resetArea?.let { area ->
-        AlertDialog(
-            onDismissRequest = { resetArea = null },
-            title = {
-                Text(stringResource(R.string.settings_reset_title, settingsAreaLabel(area)))
-            },
-            text = { Text(stringResource(R.string.settings_reset_text, settingsAreaLabel(area))) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        // Nur die Felder dieses Bereichs, sofort speichern.
-                        onSettingsChange(resetSettingsArea(settings, area))
-                        resetNotice = area
-                        fileNotice = 0
-                        resetArea = null
-                    },
-                ) { Text(stringResource(R.string.settings_reset)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { resetArea = null }) {
-                    Text(stringResource(R.string.settings_reset_cancel))
-                }
-            },
-        )
-    }
-
-    // G3: Import erst nach Bestaetigung uebernehmen (Profile bleiben aussen vor).
-    pendingImport?.let { imported ->
-        AlertDialog(
-            onDismissRequest = { pendingImport = null },
-            title = { Text(stringResource(R.string.settings_import_title)) },
-            text = { Text(stringResource(R.string.settings_import_text)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onSettingsChange(imported.settings)
-                        onModulesChange(imported.modules)
-                        fileNotice = R.string.settings_import_done
-                        pendingImport = null
-                    },
-                ) { Text(stringResource(R.string.settings_import_apply)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingImport = null }) {
-                    Text(stringResource(R.string.settings_reset_cancel))
-                }
-            },
-        )
-    }
-
-    // G3: Die Datei war keine Einstellungsdatei (oder nicht lesbar).
-    importError?.let { text ->
-        AlertDialog(
-            onDismissRequest = { importError = null },
-            title = { Text(stringResource(R.string.settings_import)) },
-            text = { Text(text) },
-            confirmButton = {
-                TextButton(onClick = { importError = null }) {
-                    Text(stringResource(R.string.games_cancel))
-                }
-            },
-        )
-    }
 }
 
 @Composable
@@ -5295,6 +5396,7 @@ private fun settingsAreaLabel(area: SettingsArea): String = when (area) {
     SettingsArea.CONTROL -> stringResource(R.string.settings_area_control)
     SettingsArea.HISTORY -> stringResource(R.string.settings_area_history)
     SettingsArea.PLUGINS -> stringResource(R.string.settings_area_plugins)
+    SettingsArea.LIVE_CARD -> stringResource(R.string.settings_area_live_card)
 }
 
 @Composable
@@ -5359,6 +5461,15 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
     ThemeMode.SYSTEM -> "System"
     ThemeMode.LIGHT -> "Hell"
     ThemeMode.DARK -> "Dunkel"
+}
+
+@Composable
+private fun accentColorLabel(color: AccentColor): String = when (color) {
+    AccentColor.PRIMARY -> stringResource(R.string.settings_accent_primary)
+    AccentColor.SECONDARY -> stringResource(R.string.settings_accent_secondary)
+    AccentColor.TERTIARY -> stringResource(R.string.settings_accent_tertiary)
+    AccentColor.ERROR -> stringResource(R.string.settings_accent_error)
+    AccentColor.SURFACE -> stringResource(R.string.settings_accent_surface)
 }
 
 // ---------------------------------------------------------------------------

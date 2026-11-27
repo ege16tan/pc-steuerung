@@ -24,6 +24,11 @@
 
     <!-- Einrichtung -->
     <string name="setup_cancel">Abbrechen und zurück</string>
+    <string name="setup_discover">PC im Netzwerk suchen</string>
+    <string name="setup_discover_sub">IP automatisch ermitteln und PC-Steuerung-Agent finden</string>
+    <string name="setup_discover_none">Kein PC-Steuerung-Agent im Netzwerk gefunden.</string>
+    <string name="setup_discover_adopt">Übernehmen</string>
+    <string name="setup_discover_searching">Suche …</string>
 
     <!-- Einstellungen -->
     <string name="settings_title">Einstellungen</string>
@@ -37,15 +42,22 @@
     <string name="settings_refresh">Status-Aktualisierung</string>
     <string name="settings_refresh_value">Alle %1$d Sekunden</string>
     <string name="settings_section_control">STEUERUNG</string>
-    <string name="settings_simulation">Simulationsmodus</string>
-    <string name="settings_simulation_on">Aktiv – Aktionen werden nur geloggt</string>
-    <string name="settings_simulation_off">Aus – Aktionen werden wirklich ausgeführt</string>
-    <string name="settings_simulation_unknown">Modus kann gerade nicht ermittelt werden</string>
     <!-- Dauerkarte: ongoing-Benachrichtigung "PC ist an" mit zwei Knoepfen -->
     <string name="settings_online_card">Dauerkarte in der Statusleiste</string>
     <string name="settings_online_card_on">Aktiv – zeigt „An“ mit Herunterfahren und Ruhezustand, solange der PC läuft</string>
     <string name="settings_online_card_off">Aus – nur Downloads, Countdown und Startphase werden angezeigt</string>
-    <string name="settings_webui">PC-Weboberfläche</string>
+    <!-- Darstellung: Akzentfarbe und Kachelanzahl -->
+    <string name="settings_accent_color">Akzentfarbe</string>
+    <string name="settings_accent_color_sub">Farbe für Schalter, Kacheln und aktive Elemente</string>
+    <string name="settings_accent_primary">Primär</string>
+    <string name="settings_accent_secondary">Sekundär</string>
+    <string name="settings_accent_tertiary">Tertiär</string>
+    <string name="settings_accent_error">Fehler</string>
+    <string name="settings_accent_surface">Oberfläche</string>
+    <string name="settings_tile_columns">Kachelanzahl im Startbildschirm</string>
+    <string name="settings_tile_columns_sub">2 oder 3 Spalten für die Home-Kacheln</string>
+    <string name="settings_tile_columns_2">2 Spalten</string>
+    <string name="settings_tile_columns_3">3 Spalten</string>
     <!-- Verlauf: Aufbewahrung / geladene Logzeilen (SharedPreferences history_lines) -->
     <string name="settings_section_history">VERLAUF</string>
     <string name="settings_history">Aufbewahrung im Verlauf</string>
@@ -61,12 +73,30 @@
     <string name="settings_search_empty">Keine Treffer.</string>
     <string name="settings_section_appearance">DARSTELLUNG</string>
     <string name="settings_section_plugins">PLUGINS</string>
-    <string name="settings_section_updates">UPDATES</string>
-    <string name="settings_updates">Aktualisierungen</string>
     <string name="settings_section_data">SICHERN UND WIEDERHERSTELLEN</string>
     <string name="settings_section_about">WEITERE INFORMATIONEN</string>
     <string name="settings_about">Über die App</string>
-    <!-- Ein Knopf je Bereich; der Dialog erklaert, was zurueckgesetzt wird. -->
+    <string name="settings_updates">Aktualisierungen</string>
+    <!-- Sicherung: Export/Import nur der App-Einstellungen (keine Profile/Passwörter). -->
+    <string name="settings_backup">Sicherung &amp; Wiederherstellung</string>
+    <string name="settings_backup_sub">Einstellungen als JSON exportieren oder importieren</string>
+    <string name="settings_backup_export">Einstellungen exportieren</string>
+    <string name="settings_backup_export_sub">JSON-Datei ohne Zugangsdaten</string>
+    <string name="settings_backup_import">Einstellungen importieren</string>
+    <string name="settings_backup_import_sub">JSON-Datei übernehmen (ohne Profile)</string>
+    <string name="settings_backup_done">Einstellungen gesichert.</string>
+    <string name="settings_backup_export_done">Exportiert.</string>
+    <string name="settings_backup_export_failed">Export fehlgeschlagen.</string>
+    <string name="settings_backup_export_cancelled">Export abgebrochen.</string>
+    <string name="settings_backup_import_done">Importiert.</string>
+    <string name="settings_backup_import_cancelled">Import abgebrochen.</string>
+    <string name="settings_backup_import_unreadable">Die Datei konnte nicht gelesen werden.</string>
+    <string name="settings_backup_import_invalid">Die Datei ist keine PC-Steuerung-Einstellungsdatei.</string>
+    <string name="settings_backup_import_version">Die Datei stammt aus einer anderen App-Version und wird nicht importiert.</string>
+    <string name="settings_backup_import_title">Einstellungen importieren?</string>
+    <string name="settings_backup_import_text">Übernommen werden Einstellungen. Profile enthalten Zugangsdaten und werden nicht importiert.</string>
+    <string name="settings_backup_import_apply">Importieren</string>
+    <!-- Zurücksetzen: jeder Bereich hat eigenen Knopf. -->
     <string name="settings_reset">Zurücksetzen</string>
     <string name="settings_reset_title">%1$s zurücksetzen?</string>
     <string name="settings_reset_text">Nur die Einstellungen im Bereich „%1$s“ werden auf die Standardwerte gesetzt. Andere Bereiche und die PC-Profile bleiben unverändert.</string>
@@ -76,22 +106,7 @@
     <string name="settings_area_control">Steuerung</string>
     <string name="settings_area_history">Verlauf</string>
     <string name="settings_area_plugins">Plugins</string>
-    <!-- Export/Import: JSON ohne Zugangsdaten, Profile bleiben aussen vor. -->
-    <string name="settings_export">Einstellungen exportieren</string>
-    <string name="settings_export_sub">JSON-Datei ohne Zugangsdaten</string>
-    <string name="settings_import">Einstellungen importieren</string>
-    <string name="settings_import_sub">JSON-Datei übernehmen (ohne Profile)</string>
-    <string name="settings_export_done">Einstellungen exportiert.</string>
-    <string name="settings_export_cancelled">Export abgebrochen.</string>
-    <string name="settings_export_failed">Export fehlgeschlagen.</string>
-    <string name="settings_import_cancelled">Import abgebrochen.</string>
-    <string name="settings_import_unreadable">Die Datei konnte nicht gelesen werden.</string>
-    <string name="settings_import_invalid">Die Datei ist keine PC-Steuerung-Einstellungsdatei.</string>
-    <string name="settings_import_version">Die Datei stammt aus einer anderen App-Version und wird nicht importiert.</string>
-    <string name="settings_import_title">Einstellungen importieren?</string>
-    <string name="settings_import_text">Übernommen werden Einstellungen und Module. Profile enthalten Zugangsdaten und werden nicht importiert.</string>
-    <string name="settings_import_apply">Importieren</string>
-    <string name="settings_import_done">Einstellungen importiert.</string>
+    <string name="settings_area_live_card">Live-Karte</string>
 
     <!-- Plugins des PC-Agenten (Markt+) -->
     <string name="plugins_section_title">PLUGINS AUF DEM PC</string>
@@ -458,4 +473,17 @@
     <string name="section_updates">UPDATES</string>
     <string name="section_data">SICHERN UND WIEDERHERSTELLEN</string>
     <string name="section_about">WEITERE INFORMATIONEN</string>
+
+    <!-- Über die App: Credits, Lizenz, Links -->
+    <string name="settings_about_title">Über PC Steuerung</string>
+    <string name="settings_about_subtitle">Lokale Heimnetz-Steuerung für Windows-PCs</string>
+    <string name="settings_about_version">Version %1$s</string>
+    <string name="settings_about_credits_title">Verwendete Bibliotheken</string>
+    <string name="settings_about_credits">Jetpack Compose · CameraX · ML Kit Barcode Scanning · Kotlin Serialization · kotlinx.coroutines</string>
+    <string name="settings_about_license_title">Lizenz</string>
+    <string name="settings_about_license">Eigene Entwicklung – nicht öffentlich lizenziert.</string>
+    <string name="settings_about_github">GitHub-Repository</string>
+    <string name="settings_about_github_sub">https://github.com/ege16tan/pc-steuerung</string>
+    <string name="settings_about_permissions_title">Berechtigungen</string>
+    <string name="settings_about_permissions">Internet, Netzwerk-Status, Kamera (QR-Scan), Benachrichtigungen (Dauerkarte), Autostart nach Boot</string>
 </resources>

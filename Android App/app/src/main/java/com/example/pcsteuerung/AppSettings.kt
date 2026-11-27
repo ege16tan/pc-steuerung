@@ -8,6 +8,9 @@ import java.lang.reflect.Type
 /** Darstellung: der Systemeinstellung folgen oder fest hell/dunkel. */
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 enum class UpdateInstallMethod { SYSTEM, SHIZUKU }
+enum class AccentColor { PRIMARY, SECONDARY, TERTIARY, ERROR, SURFACE }
+/** Akzentfarbe fuer die UI (fester Material-Palette-Katalog). */
+val ACCENT_COLOR_DEFAULT = AccentColor.PRIMARY
 
 /**
  * Kleine UI-Einstellungen, die fuer alle PC-Profile gelten.
@@ -38,6 +41,10 @@ data class AppSettings(
      * Agenten laedt (`GET /log?lines=`). Auswahl 200/500/1000, Default 200.
      */
     val historyLines: Int = HISTORY_LINES_DEFAULT,
+    /** Akzentfarbe fuer die UI (fester Material-Palette-Katalog). */
+    val accentColor: AccentColor = ACCENT_COLOR_DEFAULT,
+    /** Kachelanzahl in der Home-Ansicht: 2 oder 3. */
+    val tileColumns: Int = 2,
 )
 
 object AppSettingsStore {
@@ -53,6 +60,8 @@ object AppSettingsStore {
     private const val KEY_LIVE_STARTING = "live_starting"
     private const val KEY_PLUGIN_AUTO_CLOSE = "plugin_auto_close_map"
     private const val KEY_HISTORY_LINES = "history_lines"
+    private const val KEY_ACCENT_COLOR = "accent_color"
+    private const val KEY_TILE_COLUMNS = "tile_columns"
 
     /** Erlaubte Abstaende fuer die Status-Abfrage (Sekunden). */
     val REFRESH_CHOICES = listOf(2, 5, 10, 30)
@@ -81,6 +90,11 @@ object AppSettingsStore {
                 emptyMap()
             }
         }
+        val accentColor = prefs.getString(KEY_ACCENT_COLOR, null)
+            ?.let { runCatching { AccentColor.valueOf(it) }.getOrNull() }
+            ?: ACCENT_COLOR_DEFAULT
+        val tileColumns = prefs.getInt(KEY_TILE_COLUMNS, 2)
+        val tileColumnsSafe = if (tileColumns in listOf(2, 3)) tileColumns else 2
         return AppSettings(
             themeMode = theme,
             refreshSeconds = refresh,
@@ -92,6 +106,8 @@ object AppSettingsStore {
             liveStarting = prefs.getBoolean(KEY_LIVE_STARTING, true),
             pluginAutoClose = pluginAutoClose,
             historyLines = decodeHistoryLines(prefs.getString(KEY_HISTORY_LINES, null)),
+            accentColor = accentColor,
+            tileColumns = tileColumnsSafe,
         )
     }
 
@@ -108,6 +124,8 @@ object AppSettingsStore {
             .putBoolean(KEY_LIVE_STARTING, settings.liveStarting)
             .putString(KEY_PLUGIN_AUTO_CLOSE, gson.toJson(settings.pluginAutoClose))
             .putString(KEY_HISTORY_LINES, encodeHistoryLines(settings.historyLines))
+            .putString(KEY_ACCENT_COLOR, settings.accentColor.name)
+            .putInt(KEY_TILE_COLUMNS, settings.tileColumns)
             .apply()
     }
 }

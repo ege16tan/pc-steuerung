@@ -33,7 +33,6 @@ class SettingsTest {
             title = "STEUERUNG",
             entries = listOf(
                 entry("online_card", "Dauerkarte in der Statusleiste", "Aktiv", "STEUERUNG"),
-                entry("simulation", "Simulationsmodus", "Aus", "STEUERUNG"),
             ),
         ),
         SettingsSearchSection(
@@ -66,7 +65,7 @@ class SettingsTest {
         assertEquals(1, hits.size)
         // Beide Eintraege des Bereichs treffen, die Ueberschrift bleibt sichtbar.
         assertEquals("STEUERUNG", hits[0].title)
-        assertEquals(listOf("online_card", "simulation"), hits[0].entries.map { it.key })
+        assertEquals(listOf("online_card"), hits[0].entries.map { it.key })
     }
 
     @Test
@@ -83,9 +82,9 @@ class SettingsTest {
 
     @Test
     fun `Suche trimmt den Begriff`() {
-        val hits = searchSettings(sections, "  Simulationsmodus  ")
+        val hits = searchSettings(sections, "  Dauerkarte  ")
         assertEquals(1, hits.size)
-        assertEquals(listOf("simulation"), hits[0].entries.map { it.key })
+        assertEquals(listOf("online_card"), hits[0].entries.map { it.key })
     }
 
     @Test
@@ -93,9 +92,9 @@ class SettingsTest {
         val all = searchSettings(sections, "")
         assertEquals(sections.map { it.title }, all.map { it.title })
         assertEquals(3, all.size)
-        assertEquals(5, all.sumOf { it.entries.size })
+        assertEquals(4, all.sumOf { it.entries.size })
         // Nur Leerzeichen zaehlt wie eine leere Suche.
-        assertEquals(5, searchSettings(sections, "   ").sumOf { it.entries.size })
+        assertEquals(4, searchSettings(sections, "   ").sumOf { it.entries.size })
     }
 
     @Test
@@ -173,10 +172,17 @@ class SettingsTest {
         // update_install_method gehoert zu keinem Bereich und bleibt deshalb stehen.
         assertEquals(AppSettings(updateInstallMethod = UpdateInstallMethod.SHIZUKU), settings)
         // Jeder Bereich nennt genau seine Felder.
-        assertEquals(listOf("theme_mode", "refresh_seconds"), settingsAreaFields(SettingsArea.APPEARANCE))
+        assertEquals(
+            listOf("theme_mode", "refresh_seconds", "accent_color", "tile_columns"),
+            settingsAreaFields(SettingsArea.APPEARANCE),
+        )
         assertEquals(listOf("online_card"), settingsAreaFields(SettingsArea.CONTROL))
         assertEquals(listOf("history_lines"), settingsAreaFields(SettingsArea.HISTORY))
         assertEquals(listOf("plugin_auto_close"), settingsAreaFields(SettingsArea.PLUGINS))
+        assertEquals(
+            listOf("live_downloads", "live_countdown", "live_warnings", "live_starting"),
+            settingsAreaFields(SettingsArea.LIVE_CARD),
+        )
     }
 
     // -----------------------------------------------------------------------
