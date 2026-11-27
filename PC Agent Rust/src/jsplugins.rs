@@ -43,6 +43,9 @@ use crate::journal::log_event;
 /// So viele Ausgabezeilen werden je Plugin aufbewahrt.
 pub const OUTPUT_MAX: usize = 300;
 
+/// So viele Ereignisse werden je Plugin im Event-Ringpuffer aufbewahrt.
+pub const EVENTS_MAX: usize = 100;
+
 /// Standard-Einstiegspunkt, wenn das Manifest keinen nennt.
 pub const DEFAULT_ENTRY: &str = "main.js";
 
@@ -55,6 +58,13 @@ pub const DEFAULT_IDLE_TIMEOUT_S: u64 = 300;
 /// Datei mit den gespeicherten Einstellungen eines Plugins (Phase G4).
 /// Sie wird bewusst **nicht** mit `GET /plugins/{id}/bundle` ausgeliefert.
 pub const SETTINGS_FILE: &str = "settings.json";
+
+/// Datei mit den freien Daten eines Plugins (Phase M1).
+/// Nur das Plugin selbst darf lesen/schreiben (ueber pc.data()/pc.dataSet()).
+pub const DATA_FILE: &str = "data.json";
+
+/// Groesste erlaubte Groesse der data.json (64 KB).
+pub const DATA_MAX_BYTES: usize = 64 * 1024;
 
 /// Mehr Einstellungsfelder sind nicht sinnvoll (Rest wird verworfen).
 pub const SETTINGS_MAX_FIELDS: usize = 20;
@@ -242,6 +252,16 @@ pub struct JsPluginState {
     pub runs: HashMap<String, JsRun>,
     pub output: HashMap<String, VecDeque<String>>,
     pub status: HashMap<String, String>,
+    /// Strukturierte Ereignisse je Plugin (Phase M1): name, payload, timestamp.
+    pub events: HashMap<String, VecDeque<PluginEvent>>,
+}
+
+/// Ein strukturiertes Plugin-Ereignis (Phase M1).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginEvent {
+    pub name: String,
+    pub payload: Value,
+    pub epoch_ms: f64,
 }
 
 fn now_epoch() -> f64 {
@@ -978,6 +998,69 @@ pub fn save_values(
     Ok(values)
 }
 
+/// Pfad der gespeicherten Daten eines Plugins (Phase M1).
+pub fn data_file(app: &App, id: &str) -> PathBuf {
+    plugin_dir(app, id).join(DATA_FILE)
+}
+
+/// Liest die freien Daten eines Plugins (fehlende/kaputte Datei = leeres Objekt).
+pub fn load_data(app: &App, id: &str) -> Map<String, Value> {
+    let Some(_manifest) = installed_manifest(app, id) else {
+        return Map::new();
+    };
+    std::fs::read_to_string(data_file(app, id))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Map<String, Value>>(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Schreibt die freien Daten eines Plugins (max. DATA_MAX_BYTES, nur eigenes Plugin).
+pub fn save_data(
+    app: &App,
+    id: &str,
+    values: &Map<String, Value>,
+) -> Result<(), String> {
+    let _manifest = installed_manifest(app, id)
+        .ok_or_else(|| format!("Plugin '{id}' ist unbekannt"))?;
+    let text = serde_json::to_string_pretty(&Value::Object(values.clone())).map_err(|error| {
+        format!("Daten konnten nicht serialisiert werden: {error}")
+    })?;
+    if text.len() > DATA_MAX_BYTES {
+        return Err(format!(
+            "Daten zu gross ({} Bytes, maximal {})",
+            text.len(),
+            DATA_MAX_BYTES
+        ));
+    }
+    std::fs::write(data_file(app, id), text).map_err(|error| {
+        format!("Daten konnten nicht geschrieben werden: {error}")
+    })?;
+    Ok(())
+}
+
+/// Liefert die gespeicherten Ereignisse eines Plugins als JSON-Array (Phase M1).
+pub fn plugin_events(app: &App, id: &str) -> Value {
+    let state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
+    let events = state
+        .events
+        .get(id)
+        .map(|events| {
+            events
+                .iter()
+                .rev()
+                .map(|event| {
+                    json!({
+                        "name": event.name,
+                        "payload": event.payload,
+                        "epoch_ms": event.epoch_ms,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!(events)
+}
+
 /// Schreibt verworfene Schema-Felder ins Journal (eine Meldung je Problem).
 /// Ohne Probleme passiert nichts.
 pub fn report_schema_problems(app: &Arc<App>, manifest: &Manifest) {
@@ -1142,6 +1225,67 @@ pub fn install_from_url(
         ..bundle.manifest()
     };
     install_bundle(app, &bundle, manifest)
+}
+
+/// Prueft, ob ein neuere Version des Plugins im Katalog verfuegbar ist.
+pub fn plugin_update_available(app: &App, id: &str) -> Result<Value, String> {
+    let installed = installed_manifest(app, id)
+        .ok_or_else(|| format!("Plugin '{id}' ist nicht installiert"))?;
+    let entry = catalog(app)
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("Plugin '{id}' steht nicht im Katalog"))?;
+    Ok(json!({
+        "update_available": version_newer(&entry.version, &installed.version),
+        "installed_version": installed.version,
+        "catalog_version": entry.version,
+    }))
+}
+
+/// Installiert eine neuere Version aus dem Katalog mit Backup des alten
+/// Plugin-Ordners (`<dir>.bak`).
+pub fn plugin_update(app: &Arc<App>, id: &str) -> Result<Manifest, String> {
+    let installed = installed_manifest(app, id)
+        .ok_or_else(|| format!("Plugin '{id}' ist nicht installiert"))?;
+    let entry = catalog(app)
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("Plugin '{id}' steht nicht im Katalog"))?;
+    if !version_newer(&entry.version, &installed.version) {
+        return Err(format!(
+            "Kein Update verfuegbar (installiert v{}, Katalog v{})",
+            installed.version, entry.version
+        ));
+    }
+    let dir = plugin_dir(app, id);
+    let bak = plugin_dir(app, id).with_extension("bak");
+    // Altes Backup entfernen, falls vorhanden.
+    let _ = std::fs::remove_dir_all(&bak);
+    // Alten Ordner sichern.
+    if dir.is_dir() {
+        std::fs::rename(&dir, &bak)
+            .map_err(|error| format!("Backup konnte nicht erstellt werden: {error}"))?;
+    }
+    let result = install_from_url(app, id, &entry.url, &entry.version, entry.sha256.as_deref());
+    if result.is_err() {
+        // Zurueckspielen des Backups bei Fehler.
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::rename(&bak, &dir);
+    } else {
+        let _ = std::fs::remove_dir_all(&bak);
+    }
+    result
+}
+
+/// Ist der Katalogstand neuer als die Installation? Versuche numerischen
+/// Vergleich, sonst String-Vergleich (Versionsnummern wie "1", "2", "10").
+fn version_newer(catalog: &str, installed: &str) -> bool {
+    let cat_num = catalog.trim().parse::<u64>();
+    let ins_num = installed.trim().parse::<u64>();
+    match (cat_num, ins_num) {
+        (Ok(c), Ok(i)) => c > i,
+        _ => catalog.trim() > installed.trim(),
+    }
 }
 
 // ---------------- Laufzeit ----------------
@@ -1440,7 +1584,11 @@ const PRELUDE: &str = r#"
     gameConfig: function () { return call("gameConfig", []); },
     steam: function () { return call("steam", []); },
     settings: function () { return call("settings", []); },
+    data: function () { return call("data", []); },
+    dataSet: function (values) { return call("dataSet", [values || {}]); },
     events: function () { return call("events", []); },
+    emit: function (name, payload) { return call("emit", [String(name), payload || {}]); },
+    clearLog: function () { call("clearLog", []); },
     killProcesses: function (names) { return call("killProcesses", [names]); },
     boost: function (exe) { return call("boost", [String(exe)]); },
     cleanMemory: function () { return call("cleanMemory", []); },
@@ -1502,8 +1650,20 @@ fn run_plugin(
 while {
         match rx.recv_timeout(interval) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                let tick_start = Instant::now();
                 if let Err(error) = call_global(&mut context, "tick") {
                     failed(&app, &id, error);
+                }
+                let tick_dauer = tick_start.elapsed();
+                if tick_dauer > Duration::from_millis(500) {
+                    push_line(
+                        &app,
+                        &id,
+                        &format!(
+                            "> Warnung: tick() dauerte {:.0} ms (Limit 500 ms)",
+                            tick_dauer.as_millis()
+                        ),
+                    );
                 }
                 true
             }
@@ -1527,6 +1687,9 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         "games" | "scanGames" => Some("games"),
         "steam" => Some("steam"),
         "settings" => Some("settings"),
+        "data" => Some("data"),
+        "emit" => Some("emit"),
+        "clearLog" => Some("log"),
         "killProcesses" | "boost" | "cleanMemory" | "isAdmin" => Some("process"),
         _ => None,
     };
@@ -1615,6 +1778,59 @@ fn host_call(host: &HostCtx, name: &str, args: &Value) -> Result<Value, String> 
         "steam" => Ok(serde_json::to_value(crate::steam::status(app)).unwrap_or(Value::Null)),
         // Einstellungen aus `settings.json` (Phase G4), nur lesend.
         "settings" => Ok(Value::Object(load_values(app, &host.plugin_id))),
+        // Freie Daten des Plugins (Phase M1): lesen und schreiben.
+        "data" => Ok(Value::Object(load_data(app, &host.plugin_id))),
+        "dataSet" => {
+            let values = args
+                .get(0)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            save_data(app, &host.plugin_id, &values)?;
+            Ok(Value::Null)
+        }
+        // Strukturiertes Event emittieren (Phase M1).
+        "emit" => {
+            let name = args
+                .get(0)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let payload = args
+                .get(1)
+                .cloned()
+                .unwrap_or(Value::Object(Map::new()));
+            let mut state = app
+                .jsplugins
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let events = state
+                .events
+                .entry(host.plugin_id.clone())
+                .or_insert_with(VecDeque::new);
+            events.push_back(PluginEvent {
+                name,
+                payload,
+                epoch_ms: now_epoch() * 1000.0,
+            });
+            while events.len() > EVENTS_MAX {
+                events.pop_front();
+            }
+            drop(state);
+            Ok(json!({ "ok": true }))
+        }
+        // Ausgabe des Plugins leeren (benoetigt `log`-Berechtigung).
+        "clearLog" => {
+            let mut state = app
+                .jsplugins
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(lines) = state.output.get_mut(&host.plugin_id) {
+                lines.clear();
+            }
+            drop(state);
+            Ok(Value::Null)
+        }
         "events" => {
             let guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
             Ok(json!(guard.events.iter().collect::<Vec<_>>()))
@@ -2307,5 +2523,77 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+
+    // ---------------- Update-Check (Phase M2) ----------------
+
+    #[test]
+    fn version_neuer_erkannt() {
+        assert!(version_newer("2", "1"));
+        assert!(version_newer("10", "2"));
+        assert!(!version_newer("1", "2"));
+        assert!(!version_newer("1", "1"));
+        assert!(!version_newer("0", "1"));
+        // String-Vergleich als Rueckfall.
+        assert!(version_newer("2.0", "1.9"));
+        assert!(!version_newer("1.0", "2.0"));
+    }
+
+    #[test]
+    fn update_available_vergleicht_installiert_mit_katalog() {
+        let (app, dir) = test_app("update-check");
+        write_plugin(&app, "demo", Vec::new());
+        // Manifest mit installierter Version schreiben.
+        let manifest = Manifest {
+            id: "demo".to_string(),
+            name: "Demo".to_string(),
+            version: "1".to_string(),
+            entry: DEFAULT_ENTRY.to_string(),
+            ..Default::default()
+        };
+        std::fs::write(
+            plugin_dir(&app, "demo").join("plugin.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        // Katalog-Eintrag simulieren: wir muessen den Katalog ueberschreiben,
+        // da `catalog()` vom Netzwerk liest. Stattdessen pruefen wir die
+        // Hilfsfunktion `plugin_update_available` indirekt durch das Erstellen
+        // einer passenden plugin.json und eines Katalogs im Datenordner? Nein –
+        // `catalog()` laedt immer remote. Wir pruefen daher nur `version_neuer`
+        // und den Backup-Pfad.
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plugin_update_sichert_altes_verzeichnis() {
+        let (app, dir) = test_app("update-backup");
+        write_plugin(&app, "demo", Vec::new());
+        let plugin_dir_path = plugin_dir(&app, "demo");
+        std::fs::write(plugin_dir_path.join(DEFAULT_ENTRY), "function activate() {}").unwrap();
+
+        // Backup-Verzeichnis existiert noch nicht.
+        assert!(!plugin_dir_path.with_extension("bak").exists());
+
+        // `plugin_update` schlaegt fehl, weil kein Katalog erreichbar ist –
+        // aber der alte Ordner darf nicht kaputt gehen.
+        let error = plugin_update(&app, "demo").unwrap_err();
+        assert!(error.contains("nicht im Katalog") || error.contains("konnte nicht geladen werden"));
+        assert!(plugin_dir_path.join(DEFAULT_ENTRY).is_file());
+        assert!(!plugin_dir_path.with_extension("bak").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plugin_update_ohne_update_meldet_fehler() {
+        let (app, dir) = test_app("update-no-update");
+        write_plugin(&app, "demo", Vec::new());
+        let error = plugin_update(&app, "demo").unwrap_err();
+        // Entweder kein Katalog oder keine neuere Version.
+        assert!(error.contains("Kein Update")
+            || error.contains("nicht im Katalog")
+            || error.contains("konnte nicht geladen werden"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
 }

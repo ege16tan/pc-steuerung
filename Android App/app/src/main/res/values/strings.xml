@@ -134,6 +134,13 @@
     <string name="plugins_detail_output">AUSGABE</string>
     <string name="plugins_detail_output_empty">Noch keine Ausgabe.</string>
     <string name="plugins_detail_refresh">Aktualisieren</string>
+    <!-- Phase M4: Strukturierte Ansicht (Ereignisse, Daten, Update) -->
+    <string name="plugins_detail_events">EREIGNISSE</string>
+    <string name="plugins_detail_event_no_payload">(ohne Nutzdaten)</string>
+    <string name="plugins_detail_data">DATEN</string>
+    <string name="plugin_update_available">Update verfuegbar (v%1$s -> v%2$s)</string>
+    <string name="plugin_update_hint">Update verfuegbar: installiert v%1$s, Katalog v%2$s</string>
+    <string name="plugin_action_update">Aktualisieren</string>
     <!-- Einstellung: nach dem Plugin-Start offen bleiben oder zurueck zur Uebersicht -->
     <string name="plugins_auto_close">Manager offen lassen</string>
     <string name="plugins_auto_close_on">An – die Detailseite bleibt nach dem Start eines Plugins offen</string>
@@ -394,6 +401,9 @@
     <string name="routines_conditions">BEDINGUNGEN (OPTIONAL)</string>
     <string name="routines_conditions_hint">Leer lassen heißt: Bedingung egal.</string>
     <string name="routines_conditions_plugin">Plugin muss laufen</string>
+    <string name="routines_conditions_plugin_event">Plugin-Event (Name)</string>
+    <string name="routines_conditions_data_key">Daten-Schluessel</string>
+    <string name="routines_conditions_data_value">Erwarteter Wert</string>
     <string name="routines_conditions_plan">Energieplan</string>
     <string name="routines_conditions_label">Bedingungen: %1$s</string>
     <string name="routines_any">Egal</string>

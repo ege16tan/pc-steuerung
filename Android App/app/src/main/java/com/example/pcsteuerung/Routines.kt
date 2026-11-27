@@ -84,14 +84,22 @@ val ROUTINE_DELAY_RANGE = 0..3600
 // Datenmodell
 // ---------------------------------------------------------------------------
 
-/** Bedingungen: Wochentage, laufendes Plugin, aktiver Energieplan (leer = egal). */
+/** Bedingungen: Wochentage, laufendes Plugin, Plugin-Event, Plugin-Datenwert (leer = egal). */
 data class RoutineConditions(
     val days: List<Int> = emptyList(),
     val plugin: String = "",
     val powerPlan: String = "",
+    /** Name eines Events, das das Plugin ausgegeben haben muss. */
+    val pluginEvent: String = "",
+    /** Data-Schluessel, der den erwarteten Wert haben muss. */
+    val dataKey: String = "",
+    /** Erwarteter Wert fuer den Data-Schluessel. */
+    val dataValue: String = "",
 ) {
     /** Keine Bedingung gesetzt - dann greift die Routine immer. */
-    val isEmpty: Boolean get() = days.isEmpty() && plugin.isBlank() && powerPlan.isBlank()
+    val isEmpty: Boolean get() =
+        days.isEmpty() && plugin.isBlank() && powerPlan.isBlank() &&
+            pluginEvent.isBlank() && dataKey.isBlank()
 }
 
 /** Ausloeser einer Routine. */
@@ -190,6 +198,9 @@ private fun JSONObject.routineConditions(): RoutineConditions {
         days = json.routineDays("days"),
         plugin = json.routineText("plugin"),
         powerPlan = json.routineText("power_plan"),
+        pluginEvent = json.routineText("plugin_event"),
+        dataKey = json.routineText("data_key"),
+        dataValue = json.routineText("data_value"),
     )
 }
 
@@ -309,6 +320,9 @@ fun routineJson(routine: RoutineInfo): String {
                 .put("days", JSONArray(routine.trigger.conditions.days))
                 .put("plugin", routine.trigger.conditions.plugin)
                 .put("power_plan", routine.trigger.conditions.powerPlan)
+                .put("plugin_event", routine.trigger.conditions.pluginEvent)
+                .put("data_key", routine.trigger.conditions.dataKey)
+                .put("data_value", routine.trigger.conditions.dataValue)
         )
     val actions = JSONArray()
     routine.actions.forEach { action ->
@@ -417,10 +431,12 @@ fun routineNextRunText(nextRun: String): String = nextRun.trim()
 
 /** Bedingungen als Kurztext ("Mo–Fr · game-optimizer · Energiesparen"). */
 fun routineConditionsText(conditions: RoutineConditions): String {
-    val parts = ArrayList<String>(3)
+    val parts = ArrayList<String>(5)
     val days = routineDaysText(conditions.days)
     if (days.isNotEmpty()) parts.add(days)
     if (conditions.plugin.isNotBlank()) parts.add(conditions.plugin)
+    if (conditions.pluginEvent.isNotBlank()) parts.add("Event ${conditions.pluginEvent}")
+    if (conditions.dataKey.isNotBlank()) parts.add("${conditions.dataKey}=${conditions.dataValue}")
     if (conditions.powerPlan.isNotBlank()) parts.add(planLabel(conditions.powerPlan))
     return parts.joinToString(" · ")
 }
@@ -442,6 +458,9 @@ data class RoutineDraft(
     val conditionDays: List<Int> = emptyList(),
     val conditionPlugin: String = "",
     val conditionPowerPlan: String = "",
+    val conditionPluginEvent: String = "",
+    val conditionDataKey: String = "",
+    val conditionDataValue: String = "",
     val actions: List<RoutineActionDraft> = listOf(RoutineActionDraft()),
 )
 
@@ -510,6 +529,9 @@ fun routineFromDraft(draft: RoutineDraft): RoutineInfo {
             days = draft.conditionDays.filter { it in 1..7 }.distinct().sorted(),
             plugin = draft.conditionPlugin.trim(),
             powerPlan = draft.conditionPowerPlan.trim(),
+            pluginEvent = draft.conditionPluginEvent.trim(),
+            dataKey = draft.conditionDataKey.trim(),
+            dataValue = draft.conditionDataValue.trim(),
         ),
     )
     val actions = draft.actions.map { step ->
@@ -548,6 +570,9 @@ fun routineToDraft(routine: RoutineInfo): RoutineDraft = RoutineDraft(
     conditionDays = routine.trigger.conditions.days,
     conditionPlugin = routine.trigger.conditions.plugin,
     conditionPowerPlan = routine.trigger.conditions.powerPlan,
+    conditionPluginEvent = routine.trigger.conditions.pluginEvent,
+    conditionDataKey = routine.trigger.conditions.dataKey,
+    conditionDataValue = routine.trigger.conditions.dataValue,
     actions = routine.actions.take(MAX_ROUTINE_STEPS).map { action ->
         RoutineActionDraft(
             type = action.type.ifBlank { ROUTINE_ACTION_POWER_PLAN },

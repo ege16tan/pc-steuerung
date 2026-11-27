@@ -106,3 +106,44 @@ fun pluginKindLabel(plugin: PluginInfo): String =
  * sichtbar; ueberzaehlige Leerzeilen am Ende fallen weg.
  */
 fun parsePluginOutput(body: String): String = body.trimEnd()
+
+/** Ein strukturiertes Ereignis eines Plugins (`GET /plugins/{id}/events`). */
+data class PluginEvent(
+    val name: String,
+    val payload: String,
+    val epoch_ms: Double,
+)
+
+/** Ereignisse eines Plugins auswerten. */
+fun parsePluginEvents(body: String): List<PluginEvent> {
+    if (body.startsWith("HTTP ")) return emptyList()
+    return runCatching {
+        val array = JSONObject(body).optJSONArray("events") ?: JSONArray()
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            PluginEvent(
+                name = item.optString("name", ""),
+                payload = item.optString("payload", ""),
+                epoch_ms = item.optDouble("epoch_ms", 0.0),
+            )
+        }
+    }.getOrDefault(emptyList())
+}
+
+/** Freie Daten eines Plugins (`GET /plugins/{id}/data`). */
+data class PluginData(val values: Map<String, String>)
+
+/** Daten eines Plugins auswerten. */
+fun parsePluginData(body: String): PluginData {
+    if (body.startsWith("HTTP ")) return PluginData(emptyMap())
+    return runCatching {
+        val obj = JSONObject(body)
+        val keys = obj.keys()
+        val out = LinkedHashMap<String, String>()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            out[key] = obj.get(key).toString()
+        }
+        PluginData(out)
+    }.getOrDefault(PluginData(emptyMap()))
+}

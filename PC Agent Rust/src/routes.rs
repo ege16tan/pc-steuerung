@@ -1203,6 +1203,74 @@ pub async fn plugin_output(
     crate::plugins::output(&app, &id, lines).into_response()
 }
 
+/// GET /plugins/{id}/data — freie Daten des Plugins (`data.json`, Phase M1).
+pub async fn plugin_data(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: Auth,
+) -> Response {
+    Json(crate::jsplugins::load_data(&app, &id)).into_response()
+}
+
+/// GET /plugins/{id}/events — strukturierte Ereignisse des Plugins (Phase M1).
+pub async fn plugin_events(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: Auth,
+) -> Response {
+    Json(crate::jsplugins::plugin_events(&app, &id)).into_response()
+}
+
+/// GET /plugins/{id}/update — prüft, ob eine neuere Version im Katalog
+/// verfuegbar ist (Phase M2).
+pub async fn plugin_update_check(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: Auth,
+) -> Response {
+    match crate::jsplugins::plugin_update_available(&app, &id) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => error_response(StatusCode::NOT_FOUND, message),
+    }
+}
+
+/// POST /plugins/{id}/update — installiert eine neuere Version aus dem Katalog
+/// mit Backup des alten Plugin-Ordners (Phase M2).
+pub async fn plugin_update(
+    State(app): State<SharedApp>,
+    Path(id): Path<String>,
+    _auth: WriteAuth,
+) -> Response {
+    let worker = Arc::clone(&app);
+    let wanted = id.clone();
+    let result = tokio::task::spawn_blocking(move || crate::jsplugins::plugin_update(&worker, &wanted))
+        .await
+        .unwrap_or_else(|error| Err(format!("Abbruch: {error}")));
+    match result {
+        Ok(manifest) => {
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
+            log_event(
+                &app,
+                &mut guard,
+                "plugin",
+                &format!("{} auf v{} aktualisiert", manifest.name, manifest.version),
+                true,
+            );
+            Json(json!({
+                "ok": true,
+                "id": manifest.id,
+                "version": manifest.version,
+            }))
+            .into_response()
+        }
+        Err(message) => {
+            let mut guard = app.inner.lock().unwrap_or_else(|e| e.into_inner());
+            log_event(&app, &mut guard, "plugin", &message, false);
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+    }
+}
+
 /// GET /games — zuletzt gescannte Spiele (aus `games.json`) plus die manuell
 /// hinzugefuegten, jeweils inkl. `running` und `hidden`.
 ///
@@ -1369,6 +1437,15 @@ pub async fn downloads_ep(State(app): State<SharedApp>, _auth: Auth) -> Response
 
 // ---------------- Benutzer und Rollen (Phase 3) ----------------
 
+/// Body fuer `POST /unlock` (WoL-Flag setzen fuer Auto-Login).
+#[derive(Debug, Deserialize)]
+pub struct UnlockRequest {
+    #[serde(default)]
+    pub unlock: bool,
+    #[serde(default)]
+    pub token: String,
+}
+
 /// Body fuer `POST /users`.
 #[derive(Debug, Deserialize)]
 pub struct NewUserRequest {
@@ -1423,6 +1500,19 @@ pub async fn users_ep(State(app): State<SharedApp>, auth: Auth) -> Response {
         "cors_origins": app.live.origins(),
     }))
     .into_response()
+}
+
+/// POST /unlock — WoL-Flag setzen (fuer Auto-Login nach WoL, Methode C).
+/// Body: `{"unlock": true, "token": "..."}`. Admin-Recht erforderlich.
+pub async fn unlock(
+    State(app): State<SharedApp>,
+    WriteAuth(_auth): WriteAuth,
+    Json(body): Json<UnlockRequest>,
+) -> Response {
+    if body.unlock && !body.token.is_empty() {
+        app.set_wol_flag(&body.token);
+    }
+    Json(json!({ "ok": true, "unlock": body.unlock })).into_response()
 }
 
 /// POST /users — Benutzer anlegen oder (gleicher Name) Passwort/Rolle ersetzen.

@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use routes::SharedApp;
 
 fn main() {
+    let check_wol_flag = std::env::args().any(|arg| arg == "--check-wol-flag");
     let token = std::env::var("PC_AGENT_TOKEN").unwrap_or_default();
     let simulate = std::env::var("PC_AGENT_SIMULATE")
         .map(|value| value != "0")
@@ -84,6 +85,20 @@ fn main() {
     if credentials_missing && token.is_empty() {
         println!("Hinweis: Noch keine Zugangsdaten eingerichtet.");
         println!("Beim ersten Start die Web-Oberflaeche oeffnen: http://localhost:{port}/");
+    }
+
+    // --- Check für Auto-Login nach WoL (Methode C) ---
+    if check_wol_flag {
+        if !shared.wol_flag_is_recent(300) {
+            println!("Kein WoL-Flag erkannt (oder abgelaufen); PC wird in 2 s gesperrt.");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let _ = std::process::Command::new("rundll32.exe")
+                .args(["user32.dll,LockWorkStation"])
+                .spawn();
+        } else {
+            let _ = shared.clear_wol_flag();
+            println!("WoL-Flag gefunden: Desktop bleibt entsperrt (Auto-Login via App).");
+        }
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -178,6 +193,7 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/hibernate", axum::routing::post(routes::hibernate_ep))
         .route("/power-plan", axum::routing::post(routes::power_plan_ep))
         .route("/wake", axum::routing::post(routes::wake_ep))
+        .route("/unlock", axum::routing::post(routes::unlock))
         .route("/ping", axum::routing::get(routes::ping_ep).post(routes::ping_ep))
         .route("/events", axum::routing::get(routes::events_ep))
         .route("/events/stream", axum::routing::get(routes::events_stream))
@@ -202,6 +218,16 @@ async fn run_server(shared: SharedApp, simulate: bool, port: u16) {
         .route("/plugins/{id}/start", axum::routing::post(routes::plugin_start))
         .route("/plugins/{id}/stop", axum::routing::post(routes::plugin_stop))
         .route("/plugins/{id}/output", axum::routing::get(routes::plugin_output))
+        // Strukturierte Ereignisse eines Plugins (Phase M1).
+        .route("/plugins/{id}/events", axum::routing::get(routes::plugin_events))
+        // Freie Daten eines Plugins (Phase M1, Android-Detailansicht).
+        .route("/plugins/{id}/data", axum::routing::get(routes::plugin_data))
+        // Plugin-Update-Check (Phase M2).
+        .route(
+            "/plugins/{id}/update",
+            axum::routing::get(routes::plugin_update_check)
+                .post(routes::plugin_update),
+        )
         .route("/plugins/{id}/bundle", axum::routing::get(routes::plugin_bundle))
         // Einstellungen aus dem Manifest (Phase G4).
         .route(

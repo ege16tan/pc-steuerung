@@ -32,7 +32,8 @@
       "name": "Steam + Millennium (live)",
       "description": "Liest Steam-Installation, Millennium-Status und laufende Downloads mit Tempo und Restzeit im 1-s-Takt (nur Lesen).",
       "version": "1",
-      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/millennium-live.json"
+      "url": "https://raw.githubusercontent.com/ege16tan/pc-steuerung/main/plugin-catalog/millennium-live.json",
+      "sha256": "3A3AEEEF9E2C109FA824543E4E100AE710990894853B43576BB0366175834E54"
     }
   ]
 }

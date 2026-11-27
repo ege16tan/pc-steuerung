@@ -116,6 +116,17 @@ impl AppManifest {
     pub fn percent_staged(&self) -> f64 {
         percent(self.bytes_staged, self.bytes_to_stage)
     }
+
+    /// Kombinierter Fortschritt fuer Anzeige: nutzt Download-Fortschritt,
+    /// faellt aber auf Staging-Fortschritt zurueck, wenn der Download-Wert 0 ist
+    /// aber Staging-Daten vorliegen (z. B. Shader-Kompilierung, Pre-Download).
+    pub fn percent_combined(&self) -> f64 {
+        let dl = self.percent();
+        if dl > 0.0 {
+            return dl;
+        }
+        self.percent_staged()
+    }
 }
 
 /// Wertet die `StateFlags` eines `appmanifest_*.acf` aus.
@@ -366,7 +377,7 @@ pub fn downloads_in(libraries: &[PathBuf]) -> Vec<SteamDownload> {
             out.push(SteamDownload {
                 app_id: manifest.app_id.clone(),
                 name: manifest.name.clone(),
-                percent: manifest.percent(),
+                percent: manifest.percent_combined(),
                 percent_staged: manifest.percent_staged(),
                 bytes_downloaded: manifest.bytes_downloaded,
                 bytes_total: manifest.bytes_to_download,
@@ -433,12 +444,15 @@ pub fn steam_running() -> bool {
 /// Letzte Messung einer App fuer die Geschwindigkeit.
 #[derive(Clone, Copy)]
 struct SpeedSample {
-    bytes: u64,
+    bytes_downloaded: u64,
+    bytes_staged: u64,
     bps: u64,
     at: Instant,
     /// Aufeinanderfolgende Abfragen ohne neuen Stand (Steam schreibt die
     /// `.acf` nur in Abstaenden). Ab 3 wird das Tempo ehrlich auf 0 gesetzt.
     idle: u32,
+    /// Ob das Tempo aus `bytes_staged` (true) oder `bytes_downloaded` (false) berechnet wurde.
+    used_staged: bool,
 }
 
 /// Tempo je App (Schluessel: App-ID). Eine gemeinsame Messung fuer alle waere
@@ -462,9 +476,11 @@ fn eta_seconds(remaining: u64, bps: u64) -> u64 {
 }
 
 /// Ergaenzt `speed_bps` und `eta_seconds` fuer alle Downloads aus zwei
-/// Messungen von `BytesDownloaded`. Der erste Aufruf liefert 0 (kein
-/// Vergleichswert); danach bleibt `GET /steam` weiterhin sofort fertig, weil
-/// nichts blockiert und keine Datei doppelt gelesen wird.
+/// Messungen. Primär wird `BytesDownloaded` verwendet; faellt das nicht
+/// (Delta 0), aber `BytesStaged` aendert sich, wird das Tempo daraus berechnet.
+/// Der erste Aufruf liefert 0 (kein Vergleichswert); danach bleibt `GET /steam`
+/// weiterhin sofort fertig, weil nichts blockiert und keine Datei doppelt
+/// gelesen wird.
 fn with_speed(list: &mut [SteamDownload]) {
     let Ok(mut guard) = SPEED.lock() else {
         return;
@@ -474,35 +490,47 @@ fn with_speed(list: &mut [SteamDownload]) {
     let mut next: HashMap<String, SpeedSample> = HashMap::with_capacity(list.len());
     for item in list.iter_mut() {
         let known = previous.get(&item.app_id).copied();
-        let (bps, idle) = match known {
+        let (bps, idle, used_staged) = match known {
             Some(sample) => {
                 let elapsed = now.saturating_duration_since(sample.at);
-                let delta = item.bytes_downloaded.saturating_sub(sample.bytes);
+                // Erst versuchen: BytesDownloaded
+                let delta_dl = item.bytes_downloaded.saturating_sub(sample.bytes_downloaded);
                 if elapsed < MIN_SPEED_GAP {
                     // Zu kurz fuer eine Messung: alten Wert weiterverwenden.
-                    (sample.bps, sample.idle)
-                } else if delta == 0 {
-                    let idle = sample.idle + 1;
-                    (if idle >= 3 { 0 } else { sample.bps }, idle)
+                    (sample.bps, sample.idle, sample.used_staged)
+                } else if delta_dl > 0 {
+                    ((delta_dl as f64 / elapsed.as_secs_f64()) as u64, 0, false)
                 } else {
-                    ((delta as f64 / elapsed.as_secs_f64()) as u64, 0)
+                    // BytesDownloaded unveraendert: pruefen ob BytesStaged waechst.
+                    let delta_staged = item.bytes_staged.saturating_sub(sample.bytes_staged);
+                    if delta_staged > 0 {
+                        ((delta_staged as f64 / elapsed.as_secs_f64()) as u64, 0, true)
+                    } else {
+                        let idle = sample.idle + 1;
+                        (if idle >= 3 { 0 } else { sample.bps }, idle, sample.used_staged)
+                    }
                 }
             }
             // Erster Wert fuer diese App: nur merken, noch kein Tempo.
-            None => (0, 0),
+            None => (0, 0, false),
         };
         item.speed_bps = bps;
-        item.eta_seconds = eta_seconds(
-            item.bytes_total.saturating_sub(item.bytes_downloaded),
-            bps,
-        );
+        // Restzeit basiert auf den Bytes, die fuer das Tempo verwendet wurden.
+        let remaining = if used_staged {
+            item.bytes_to_stage.saturating_sub(item.bytes_staged)
+        } else {
+            item.bytes_total.saturating_sub(item.bytes_downloaded)
+        };
+        item.eta_seconds = eta_seconds(remaining, bps);
         next.insert(
             item.app_id.clone(),
             SpeedSample {
-                bytes: item.bytes_downloaded,
+                bytes_downloaded: item.bytes_downloaded,
+                bytes_staged: item.bytes_staged,
                 bps,
                 at: now,
                 idle,
+                used_staged,
             },
         );
     }
@@ -608,20 +636,28 @@ pub fn status(_app: &App) -> SteamStatus {
         .max_by(|a, b| a.percent.total_cmp(&b.percent))
         .cloned();
     let speed_bps = primary.as_ref().map(|item| item.speed_bps).unwrap_or(0);
+    // Wenn der Fortschritt aus Staging kommt (Download-Bytes 0, aber Staging > 0),
+    // zeigen wir die Staging-Werte in der Kopfzeile an.
+    let (progress_percent, bytes_downloaded, bytes_total, eta_seconds) = if let Some(item) = primary.as_ref() {
+        if item.bytes_downloaded == 0 && item.bytes_staged > 0 && item.bytes_to_stage > 0 {
+            (item.percent_staged, item.bytes_staged, item.bytes_to_stage, item.eta_seconds)
+        } else {
+            (item.percent, item.bytes_downloaded, item.bytes_total, item.eta_seconds)
+        }
+    } else {
+        (0.0, 0, 0, 0)
+    };
     SteamStatus {
         detected: true,
         steam_path: steam.display().to_string(),
         millennium,
         running,
         downloading: !list.is_empty(),
-        progress_percent: primary.as_ref().map(|item| item.percent).unwrap_or(0.0),
-        bytes_downloaded: primary
-            .as_ref()
-            .map(|item| item.bytes_downloaded)
-            .unwrap_or(0),
-        bytes_total: primary.as_ref().map(|item| item.bytes_total).unwrap_or(0),
+        progress_percent,
+        bytes_downloaded,
+        bytes_total,
         speed_bps,
-        eta_seconds: primary.as_ref().map(|item| item.eta_seconds).unwrap_or(0),
+        eta_seconds,
         app_id: primary
             .as_ref()
             .map(|item| item.app_id.clone())

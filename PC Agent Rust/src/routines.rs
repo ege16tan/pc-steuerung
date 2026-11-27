@@ -59,6 +59,12 @@ pub struct Conditions {
     pub plugin: String,
     /// Energieplan (`high`/`balanced`/`saver`), der aktiv sein muss; leer = egal.
     pub power_plan: String,
+    /// Name eines Events, das das Plugin ausgegeben haben muss; leer = egal.
+    pub plugin_event: String,
+    /// Data-Schluessel, der den Wert `plugin_data_value` haben muss; leer = egal.
+    pub plugin_data_key: String,
+    /// Erwarteter Wert fuer `plugin_data_key`; leer = egal.
+    pub plugin_data_value: String,
 }
 
 /// Ausloeser einer Routine.
@@ -287,17 +293,26 @@ pub fn matches_day(days: &[u32], weekday: u32) -> bool {
 /// Sind die Bedingungen erfuellt (Phase E2)?
 ///
 /// Reine Funktion: Wochentag, Plugin-Zustand und aktiver Plan kommen von
-/// aussen, damit die Auswertung ohne Windows testbar bleibt.
+/// aussen, damit die Auswertung ohne Windows testbar bleibt. Plugin-Event und
+/// Plugin-Data werden als vorgepruefte Booleans uebergeben.
 pub fn conditions_met(
     conditions: &Conditions,
     weekday: u32,
     plugin_running: bool,
     active_plan: &str,
+    plugin_event_ok: bool,
+    plugin_data_ok: bool,
 ) -> bool {
     if !matches_day(&conditions.days, weekday) {
         return false;
     }
     if !conditions.plugin.is_empty() && !plugin_running {
+        return false;
+    }
+    if !conditions.plugin_event.is_empty() && !plugin_event_ok {
+        return false;
+    }
+    if !conditions.plugin_data_key.is_empty() && !plugin_data_ok {
         return false;
     }
     if !conditions.power_plan.is_empty() && conditions.power_plan != active_plan {
@@ -503,6 +518,18 @@ pub fn validate(routine: &Routine, plugins: &[String]) -> Result<(), String> {
     if !conditions.plugin.is_empty() && !plugins.contains(&conditions.plugin) {
         return Err(format!("Unbekanntes Plugin '{}'", conditions.plugin));
     }
+    // Plugin-Event / Data beziehen sich auf dasselbe Plugin: wenn eines gesetzt
+    // ist, muss das Plugin bekannt sein.
+    if (!conditions.plugin_event.is_empty() || !conditions.plugin_data_key.is_empty())
+        && conditions.plugin.is_empty()
+    {
+        return Err("Plugin-Bedingung braucht eine Plugin-ID".to_string());
+    }
+    if (!conditions.plugin_event.is_empty() || !conditions.plugin_data_key.is_empty())
+        && !plugins.contains(&conditions.plugin)
+    {
+        return Err(format!("Unbekanntes Plugin '{}'", conditions.plugin));
+    }
     if !conditions.power_plan.is_empty() && !crate::actions::plan_known(&conditions.power_plan) {
         return Err("Ungueltiger Energieplan in den Bedingungen".to_string());
     }
@@ -542,6 +569,12 @@ pub fn normalize(routine: &mut Routine) {
         routine.trigger.conditions.plugin.trim().to_ascii_lowercase();
     routine.trigger.conditions.power_plan =
         routine.trigger.conditions.power_plan.trim().to_ascii_lowercase();
+    routine.trigger.conditions.plugin_event =
+        routine.trigger.conditions.plugin_event.trim().to_ascii_lowercase();
+    routine.trigger.conditions.plugin_data_key =
+        routine.trigger.conditions.plugin_data_key.trim().to_ascii_lowercase();
+    routine.trigger.conditions.plugin_data_value =
+        routine.trigger.conditions.plugin_data_value.trim().to_string();
     for action in &mut routine.actions {
         action.kind = action.kind.trim().to_ascii_lowercase();
         action.plan = action.plan.trim().to_ascii_lowercase();
@@ -787,6 +820,28 @@ fn plugin_running(app: &App, id: &str) -> bool {
     state.runs.contains_key(id)
 }
 
+/// Hat das Plugin ein bestimmtes Event ausgegeben (Ringpuffer pruefen)?
+fn plugin_event_emitted(app: &App, plugin_id: &str, event_name: &str) -> bool {
+    if plugin_id.is_empty() || event_name.is_empty() {
+        return false;
+    }
+    let state = app.jsplugins.lock().unwrap_or_else(|e| e.into_inner());
+    state
+        .events
+        .get(plugin_id)
+        .map(|events| events.iter().any(|event| event.name == event_name))
+        .unwrap_or(false)
+}
+
+/// Stimmt ein Data-Schluessel des Plugins mit einem erwarteten Wert ueberein?
+fn plugin_data_equals(app: &App, plugin_id: &str, key: &str, value: &str) -> bool {
+    if plugin_id.is_empty() || key.is_empty() {
+        return false;
+    }
+    let data = crate::jsplugins::load_data(app, plugin_id);
+    data.get(key).map(|v| v.as_str() == Some(value)).unwrap_or(false)
+}
+
 /// Aktiver Energieplan (wie in `GET /status`; im Simulationsmodus der gemerkte).
 async fn active_plan(app: &SharedApp) -> String {
     let (simulate, sim_plan) = {
@@ -885,7 +940,29 @@ pub async fn tick_once(app: &SharedApp) {
             continue;
         }
         let conditions = &routine.trigger.conditions;
-        if !conditions_met(conditions, weekday, plugin_running(app, &conditions.plugin), &plan) {
+        let plugin_event_ok = if conditions.plugin_event.is_empty() {
+            true
+        } else {
+            plugin_event_emitted(app, &conditions.plugin, &conditions.plugin_event)
+        };
+        let plugin_data_ok = if conditions.plugin_data_key.is_empty() {
+            true
+        } else {
+            plugin_data_equals(
+                app,
+                &conditions.plugin,
+                &conditions.plugin_data_key,
+                &conditions.plugin_data_value,
+            )
+        };
+        if !conditions_met(
+            conditions,
+            weekday,
+            plugin_running(app, &conditions.plugin),
+            &plan,
+            plugin_event_ok,
+            plugin_data_ok,
+        ) {
             continue;
         }
         // `last_run` und Verlauf werden in `start_run` vor dem Ausfuehren
@@ -1233,21 +1310,22 @@ mod tests {
             days: vec![6],
             plugin: "game-optimizer".to_string(),
             power_plan: "saver".to_string(),
+            ..Default::default()
         };
         // Samstag, Plugin laeuft, Plan saver -> erlaubt.
-        assert!(conditions_met(&conditions, 6, true, "saver"));
+        assert!(conditions_met(&conditions, 6, true, "saver", true, true));
         // Wochentag passt nicht.
-        assert!(!conditions_met(&conditions, 5, true, "saver"));
+        assert!(!conditions_met(&conditions, 5, true, "saver", true, true));
         // Plugin laeuft nicht.
-        assert!(!conditions_met(&conditions, 6, false, "saver"));
+        assert!(!conditions_met(&conditions, 6, false, "saver", true, true));
         // Anderer Energieplan.
-        assert!(!conditions_met(&conditions, 6, true, "high"));
+        assert!(!conditions_met(&conditions, 6, true, "high", true, true));
         // Leere Bedingungen schraenken nichts ein.
-        assert!(conditions_met(&Conditions::default(), 1, false, "anderer"));
+        assert!(conditions_met(&Conditions::default(), 1, false, "anderer", true, true));
         // Nur der Wochentag gesetzt.
         let day_only = Conditions { days: vec![1, 2, 3, 4, 5], ..Default::default() };
-        assert!(conditions_met(&day_only, 3, false, ""));
-        assert!(!conditions_met(&day_only, 6, true, "saver"));
+        assert!(conditions_met(&day_only, 3, false, "", true, true));
+        assert!(!conditions_met(&day_only, 6, true, "saver", true, true));
     }
 
     #[test]

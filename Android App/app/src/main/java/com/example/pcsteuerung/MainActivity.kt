@@ -1379,6 +1379,13 @@ fun MainApp(
     var pluginSettingsNotice by remember { mutableStateOf<String?>(null) }
     var pluginSettingsError by remember { mutableStateOf<String?>(null) }
 
+    // Plugin-Detailseite (Phase M4): Ereignisse und freie Daten.
+    var pluginEvents by remember { mutableStateOf<List<PluginEvent>>(emptyList()) }
+    var pluginData by remember { mutableStateOf<PluginData?>(null) }
+    var pluginUpdateAvailable by remember { mutableStateOf(false) }
+    var pluginInstalledVersion by remember { mutableStateOf("") }
+    var pluginCatalogVersion by remember { mutableStateOf("") }
+
     // Spiele-Optimierung (`GET /games` + `GET /game-config`). `gameConfig` bleibt
     // null, wenn der Agent /game-config nicht kennt - dann ist nur Lesen moeglich.
     var games by remember { mutableStateOf<List<GameEntry>>(emptyList()) }
@@ -1576,6 +1583,69 @@ fun MainApp(
         }
         pluginSettings = parsed
         pluginSettingsValues = if (parsed == null) emptyMap() else pluginSettingValues(parsed)
+    }
+
+    /**
+     * Ereignisse eines Plugins (`GET /plugins/{id}/events`). Fehlt die Route
+     * (alter Agent), bleibt die Liste leer.
+     */
+    suspend fun loadPluginEvents(id: String) {
+        pluginEvents = withContext(Dispatchers.IO) {
+            try {
+                parsePluginEvents(
+                    httpCall(active.base, "/plugins/$id/events", active.authHeader())
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Plugin-Ereignisse nicht erreichbar", e)
+                emptyList()
+            }
+        }
+    }
+
+    /**
+     * Freie Daten eines Plugins (`GET /plugins/{id}/data`). Fehlt die Route
+     * (alter Agent), bleibt [pluginData] null.
+     */
+    suspend fun loadPluginData(id: String) {
+        pluginData = withContext(Dispatchers.IO) {
+            try {
+                parsePluginData(
+                    httpCall(active.base, "/plugins/$id/data", active.authHeader())
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Plugin-Daten nicht erreichbar", e)
+                null
+            }
+        }
+    }
+
+    /**
+     * Prueft, ob ein Katalog-Update fuer das Plugin verfuegbar ist. Vergleicht
+     * die installierte Version (aus `GET /plugins`) mit der Katalogversion
+     * (aus `GET /plugin-catalog`).
+     */
+    suspend fun loadPluginUpdateAvailable(id: String) {
+        pluginUpdateAvailable = withContext(Dispatchers.IO) {
+            try {
+                val catalogEntry = pluginCatalog.firstOrNull { it.id == id }
+                val installed = plugins.firstOrNull { it.id == id }
+                if (catalogEntry == null || installed == null) {
+                    return@withContext false
+                } else {
+                    val catNum = catalogEntry.version.toIntOrNull()
+                    val insNum = installed.version.toIntOrNull()
+                    when {
+                        catNum != null && insNum != null -> catNum > insNum
+                        else -> catalogEntry.version > installed.version
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Plugin-Update-Pruefung fehlgeschlagen", e)
+                false
+            }
+        }
+        pluginInstalledVersion = plugins.firstOrNull { it.id == id }?.version ?: ""
+        pluginCatalogVersion = pluginCatalog.firstOrNull { it.id == id }?.version ?: ""
     }
 
     /**
@@ -1926,6 +1996,9 @@ fun MainApp(
                 loadPlugins()
                 loadPluginOutput(current.id)
                 loadPluginSettings(current.id)
+                loadPluginEvents(current.id)
+                loadPluginData(current.id)
+                loadPluginUpdateAvailable(current.id)
             }
 
             Route.GameOptimization -> loadGames()
@@ -2302,14 +2375,21 @@ fun MainApp(
                         subtitle = stringResource(R.string.page_plugins_subtitle),
                         onBack = { route = backTarget(Route.Plugins) },
                     ) {
-                        PluginsPage(
-                            plugins = plugins,
-                            pluginCatalog = pluginCatalog,
-                            busy = busy,
-                            onRefresh = { pluginRefresh++ },
-                            onOpenPlugin = { plugin -> route = Route.PluginDetail(plugin.id) },
-                            onInstall = ::installPlugin,
-                        )
+                    PluginsPage(
+                        plugins = plugins,
+                        pluginCatalog = pluginCatalog,
+                        busy = busy,
+                        onRefresh = { pluginRefresh++ },
+                        onOpenPlugin = { plugin -> route = Route.PluginDetail(plugin.id) },
+                        onInstall = ::installPlugin,
+                        onUpdate = { entry ->
+                            pluginAction(
+                                "/plugins/${entry.id}/update",
+                                "POST",
+                                "${entry.name} aktualisiert"
+                            )
+                        },
+                    )
                     }
 
                     is Route.PluginDetail -> {
@@ -2344,6 +2424,11 @@ fun MainApp(
                                 onStop = { plugin?.let(::stopPlugin) },
                                 onRemove = { plugin?.let(::removePlugin) },
                                 onRefresh = { pluginRefresh++ },
+                                events = pluginEvents,
+                                data = pluginData,
+                                updateAvailable = pluginUpdateAvailable,
+                                installedVersion = pluginInstalledVersion,
+                                catalogVersion = pluginCatalogVersion,
                             )
                         }
                     }
@@ -3261,6 +3346,7 @@ private fun PluginsPage(
     onRefresh: () -> Unit,
     onOpenPlugin: (PluginInfo) -> Unit,
     onInstall: (PluginCatalogEntry) -> Unit,
+    onUpdate: (PluginCatalogEntry) -> Unit,
 ) {
     val running = plugins.count { it.running }
     val summary = when {
@@ -3338,8 +3424,10 @@ private fun PluginsPage(
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     PluginCatalogRow(
                         entry = entry,
+                        plugins = plugins,
                         busy = busy,
                         onInstall = { onInstall(entry) },
+                        onUpdate = { onUpdate(entry) },
                     )
                 }
             }
@@ -3390,6 +3478,11 @@ private fun PluginDetailPage(
     onStop: () -> Unit,
     onRemove: () -> Unit,
     onRefresh: () -> Unit,
+    events: List<PluginEvent> = emptyList(),
+    data: PluginData? = null,
+    updateAvailable: Boolean = false,
+    installedVersion: String = "",
+    catalogVersion: String = "",
 ) {
     if (plugin == null) {
         Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
@@ -3472,6 +3565,24 @@ private fun PluginDetailPage(
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.outline,
                 )
+                if (updateAvailable && installedVersion.isNotBlank() && catalogVersion.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.plugin_update_available,
+                                installedVersion,
+                                catalogVersion,
+                            ),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
                 if (plugin.description.isNotBlank()) {
                     Text(
                         text = plugin.description,
@@ -3547,6 +3658,92 @@ private fun PluginDetailPage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth().padding(14.dp),
             )
+        }
+
+        // Phase M4: Strukturierte Ereignisse des Plugins.
+        if (events.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.plugins_detail_events),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    events.take(20).forEach { event ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = event.name,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = event.payload.takeIf { it.isNotBlank() }
+                                    ?: stringResource(R.string.plugins_detail_event_no_payload),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase M4: Freie Daten des Plugins.
+        val dataValues = data?.values
+        if (dataValues != null && dataValues.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.plugins_detail_data),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    dataValues.forEach { (key, value) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = key,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = value,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         OutlinedButton(
@@ -3712,13 +3909,19 @@ private fun pluginNumberErrorText(field: PluginSettingField, error: PluginNumber
         )
     }
 
-/** Zeile im Plugin-Katalog: Name, Beschreibung, Installieren-Knopf. */
+/** Zeile im Plugin-Katalog: Name, Beschreibung, Installieren-/Aktualisieren-Knopf. */
 @Composable
 private fun PluginCatalogRow(
     entry: PluginCatalogEntry,
+    plugins: List<PluginInfo>,
     busy: Boolean,
     onInstall: () -> Unit,
+    onUpdate: () -> Unit,
 ) {
+    val installedPlugin = plugins.firstOrNull { it.id == entry.id }
+    val installedVersion = installedPlugin?.version.orEmpty()
+    val updateAvailable = entry.installed && installedPlugin != null &&
+        (entry.version.toIntOrNull() ?: 0) > (installedVersion.toIntOrNull() ?: 0)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3732,14 +3935,31 @@ private fun PluginCatalogRow(
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.outline
             )
+            if (updateAvailable) {
+                Text(
+                    text = stringResource(
+                        R.string.plugin_update_hint,
+                        installedVersion,
+                        entry.version,
+                    ),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                )
+            }
         }
-        if (entry.installed) {
+        if (entry.installed && !updateAvailable) {
             Text(
                 text = stringResource(R.string.plugins_installed),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(horizontal = 8.dp)
             )
+        } else if (updateAvailable) {
+            TextButton(
+                enabled = !busy,
+                onClick = onUpdate
+            ) { Text(stringResource(R.string.plugin_action_update)) }
         } else {
             TextButton(
                 enabled = !busy,
@@ -7583,7 +7803,43 @@ private fun RoutineEditorDialog(
                     enabled = !busy,
                     options = listOf("" to stringResource(R.string.routines_any)) +
                         plugins.map { it.id to it.name.ifBlank { it.id } },
-                ) { plugin -> draft = draft.copy(conditionPlugin = plugin) }
+                ) { plugin ->
+                    draft = draft.copy(conditionPlugin = plugin)
+                    // Bei Plugin-Wechsel Event und Daten zuruecksetzen.
+                    draft = draft.copy(conditionPluginEvent = "", conditionDataKey = "", conditionDataValue = "")
+                }
+                if (draft.conditionPlugin.isNotBlank()) {
+                    OutlinedTextField(
+                        value = draft.conditionPluginEvent,
+                        onValueChange = { value ->
+                            draft = draft.copy(conditionPluginEvent = value)
+                            error = null
+                        },
+                        label = { Text(stringResource(R.string.routines_conditions_plugin_event)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = draft.conditionDataKey,
+                        onValueChange = { value ->
+                            draft = draft.copy(conditionDataKey = value)
+                            error = null
+                        },
+                        label = { Text(stringResource(R.string.routines_conditions_data_key)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = draft.conditionDataValue,
+                        onValueChange = { value ->
+                            draft = draft.copy(conditionDataValue = value)
+                            error = null
+                        },
+                        label = { Text(stringResource(R.string.routines_conditions_data_value)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 RoutineSelectField(
                     label = stringResource(R.string.routines_conditions_plan),
                     value = draft.conditionPowerPlan,
