@@ -363,6 +363,46 @@ fn manifests_in(library: &Path) -> Vec<AppManifest> {
     out
 }
 
+/// Summt rekursiv alle Dateien unter einem Verzeichnis.
+fn folder_size_recursive(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            total += folder_size_recursive(&path);
+        } else if let Some(len) = path.metadata().ok().map(|m| m.len()) {
+            total += len;
+        }
+    }
+    total
+}
+
+/// Summt alle Dateien in `steamapps\downloading\<appid>\` einer Bibliothek.
+///
+/// Steam schreibt heruntergeladene Dateien dorthin, bevor sie ins Ziel-
+/// Verzeichnis verschoben werden. `BytesDownloaded` im ACF wird dabei oft
+/// erst spaeter aktualisiert, daher liefert der Ordner den tatsaechlichen
+/// Fortschritt, wenn der ACF-Wert noch 0 ist.
+fn downloading_bytes_in(library: &Path, app_id: &str) -> u64 {
+    let dir = library.join("steamapps").join("downloading").join(app_id);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            total += folder_size_recursive(&path);
+        } else if let Some(len) = path.metadata().ok().map(|m| m.len()) {
+            total += len;
+        }
+    }
+    total
+}
+
 /// Laufende Downloads in den angegebenen Bibliotheken (ohne Registry, testbar).
 pub fn downloads_in(libraries: &[PathBuf]) -> Vec<SteamDownload> {
     let mut out: Vec<SteamDownload> = Vec::new();
@@ -374,12 +414,22 @@ pub fn downloads_in(libraries: &[PathBuf]) -> Vec<SteamDownload> {
             if out.iter().any(|known| known.app_id == manifest.app_id) {
                 continue;
             }
+            // Tatsaechlich heruntergeladene Bytes: ACF-Wert ODER Grösse des
+            // downloading-Ordners (dort schreibt Steam die Dateien während des
+            // Downloads hin, bevor der ACF aktualisiert wird).
+            let mut bytes_dl = manifest.bytes_downloaded;
+            for library in libraries {
+                let folder_bytes = downloading_bytes_in(library, &manifest.app_id);
+                if folder_bytes > bytes_dl {
+                    bytes_dl = folder_bytes;
+                }
+            }
             out.push(SteamDownload {
                 app_id: manifest.app_id.clone(),
                 name: manifest.name.clone(),
-                percent: manifest.percent_combined(),
+                percent: percent(bytes_dl, manifest.bytes_to_download),
                 percent_staged: manifest.percent_staged(),
-                bytes_downloaded: manifest.bytes_downloaded,
+                bytes_downloaded: bytes_dl,
                 bytes_total: manifest.bytes_to_download,
                 bytes_staged: manifest.bytes_staged,
                 bytes_to_stage: manifest.bytes_to_stage,
